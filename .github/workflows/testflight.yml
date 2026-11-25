@@ -3,6 +3,7 @@
 #   ASC_KEY_ID           — Key ID ключа App Store Connect API
 #   ASC_ISSUER_ID        — Issuer ID
 #   ASC_KEY_P8_BASE64    — содержимое файла AuthKey_XXXX.p8 в base64
+#   DIST_P12_BASE64, DIST_P12_PASSWORD, DIST_CERT_ID — сертификат Apple Distribution «Линии 2.0»
 #   GOOGLE_SERVICE_INFO_PLIST_BASE64 — (необязательно) GoogleService-Info.plist для push через Firebase
 name: TestFlight
 
@@ -77,26 +78,44 @@ jobs:
               .then(async r=>{const j=await r.json();console.log("ASC API:",r.status,(j.data||[]).map(a=>a.attributes.name).join(","));if(r.status!==200)process.exit(1);});
           ' "$KEY"
 
+      - name: Сертификат подписи (временный keychain)
+        env:
+          DIST_P12_BASE64: ${{ secrets.DIST_P12_BASE64 }}
+          DIST_P12_PASSWORD: ${{ secrets.DIST_P12_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/linia2.keychain-db"; KCP=$(uuidgen)
+          echo "$DIST_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/asc/dist.p12"
+          security create-keychain -p "$KCP" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCP" "$KC"
+          security import "$RUNNER_TEMP/asc/dist.p12" -P "$DIST_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCP" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KC" | sed -E 's/[0-9A-F]{40}/<hash>/'
+          echo "LINIA2_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: App Store-профили
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          DIST_CERT_ID: ${{ secrets.DIST_CERT_ID }}
+        run: node ci/profiles.mjs
+
       - name: CocoaPods
         run: |
           which pod || sudo gem install cocoapods --no-document
           pod install --repo-update
 
       - name: Archive
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           set -o pipefail
           xcodebuild archive \
             -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Linia2.xcarchive" \
-            DEVELOPMENT_TEAM=$TEAM_ID CODE_SIGN_STYLE=Automatic \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            | tee "$RUNNER_TEMP/archive.log" | grep -E 'error:|warning: .*(sign|provision)|ARCHIVE' || true
-          test -d "$RUNNER_TEMP/Linia2.xcarchive" || { tail -200 "$RUNNER_TEMP/archive.log"; exit 1; }
+            OTHER_CODE_SIGN_FLAGS="--keychain $LINIA2_KEYCHAIN" \
+            2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E 'error:|ARCHIVE (SUCCEEDED|FAILED)' || true
+          test -d "$RUNNER_TEMP/Linia2.xcarchive" || { grep -E 'error:' "$RUNNER_TEMP/archive.log" | head -40; exit 1; }
 
       - name: Export и загрузка в TestFlight
         env:
@@ -108,7 +127,6 @@ jobs:
             -archivePath "$RUNNER_TEMP/Linia2.xcarchive" \
             -exportOptionsPlist ci/ExportOptions.plist \
             -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             2>&1 | tee "$RUNNER_TEMP/export.log"
           grep -qiE 'Upload succeeded|EXPORT SUCCEEDED' "$RUNNER_TEMP/export.log"
@@ -124,6 +142,8 @@ jobs:
             ${{ runner.temp }}/export.log
           if-no-files-found: ignore
 
-      - name: Удалить ключ
+      - name: Удалить ключи
         if: always()
-        run: rm -rf "$RUNNER_TEMP/asc"
+        run: |
+          rm -rf "$RUNNER_TEMP/asc"
+          [ -n "$LINIA2_KEYCHAIN" ] && security delete-keychain "$LINIA2_KEYCHAIN" || true

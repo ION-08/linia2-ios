@@ -167,6 +167,7 @@ def no_branding(s):
 
 
 edit("TinodiosDB/SharedUtils.swift", no_branding)
+edit("TinodiosDB/BaseDb.swift", lambda s: s.replace('kBundleId = "co.tinode.tinodios.db"', 'kBundleId = "%s.db"' % BUNDLE))
 
 # 2) Firebase — только если в сборку положен настоящий GoogleService-Info.plist.
 FB_CHECK = '''

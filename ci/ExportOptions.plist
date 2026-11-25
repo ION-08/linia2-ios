@@ -9,12 +9,19 @@
 	<key>teamID</key>
 	<string>MXST7DT8VQ</string>
 	<key>signingStyle</key>
-	<string>automatic</string>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>info.codix.liniya2</key>
+		<string>Linia2 AppStore</string>
+		<key>info.codix.liniya2.NSExtension</key>
+		<string>Linia2 NSExtension AppStore</string>
+	</dict>
 	<key>uploadSymbols</key>
 	<true/>
 	<key>manageAppVersionAndBuildNumber</key>
-	<false/>
-	<key>testFlightInternalTestingOnly</key>
 	<false/>
 </dict>
 </plist>
