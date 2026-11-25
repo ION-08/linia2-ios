@@ -5,25 +5,25 @@
 # Секрет репозитория: CI_TOKEN (служебный доступ к /invite/api/ci/* на сервере).
 name: UI tests
 
+# Только вручную или из TestFlight — минуты macOS дорогие (x10). На коммиты не запускается.
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md"]
+
+concurrency:
+  group: uitest-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   uitest:
     runs-on: macos-26
     timeout-minutes: 120
+    # Одно устройство — iPhone 17 Pro (экономия минут). Для SE: device: se.
     strategy:
-      fail-fast: false
       matrix:
         include:
-          - device: pro      # iPhone 17 Pro (или самый новый Pro)
+          - device: pro
             idx: 1
-          - device: se       # iPhone SE — маленький экран
-            idx: 2
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
