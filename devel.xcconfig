@@ -1,0 +1,14 @@
+//
+// Development .xcconfig
+//
+
+// Include Pods config.
+#include "Pods/Target Support Files/Pods-Tinodios/Pods-Tinodios.debug.xcconfig"
+
+// Server URL
+HOST_NAME = v2.chat-linia.site
+// Use TLS (https, wss)
+USE_TLS = YES
+
+// App Settings
+APP_NAME = Линия 2.0
