@@ -133,7 +133,7 @@ jobs:
           cp "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/out/" 2>/dev/null || true
           ls -la "$RUNNER_TEMP/out/shots" | head -80; ls "$RUNNER_TEMP/out/crashes"
           if grep -qE '\*\* TEST (SUCCEEDED|FAILED) \*\*' "$RUNNER_TEMP/test.log" 2>/dev/null && ! grep -qE '\.swift:[0-9]+:[0-9]+: error:|Linker command failed|BUILD FAILED' "$RUNNER_TEMP/test.log" 2>/dev/null; then C=true; else C=false; fi
-          if ls "$RUNNER_TEMP/out/crashes"/*.ips >/dev/null 2>&1 || grep -qiE 'crashed|Restarting after unexpected exit|Lost connection to the test runner' "$RUNNER_TEMP/test.log" 2>/dev/null; then K=true; else K=false; fi
+          if ls "$RUNNER_TEMP/out/crashes"/*.ips >/dev/null 2>&1 || grep -qE 'Restarting after unexpected exit|Lost connection to the test runner|terminated due to signal|crashed in ' "$RUNNER_TEMP/test.log" 2>/dev/null; then K=true; else K=false; fi
           echo "compiled=$C" >> "$GITHUB_OUTPUT"; echo "crashed=$K" >> "$GITHUB_OUTPUT"
           echo "Собрано: $C, вылеты: $K" >> "$GITHUB_STEP_SUMMARY"
 

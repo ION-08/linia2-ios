@@ -149,7 +149,9 @@ final class Linia2Config {
     private static var swizzled = false
     static func installTextOverrides() {
         // Системные окна (выбор фото, «Поделиться» и т.п.) — тоже на русском, со следующего запуска.
-        if (UserDefaults.standard.array(forKey: "AppleLanguages") as? [String])?.first != "ru" {
+        // Под автотестом не трогаем: в симуляторе это переключает клавиатуру на русскую раскладку.
+        if !ProcessInfo.processInfo.arguments.contains("-l2-uitest"),
+           (UserDefaults.standard.array(forKey: "AppleLanguages") as? [String])?.first != "ru" {
             UserDefaults.standard.set(["ru"], forKey: "AppleLanguages")
         }
         guard !swizzled,
