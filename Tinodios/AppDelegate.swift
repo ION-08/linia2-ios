@@ -87,6 +87,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             SharedUtils.identifyAndConfigureBranding()
         }
         SharedUtils.registerUserDefaults()
+        // LINIA2: блокировка приложения PIN-кодом / Face ID.
+        Linia2AppLock.shared.start()
 
         let baseDb = BaseDb.sharedInstance
         if baseDb.isReady {
@@ -144,6 +146,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        Linia2Turn.shared.prefetch()
         if let call = Cache.callManager.callInProgress, !UiUtils.isShowingCallVC(forTopic: call.topic) {
             // App just entered the foreground and there's a call in progress. Go to the CallVC.
             // Typically happens when the app wasn't running and screen was locked at the moment

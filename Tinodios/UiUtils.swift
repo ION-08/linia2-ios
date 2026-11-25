@@ -245,6 +245,7 @@ class UiUtils {
     }
 
     public static func logoutAndRouteToLoginVC() {
+        Linia2AppLock.shared.resetOnLogout()
         Cache.log.info("UiUtils - Invalidating cache and logging out.")
         SharedUtils.removeAuthToken()
         Cache.invalidate()

@@ -142,6 +142,15 @@ class LoginViewController: UIViewController {
         }
     }
 
+    // LINIA2: «У меня есть код приглашения» — свой экран регистрации по коду.
+    override func shouldPerformSegue(withIdentifier identifier: String, sender: Any?) -> Bool {
+        if identifier == "Login2Signup" {
+            navigationController?.pushViewController(Linia2InviteCodeViewController(), animated: true)
+            return false
+        }
+        return super.shouldPerformSegue(withIdentifier: identifier, sender: sender)
+    }
+
     @IBAction func loginClicked(_ sender: Any) {
         let userName = UiUtils.ensureDataInTextField(userNameTextEdit)
         let password = UiUtils.ensureDataInTextField(passwordTextEdit)
@@ -169,13 +178,19 @@ class LoginViewController: UIViewController {
                             }
                             return nil
                         }
+                        Linia2Turn.shared.prefetch()
                         UiUtils.routeToChatListVC()
                         return nil
                     }, onFailure: { err in
                         Cache.log.error("LoginVC - login failed: %@", err.localizedDescription)
                         var toastMsg: String
                         if let tinodeErr = err as? TinodeError {
-                            toastMsg = "Tinode: \(tinodeErr.description)"
+                            // LINIA2: понятные сообщения на русском.
+                            if case .serverResponseError(let code, _, _) = tinodeErr, code == 401 || code == 403 {
+                                toastMsg = "Неверный логин или пароль. После 5 ошибок вход блокируется на 15 минут."
+                            } else {
+                                toastMsg = "Ошибка входа: \(tinodeErr.description)"
+                            }
                         } else {
                             let (hostName, _) = Tinode.getConnectionParams()
                             toastMsg = String(format: NSLocalizedString("Couldn't connect to server at %@: %@", comment: "Error message"), hostName, err.localizedDescription)

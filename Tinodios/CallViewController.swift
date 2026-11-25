@@ -379,6 +379,8 @@ extension WebRTCClient {
                 Cache.log.info("Invalid ICE server config: no URLs")
             }
         }
+        // LINIA2: TURN с временным паролем, выданным нашим сервером после входа.
+        config.iceServers.append(contentsOf: Linia2Turn.shared.iceServers())
         return config
     }
 

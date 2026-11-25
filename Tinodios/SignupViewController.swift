@@ -33,12 +33,13 @@ class SignupViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // LINIA2: регистрация только по приглашению — отправляем на страницу приглашений.
-        if let url = URL(string: "https://v2.chat-linia.site/invite/") {
-            DispatchQueue.main.async {
-                UIApplication.shared.open(url)
-                self.navigationController?.popViewController(animated: false)
-            }
+        // LINIA2: регистрация только по коду приглашения — подменяем экран Tinode своим.
+        DispatchQueue.main.async {
+            guard let nav = self.navigationController else { return }
+            var stack = nav.viewControllers.filter { $0 !== self }
+            stack.append(Linia2InviteCodeViewController())
+            nav.setViewControllers(stack, animated: false)
+        }
         }
 
         // Get required credential methods.

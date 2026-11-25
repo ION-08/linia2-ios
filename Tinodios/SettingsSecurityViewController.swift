@@ -25,6 +25,18 @@ class SettingsSecurityViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // LINIA2: пункт «Блокировка приложения» (PIN-код / Face ID).
+        let footer = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 76))
+        let lockButton = UIButton(type: .system)
+        lockButton.setTitle("Блокировка приложения (PIN-код, Face ID)", for: .normal)
+        lockButton.titleLabel?.font = .systemFont(ofSize: 17)
+        lockButton.setTitleColor(Linia2Style.green, for: .normal)
+        lockButton.translatesAutoresizingMaskIntoConstraints = false
+        lockButton.addTarget(self, action: #selector(linia2LockTapped), for: .touchUpInside)
+        footer.addSubview(lockButton)
+        NSLayoutConstraint.activate([lockButton.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
+                                     lockButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor)])
+        tableView.tableFooterView = footer
         setup()
     }
 
@@ -197,5 +209,9 @@ class SettingsSecurityViewController: UITableViewController {
                 return nil
             }
             .thenCatch(UiUtils.ToastFailureHandler)
+    }
+
+    @objc func linia2LockTapped() {
+        navigationController?.pushViewController(Linia2AppLockSettingsViewController(), animated: true)
     }
 }

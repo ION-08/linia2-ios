@@ -12,4 +12,5 @@
 
 /* Privacy - Photo Library Usage Description */
 "NSPhotoLibraryUsageDescription" = "Приложению «Линия 2.0» нужен получить доступ к вашим фото для того, чтобы вы могли прикреплять их к сообщениям";
-
+/* Privacy - Face ID Usage Description */
+"NSFaceIDUsageDescription" = "Face ID используется, чтобы разблокировать «Линия 2.0»";

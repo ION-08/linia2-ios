@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */; };
+		A8B8E15FA8E4A59F7FFF758B /* Linia2Turn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18572233191F3D4D0A49B213 /* Linia2Turn.swift */; };
+		FC8D3A743D8C755A24A130A1 /* Linia2Registration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41FBEE60918E737D7D78F23F /* Linia2Registration.swift */; };
 		0A0016E721E7236900088188 /* MessageInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0016E621E7236900088188 /* MessageInteractor.swift */; };
 		0A0016E921E736CD00088188 /* MessagePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0016E821E736CD00088188 /* MessagePresenter.swift */; };
 		0A0380D821B3CC8100A3FA0E /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0380D721B3CC8100A3FA0E /* AppDelegate.swift */; };
@@ -186,6 +189,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2AppLock.swift; sourceTree = "<group>"; };
+		18572233191F3D4D0A49B213 /* Linia2Turn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Turn.swift; sourceTree = "<group>"; };
+		41FBEE60918E737D7D78F23F /* Linia2Registration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Registration.swift; sourceTree = "<group>"; };
 		0A0016E621E7236900088188 /* MessageInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInteractor.swift; sourceTree = "<group>"; };
 		0A0016E821E736CD00088188 /* MessagePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagePresenter.swift; sourceTree = "<group>"; };
 		0A0380D421B3CC8100A3FA0E /* Tinodios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tinodios.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -431,6 +437,9 @@
 		0A0380D621B3CC8100A3FA0E /* Tinodios */ = {
 			isa = PBXGroup;
 			children = (
+				20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */,
+				18572233191F3D4D0A49B213 /* Linia2Turn.swift */,
+				41FBEE60918E737D7D78F23F /* Linia2Registration.swift */,
 				0A4E1D3122829C52006C0912 /* account */,
 				B027E5AC2789010C00A34C17 /* format */,
 				B0C496B022787C020084FA0D /* widgets */,
@@ -982,6 +991,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */,
+				A8B8E15FA8E4A59F7FFF758B /* Linia2Turn.swift in Sources */,
+				FC8D3A743D8C755A24A130A1 /* Linia2Registration.swift in Sources */,
 				B008593C22741B8A002C5168 /* FullFormatter.swift in Sources */,
 				0A0380DA21B3CC8100A3FA0E /* ChatListViewController.swift in Sources */,
 				0A2F81C6229677DD007E562C /* AddByIDViewController.swift in Sources */,
