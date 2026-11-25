@@ -100,6 +100,15 @@ final class TinodiosUITests: XCTestCase {
         for d in pin { app.buttons[d].firstMatch.tap() }
     }
 
+    /// Ввод цифр нажатиями клавиш цифровой клавиатуры (надёжнее typeText для своего поля ввода кода).
+    private func typeDigits(_ digits: String) {
+        for ch in digits {
+            let k = app.keys[String(ch)].firstMatch
+            if k.waitForExistence(timeout: 2) && k.isHittable { k.tap() } else { app.typeText(String(ch)) }
+            usleep(150_000)
+        }
+    }
+
     private func tab(_ id: String) -> XCUIElement { app.otherElements[id].firstMatch.exists ? app.otherElements[id].firstMatch : app.descendants(matching: .any)[id].firstMatch }
 
     private func back() {
@@ -250,12 +259,14 @@ final class TinodiosUITests: XCTestCase {
         screenshot("code-empty")
         // Сначала неверный код — должна быть понятная ошибка, без вылета.
         cells.tap()
-        app.typeText("000000")
+        sleep(1)
+        typeDigits("000000")
         sleep(3)
         screenshot("code-wrong")
         XCTAssertTrue(app.state == .runningForeground, "приложение упало на неверном коде")
         cells.tap()
-        app.typeText(code)
+        sleep(1)
+        typeDigits(code)
         wait(app.textFields["l2.reg.name"], "экран регистрации", timeout: 25)
         dismissKeyboardTips()
         screenshot("register")

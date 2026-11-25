@@ -143,7 +143,18 @@ class Linia2FormViewController: UIViewController {
         guard let frame = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
         let overlap = n.name == UIResponder.keyboardWillHideNotification ? 0 : max(0, view.bounds.maxY - view.convert(frame, from: nil).minY)
         _ = overlap  // область уже уменьшена keyboardLayoutGuide — дополнительный отступ не нужен
-        if overlap > 0 { DispatchQueue.main.async { self.revealFirstResponder() } }
+        if overlap > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.revealFirstResponder() } }
+    }
+
+    private var lastScrollHeight: CGFloat = 0
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Область уменьшилась/выросла вместе с клавиатурой — после раскладки показываем поле и кнопку под ним.
+        let h = scroll.bounds.height
+        if abs(h - lastScrollHeight) > 1 {
+            lastScrollHeight = h
+            DispatchQueue.main.async { self.revealFirstResponder() }
+        }
     }
 
     @objc private func fieldBeganEditing(_ n: Notification) {
