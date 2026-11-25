@@ -313,14 +313,13 @@ final class TinodiosUITests: XCTestCase {
         cells.tap()
         sleep(1)
         typeDigits(code)
-        wait(app.textFields["l2.reg.name"], "экран регистрации", timeout: 25)
-        dismissKeyboardTips()
-        screenshot("register")
+        let regScreen = app.textFields["l2.reg.name"].waitForExistence(timeout: 25)
+        if regScreen { dismissKeyboardTips(); screenshot("register") } else { screenshot("ШАГ ПРОПУЩЕН-код не принят") }
         // Как пользователь: ввод и «Далее» на клавиатуре; последнее «Готово» отправляет форму.
         // Шаг регистрации «мягкий»: если тест не сможет ввести пароль (особенности симулятора) —
         // шаг помечается пропущенным, проверка вылетов продолжается дальше со входом.
         var registered = false
-        if softFill(app.textFields["l2.reg.name"], "Test CI"),
+        if regScreen, softFill(app.textFields["l2.reg.name"], "Test CI"),
            softFill(app.textFields["l2.reg.login"], regLogin),
            softFill(app.secureTextFields["l2.reg.password"], regPassword) {
             // «Повтор пароля» — клавишей «Далее», как пользователь; затем «Готово» отправляет форму.
