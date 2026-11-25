@@ -115,8 +115,13 @@ class Linia2FormViewController: UIViewController {
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 28),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -28),
             scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
+            // Содержимое всегда вмещает весь блок — если он выше видимой области (клавиатура, iPhone SE), его можно прокрутить.
+            scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: stack.heightAnchor, constant: 48),
             centerConstraint,
         ])
+        let fit = scroll.contentLayoutGuide.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
+        fit.priority = .defaultLow - 1
+        fit.isActive = true
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
