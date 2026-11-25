@@ -146,7 +146,8 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
             linkButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
         ])
         footer.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 28 + 52 + 16)
-        tableView.tableFooterView = footer
+        // LINIA2: «Создать ссылку» можно выключить в удалённых настройках.
+        tableView.tableFooterView = Linia2Config.shared.feature("createLink") ? footer : UIView()
 
         header.install(in: tableView)
 
@@ -516,9 +517,11 @@ private final class Linia2CallContactPicker: UITableViewController {
         sheet.addAction(UIAlertAction(title: "Аудиозвонок", style: .default) { [weak self] _ in
             self?.onPick?(name, .audio)
         })
-        sheet.addAction(UIAlertAction(title: "Видеозвонок", style: .default) { [weak self] _ in
-            self?.onPick?(name, .video)
-        })
+        if Linia2Config.shared.feature("videoCalls") {
+            sheet.addAction(UIAlertAction(title: "Видеозвонок", style: .default) { [weak self] _ in
+                self?.onPick?(name, .video)
+            })
+        }
         sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
         if let pop = sheet.popoverPresentationController, let cell = tableView.cellForRow(at: indexPath) {
             pop.sourceView = cell

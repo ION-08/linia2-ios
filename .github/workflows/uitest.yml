@@ -16,6 +16,14 @@ jobs:
   uitest:
     runs-on: macos-26
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: pro      # iPhone 17 Pro (или самый новый Pro)
+            idx: 1
+          - device: se       # iPhone SE — маленький экран
+            idx: 2
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
@@ -36,7 +44,7 @@ jobs:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
           [ -n "$CI_TOKEN" ] || { echo "::error::нет секрета CI_TOKEN"; exit 1; }
-          RUN="${{ github.run_id }}${{ github.run_attempt }}"; RUN="${RUN: -10}"
+          RUN="${{ github.run_id }}${{ github.run_attempt }}"; RUN="${RUN: -9}${{ matrix.idx }}"
           curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
                -d "{\"run\":\"$RUN\"}" -o "$RUNNER_TEMP/ci.json"
           python3 - "$RUNNER_TEMP/ci.json" >> "$GITHUB_ENV" <<'PY'
@@ -64,6 +72,17 @@ jobs:
                       k=(ver, x["name"])
                       if best is None or k>best[0]: best=(k,x["udid"])
           print(best[1] if best else "")')
+          if [ "${{ matrix.device }}" = "se" ]; then
+            # iPhone SE: берём готовый, иначе создаём на самой новой среде iOS.
+            UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone SE[^(]*([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}' || true)
+            if [ -z "$UDID" ]; then
+              RT=$(xcrun simctl list runtimes available | grep -o 'com.apple.CoreSimulator.SimRuntime.iOS-[0-9-]*' | sort -V | tail -1)
+              for DT in iPhone-SE-3rd-generation iPhone-SE--2nd-generation-; do
+                UDID=$(xcrun simctl create "L2 iPhone SE" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
+              done
+            fi
+            [ -n "$UDID" ] || { echo "::warning::iPhone SE недоступен — используется iPhone 16e"; UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone 16e ([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}'); }
+          fi
           [ -n "$UDID" ] || UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone[^(]*([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}')
           echo "UDID=$UDID" >> "$GITHUB_ENV"
           xcrun simctl list devices | grep "$UDID"
@@ -106,7 +125,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ui-test-results
+          name: ui-test-results-${{ matrix.device }}
           path: ${{ runner.temp }}/out
           if-no-files-found: ignore
 

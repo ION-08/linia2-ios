@@ -380,8 +380,10 @@ final class Linia2PinViewController: UIViewController {
         let b = UIButton(type: .system)
         b.tintColor = L2.textPrimary
         b.setTitleColor(L2.textPrimary, for: .normal)
-        b.widthAnchor.constraint(equalToConstant: 76).isActive = true
-        b.heightAnchor.constraint(equalToConstant: 76).isActive = true
+        // На небольших экранах (iPhone SE) клавиши меньше, чтобы всё помещалось.
+        let side: CGFloat = UIScreen.main.bounds.height < 700 ? 64 : 76
+        b.widthAnchor.constraint(equalToConstant: side).isActive = true
+        b.heightAnchor.constraint(equalToConstant: side).isActive = true
         switch key {
         case "del":
             b.setImage(L2.symbol("delete.left", 24), for: .normal)
@@ -400,7 +402,7 @@ final class Linia2PinViewController: UIViewController {
             b.setTitle(key, for: .normal)
             b.titleLabel?.font = L2.rounded(32, .medium)
             b.backgroundColor = L2.surface
-            b.layer.cornerRadius = 38
+            b.layer.cornerRadius = (UIScreen.main.bounds.height < 700 ? 64 : 76) / 2
             b.addTarget(self, action: #selector(digitTapped(_:)), for: .touchUpInside)
         }
         return b

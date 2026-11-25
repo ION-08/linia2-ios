@@ -104,8 +104,13 @@ extension MessageView {
 
             self.backgroundView = messageLabel
              */
-            let host = UIHostingController(rootView: NoContentView(.messages))
-            self.backgroundView = host.view!
+            // LINIA2: заглушка пустого чата в стиле приложения.
+            guard self.backgroundView?.accessibilityIdentifier != "l2.chat.empty" else { return }
+            let empty = l2EmptyState("Сообщений пока нет", "Напишите первое сообщение", symbol: "bubble.left.and.bubble.right")
+            empty.backgroundColor = .clear
+            empty.accessibilityIdentifier = "l2.chat.empty"
+            empty.isUserInteractionEnabled = false
+            self.backgroundView = empty
         } else {
             self.backgroundView = nil
         }

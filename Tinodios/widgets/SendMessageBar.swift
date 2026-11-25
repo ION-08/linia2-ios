@@ -285,6 +285,19 @@ class SendMessageBar: UIView {
         return CGSize.zero
     }
 
+    // LINIA2_HOST_BG: системная подложка под полем ввода (зона индикатора «домой») — в цвет фона.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        backgroundColor = L2.background
+        var v = superview
+        var depth = 0
+        while let cur = v, depth < 4 {
+            cur.backgroundColor = L2.background
+            v = cur.superview
+            depth += 1
+        }
+    }
+
     // MARK: - Configuration
 
     private func loadNib() {

@@ -20,9 +20,9 @@ enum L2 {
     // Наборы акцентного цвета: (светлый акцент в тёмной теме, пузырь, текст на акценте, акцент в светлой теме).
     struct AccentSet { let name: String; let accentDark: UInt32; let strong: UInt32; let onAccent: UInt32; let accentLight: UInt32 }
     static let accents: [AccentSet] = [
+        AccentSet(name: "Мятный", accentDark: 0x7EE0C3, strong: 0x2FA987, onAccent: 0x0B2A22, accentLight: 0x1F9D7A),
         AccentSet(name: "Фиолетовый", accentDark: 0xB3A0F6, strong: 0x8373D3, onAccent: 0x14112B, accentLight: 0x6E5EC4),
         AccentSet(name: "Синий", accentDark: 0x8FB8FF, strong: 0x4F7FE0, onAccent: 0x0B1730, accentLight: 0x3D6BD0),
-        AccentSet(name: "Бирюзовый", accentDark: 0x7FE3C9, strong: 0x2FA387, onAccent: 0x06231B, accentLight: 0x1F8F73),
         AccentSet(name: "Розовый", accentDark: 0xF6A0C8, strong: 0xD3618F, onAccent: 0x2B1120, accentLight: 0xC24E80),
         AccentSet(name: "Оранжевый", accentDark: 0xFFC08A, strong: 0xE08A3C, onAccent: 0x2B1806, accentLight: 0xC9711F),
     ]
@@ -31,15 +31,26 @@ enum L2 {
         return accents.indices.contains(i) ? accents[i] : accents[0]
     }
 
-    static var background: UIColor { dyn(0x0A0E1B, 0xF4F3FA) }      // фон экранов
-    static var surface: UIColor { dyn(0x222839, 0xFFFFFF) }         // поиск, фильтры, поле ввода, карточки
-    static var surface2: UIColor { dyn(0x292F42, 0xE9E7F3) }        // входящие пузыри, кнопки на поверхностях
+    /// Цвет из удалённых настроек (тёмная тема) или встроенный.
+    private static func rc(_ key: String, _ builtin: UInt32) -> UInt32 { Linia2Config.shared.color(key) ?? builtin }
+    /// Пользователь оставил цвет по умолчанию — тогда действует цвет с сервера.
+    private static var usesServerAccent: Bool { Linia2Appearance.accentIndex == 0 }
+
+    static var background: UIColor { dyn(rc("background", 0x0A0E1B), 0xF4F3FA) }      // фон экранов
+    static var surface: UIColor { dyn(rc("surface", 0x222839), 0xFFFFFF) }         // поиск, фильтры, поле ввода, карточки
+    static var surface2: UIColor { dyn(rc("surface2", 0x292F42), 0xE9E7F3) }        // входящие пузыри, кнопки на поверхностях
+    static var bubbleIn: UIColor { dyn(rc("bubbleIn", 0x292F42), 0xE9E7F3) }
     static var elevated: UIColor { dyn(0x161D2E, 0xFFFFFF) }        // круглые кнопки в шапке
     static var tabBar: UIColor { dyn(0x121826, 0xFFFFFF) }          // плавающее меню
     static var separator: UIColor { dyn(0xFFFFFF, 0x12111C, 0.08, 0.08) }
-    static var accent: UIColor { let a = accentSet; return dyn(a.accentDark, a.accentLight) }   // активные элементы
-    static var accentStrong: UIColor { hex(accentSet.strong) }      // свои пузыри
-    static var onAccent: UIColor { let a = accentSet; return dyn(a.onAccent, 0xFFFFFF) }        // текст на акценте
+    static var accent: UIColor {   // активные элементы
+        let a = accentSet
+        return usesServerAccent ? dyn(rc("accent", a.accentDark), rc("accentLight", a.accentLight)) : dyn(a.accentDark, a.accentLight)
+    }
+    static var accentStrong: UIColor {   // свои пузыри
+        usesServerAccent ? hex(Linia2Config.shared.color("bubbleOut") ?? rc("accentStrong", accentSet.strong)) : hex(accentSet.strong)
+    }
+    static var onAccent: UIColor { let a = accentSet; return dyn(usesServerAccent ? rc("onAccent", a.onAccent) : a.onAccent, 0xFFFFFF) }
     static var textPrimary: UIColor { dyn(0xFFFFFF, 0x12111C) }
     static var textSecondary: UIColor { dyn(0x8A92A3, 0x6B6F80) }
     static let online = hex(0x2CE2A6)
@@ -92,7 +103,13 @@ enum Linia2Appearance {
     private static let kAccent = "linia2.appearance.accent"
 
     static var theme: Theme {
-        get { UserDefaults.standard.object(forKey: kTheme) == nil ? .dark : (Theme(rawValue: UserDefaults.standard.integer(forKey: kTheme)) ?? .dark) }
+        get {
+            if UserDefaults.standard.object(forKey: kTheme) == nil {
+                // Пользователь не выбирал — тема по умолчанию из удалённых настроек.
+                switch Linia2Config.shared.defaultTheme { case "light": return .light; case "system": return .system; default: return .dark }
+            }
+            return Theme(rawValue: UserDefaults.standard.integer(forKey: kTheme)) ?? .dark
+        }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: kTheme) }
     }
 

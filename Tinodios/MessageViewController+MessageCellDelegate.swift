@@ -130,6 +130,10 @@ extension MessageViewController: MessageCellDelegate {
             menuItems.append(MessageMenuItem(title: "Реакция", action: #selector(linia2ReactMenu(sender:)), seqId: cell.seqId))
             menuItems.append(MessageMenuItem(title: NSLocalizedString("Reply", comment: "Menu item"), action: #selector(showReplyPreview(sender:)), seqId: cell.seqId))
             menuItems.append(MessageMenuItem(title: NSLocalizedString("Forward", comment: "Menu item"), action: #selector(showForwardSelector(sender:)), seqId: cell.seqId))
+            // LINIA2: жалоба на чужое сообщение (Linia2Report.swift).
+            if !isFromCurrentSender(message: msg) && !topic.isSlfType {
+                menuItems.append(MessageMenuItem(title: "Пожаловаться", action: #selector(linia2ReportMessage(sender:)), seqId: cell.seqId))
+            }
             if isFromCurrentSender(message: msg), let content = msg.content {
                 // Only allow editing messages which don't contain certain entity types.
                 var canEdit = true

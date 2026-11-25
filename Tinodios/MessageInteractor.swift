@@ -332,6 +332,11 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
 
     func sendMessage(content: Drafty) {
         guard let topic = self.topic else { return }
+        // LINIA2: список запрещённых слов задаётся в админке (удалённые настройки).
+        if let word = Linia2Config.shared.bannedWord(in: content.string) {
+            DispatchQueue.main.async { UiUtils.showToast(message: "Сообщение не отправлено: недопустимое слово «\(word)».") }
+            return
+        }
         defer {
             loadMessagesFromCache()
         }

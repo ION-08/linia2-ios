@@ -54,6 +54,11 @@ extension MessageViewController: SendMessageBarDelegate {
     func sendMessageBar(recordAudio action: AudioBarAction) {
         switch action {
         case .start:
+            // LINIA2: голосовые сообщения можно выключить в удалённых настройках.
+            guard Linia2Config.shared.feature("voiceMessages") else {
+                UiUtils.showToast(message: "Голосовые сообщения временно отключены.", level: .info)
+                return
+            }
             Cache.mediaRecorder.delegate = self
             Cache.mediaRecorder.start()
         case .stopAndSend:

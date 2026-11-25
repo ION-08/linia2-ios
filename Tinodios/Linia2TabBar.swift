@@ -126,6 +126,7 @@ final class Linia2FloatingBar: UIView {
 
         pill.backgroundColor = L2.accent
         pill.layer.cornerRadius = 26
+        pill.layer.cornerCurve = .continuous
         pill.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pill)
 
@@ -144,10 +145,11 @@ final class Linia2FloatingBar: UIView {
         NSLayoutConstraint.activate([
             blur.topAnchor.constraint(equalTo: topAnchor), blur.bottomAnchor.constraint(equalTo: bottomAnchor),
             blur.leadingAnchor.constraint(equalTo: leadingAnchor), blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 8), stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            // Одинаковые отступы выделения на всех вкладках и запас от скругления панели (радиус 36).
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10), stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             pill.topAnchor.constraint(equalTo: stack.topAnchor), pill.bottomAnchor.constraint(equalTo: stack.bottomAnchor),
-            pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(Self.tabs.count), constant: -8),
+            pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(Self.tabs.count), constant: -12),
         ])
         accessibilityTraits = .tabBar
     }
@@ -193,7 +195,7 @@ private final class Linia2TabItem: UIControl {
         addSubview(label)
         NSLayoutConstraint.activate([
             icon.centerXAnchor.constraint(equalTo: centerXAnchor),
-            icon.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            icon.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             icon.heightAnchor.constraint(equalToConstant: 24),
             label.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 4),
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),

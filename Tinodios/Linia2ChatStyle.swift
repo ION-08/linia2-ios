@@ -19,6 +19,39 @@ extension ChatListViewController: UITextFieldDelegate {
         tableView.contentInset.bottom = Linia2TabBarController.reservedBottom + 20
         tableView.verticalScrollIndicatorInsets.bottom = Linia2TabBarController.reservedBottom
         linia2InstallHeader()
+        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.linia2InstallHeader()
+        }
+    }
+
+    private func linia2BannerView(_ b: Linia2Config.Banner) -> UIView {
+        let v = UIControl()
+        v.backgroundColor = b.color.map { L2.hex($0, 0.18) } ?? L2.accent.withAlphaComponent(0.18)
+        v.layer.cornerRadius = 16
+        v.layer.borderWidth = 1
+        v.layer.borderColor = (b.color.map { L2.hex($0, 0.5) } ?? L2.accent.withAlphaComponent(0.5)).cgColor
+        let icon = UIImageView(image: L2.symbol("megaphone.fill", 16, .semibold))
+        icon.tintColor = b.color.map { L2.hex($0) } ?? L2.accent
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        let l = UILabel()
+        l.text = b.text
+        l.numberOfLines = 0
+        l.font = L2.font(15, .medium)
+        l.textColor = L2.textPrimary
+        let row = UIStackView(arrangedSubviews: [icon, l])
+        row.spacing = 10
+        row.alignment = .center
+        row.isUserInteractionEnabled = false
+        row.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(row)
+        NSLayoutConstraint.activate([row.topAnchor.constraint(equalTo: v.topAnchor, constant: 12), row.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -12),
+                                     row.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 14), row.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -14)])
+        if let url = b.url {
+            v.addAction(UIAction { _ in UIApplication.shared.open(url) }, for: .touchUpInside)
+        }
+        v.isAccessibilityElement = true
+        v.accessibilityLabel = "Объявление: " + b.text
+        return v
     }
 
     func linia2InstallHeader() {
@@ -37,7 +70,10 @@ extension ChatListViewController: UITextFieldDelegate {
             self?.linia2FilterIndex = i
             self?.linia2Refilter()
         }
-        let h = L2TableHeader([header, search, chips], spacing: 18)
+        var parts: [UIView] = [header]
+        if let b = Linia2Config.shared.banner { parts.append(linia2BannerView(b)) }   // объявление из админки
+        parts += [search, chips]
+        let h = L2TableHeader(parts, spacing: 18)
         h.install(in: tableView)
         linia2Header = h
         linia2HeaderWidth = tableView.bounds.width

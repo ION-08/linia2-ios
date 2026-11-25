@@ -106,7 +106,8 @@ class Linia2FormViewController: UIViewController {
         centerConstraint.priority = .defaultLow
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            // Низ области — верх клавиатуры (iOS 15+): поле и кнопка всегда над клавиатурой.
+            scroll.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.topAnchor.constraint(greaterThanOrEqualTo: scroll.contentLayoutGuide.topAnchor, constant: 24),
@@ -141,8 +142,7 @@ class Linia2FormViewController: UIViewController {
     @objc private func keyboardChanged(_ n: Notification) {
         guard let frame = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
         let overlap = n.name == UIResponder.keyboardWillHideNotification ? 0 : max(0, view.bounds.maxY - view.convert(frame, from: nil).minY)
-        scroll.contentInset.bottom = overlap
-        scroll.verticalScrollIndicatorInsets.bottom = overlap
+        _ = overlap  // область уже уменьшена keyboardLayoutGuide — дополнительный отступ не нужен
         if overlap > 0 { DispatchQueue.main.async { self.revealFirstResponder() } }
     }
 
@@ -591,6 +591,16 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
         stack.addArrangedSubview(errorText)
         stack.setCustomSpacing(22, after: errorText)
         stack.addArrangedSubview(registerButton)
+        // Согласие с документами — без галочки, ссылки открываются в SFSafariViewController.
+        let legal = L2LegalTextView(parts: [
+            ("Регистрируясь, вы соглашаетесь с ", nil),
+            ("Условиями", Linia2Links.terms),
+            (" и ", nil),
+            ("Политикой конфиденциальности", Linia2Links.privacy),
+        ])
+        legal.presenter = self
+        stack.setCustomSpacing(12, after: registerButton)
+        stack.addArrangedSubview(legal)
     }
 
     override func viewDidAppear(_ animated: Bool) {

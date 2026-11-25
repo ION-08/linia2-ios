@@ -108,6 +108,7 @@ extension MessageViewController {
     }
 
     @objc private func linia2DoubleTap(_ g: UITapGestureRecognizer) {
+        guard Linia2Config.shared.feature("reactions") else { return }
         guard let cv = collectionView, let ip = cv.indexPathForItem(at: g.location(in: cv)), ip.item < messages.count else { return }
         let msg = messages[ip.item]
         guard !msg.isDeleted, msg.seqId > 0 else { return }
@@ -121,6 +122,7 @@ extension MessageViewController {
     }
 
     func linia2ShowReactionPicker(for seq: Int, from source: UIView?) {
+        guard Linia2Config.shared.feature("reactions") else { return }
         let mine = linia2MyReactions[seq] ?? [:]
         let sheet = UIAlertController(title: "Реакция", message: nil, preferredStyle: .actionSheet)
         for e in Self.kL2QuickReactions {

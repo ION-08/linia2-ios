@@ -73,8 +73,8 @@ class MessageViewController: UIViewController {
         static let kOutgoingTextColorLight = UIColor.darkText
         static var kOutgoingTextColorDark: UIColor { UIColor.white }
         // Bright/dark green color
-        static var kIncomingBubbleColorLight: UIColor { L2.surface2 }
-        static var kIncomingBubbleColorDark: UIColor { L2.surface2 }
+        static var kIncomingBubbleColorLight: UIColor { L2.bubbleIn }
+        static var kIncomingBubbleColorDark: UIColor { L2.bubbleIn }
         // And corresponding font color
         static var kIncomingTextColorLight: UIColor { L2.textPrimary }
         static var kIncomingTextColorDark: UIColor { L2.textPrimary }
@@ -614,9 +614,11 @@ class MessageViewController: UIViewController {
             alert.addAction(UIAlertAction(title: NSLocalizedString("Audio-only", comment: "Menu item: audio-only call"), style: .default, handler: { audioCall in
                 self.performSegue(withIdentifier: "Messages2Call", sender: Constants.kAudioOnlyCall)
             }))
+            if Linia2Config.shared.feature("videoCalls") {   // LINIA2: выключатель видеозвонков
             alert.addAction(UIAlertAction(title: NSLocalizedString("Video", comment: "Menu item: video call"), style: .default, handler: { videoCall in
                 self.performSegue(withIdentifier: "Messages2Call", sender: Constants.kVideoCall)
             }))
+            }
             alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Alert action"), style: .cancel, handler: nil))
             if let presentation = alert.popoverPresentationController {
                 presentation.barButtonItem = navBarCallBtn

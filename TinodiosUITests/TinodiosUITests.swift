@@ -138,16 +138,39 @@ final class TinodiosUITests: XCTestCase {
             screenshot("tab-" + name)
             dismissSpringboardAlerts()
         }
-        // Чаты → «Новый чат».
+        // Чаты: поиск с открытой клавиатурой.
+        let chatSearch = app.textFields.firstMatch
+        if chatSearch.waitForExistence(timeout: 3) {
+            chatSearch.tap(); sleep(1); screenshot("kb-chats-search")
+            app.typeText("\n"); sleep(1)
+        }
+        // Чаты → «Новый чат» (с клавиатурой).
         let compose = app.buttons["Новый чат"].firstMatch
         if wait(compose, "кнопка «Новый чат»").exists {
-            compose.tap(); sleep(2); screenshot("new-chat"); back(); sleep(1)
+            compose.tap(); sleep(2); screenshot("new-chat")
+            let f = app.textFields.firstMatch
+            if f.waitForExistence(timeout: 3) { f.tap(); app.typeText("ci"); sleep(2); screenshot("kb-new-chat") }
+            back(); sleep(1)
         }
-        // Контакты → «Добавить контакт».
+        // Контакты → «Добавить контакт» (с клавиатурой).
         tab("l2.tab.contacts").tap(); sleep(1)
         let add = app.buttons["Добавить контакт"].firstMatch
         if wait(add, "кнопка «Добавить контакт»").exists {
-            add.tap(); sleep(2); screenshot("add-contact"); back(); sleep(1)
+            add.tap(); sleep(2); screenshot("add-contact")
+            let f = app.textFields.firstMatch
+            if f.waitForExistence(timeout: 3) { f.tap(); sleep(1); screenshot("kb-add-contact") }
+            back(); sleep(1)
+        }
+        // Профиль (с клавиатурой на каждом поле).
+        tab("l2.tab.settings").tap(); sleep(1)
+        let profile = app.descendants(matching: .any)["l2.settings.profile"].firstMatch
+        if profile.waitForExistence(timeout: 3) {
+            profile.tap(); sleep(2); screenshot("profile")
+            for id in ["l2.profile.name", "l2.profile.alias", "l2.profile.about"] {
+                let f = app.descendants(matching: .any)[id].firstMatch
+                if f.waitForExistence(timeout: 2) && f.isHittable { f.tap(); sleep(1); screenshot("kb-" + id) }
+            }
+            back(); sleep(1)
         }
         // Настройки — каждый пункт.
         tab("l2.tab.settings").tap(); sleep(1)
@@ -164,6 +187,36 @@ final class TinodiosUITests: XCTestCase {
             }
             back(); sleep(1)
         }
+    }
+
+    /// Новый чат с пользователем по логину: экран чата, клавиатура, отправка, меню сообщения.
+    private func openChatAndSend(with peer: String) {
+        tab("l2.tab.chats").tap(); sleep(1)
+        let compose = app.buttons["Новый чат"].firstMatch
+        guard compose.waitForExistence(timeout: 5) else { return }
+        compose.tap(); sleep(2)
+        let f = app.textFields.firstMatch
+        guard f.waitForExistence(timeout: 3) else { back(); return }
+        f.tap(); app.typeText(peer); sleep(4)
+        let hit = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", peer)).firstMatch
+        guard hit.waitForExistence(timeout: 8) else { screenshot("ШАГ ПРОПУЩЕН-чат"); back(); return }
+        hit.tap(); sleep(3)
+        screenshot("chat-empty")
+        let input = app.textViews.firstMatch
+        if input.waitForExistence(timeout: 5) {
+            input.tap(); sleep(1)
+            screenshot("kb-chat")
+            app.typeText("Привет! Проверка связи")
+            let send = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Отправ' OR identifier CONTAINS[c] 'send'")).firstMatch
+            if send.exists { send.tap() } else { app.typeText("\n") }
+            sleep(3)
+            screenshot("chat-sent")
+            app.tap()
+            let bubble = app.staticTexts["Привет! Проверка связи"].firstMatch
+            if bubble.waitForExistence(timeout: 3) { bubble.press(forDuration: 1.2); sleep(1); screenshot("chat-menu"); app.tap(); sleep(1) }
+        }
+        XCTAssertTrue(app.state == .runningForeground, "приложение упало в чате")
+        for _ in 0..<3 where !tab("l2.tab.chats").isHittable { back(); sleep(1) }
     }
 
     private func logout() {
@@ -253,6 +306,7 @@ final class TinodiosUITests: XCTestCase {
         screenshot("login-filled")
         app.typeText("\n")             // «Войти» с клавиатуры
         try createPinAndReachChats("login")
+        openChatAndSend(with: regLogin)
         // 3. Все вкладки, «Новый чат», «Добавить контакт», каждый пункт настроек (если не пройдены после регистрации).
         if !registered { visitAllTabsAndSettings() }
 

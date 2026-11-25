@@ -450,7 +450,8 @@ print("done-2")
 # Дизайн «Линия 2.0» (тёмная тема, вкладки, онбординг) — ноябрь 2026
 # =====================================================================
 NEW_FILES2 = ["Linia2NewChat.swift", "Linia2Theme.swift", "Linia2TabBar.swift", "Linia2Calls.swift", "Linia2Contacts.swift",
-              "Linia2Settings.swift", "Linia2ChatStyle.swift", "Linia2Reactions.swift"]
+              "Linia2Settings.swift", "Linia2ChatStyle.swift", "Linia2Reactions.swift",
+              "Linia2RemoteConfig.swift", "Linia2Profile.swift", "Linia2Report.swift"]
 NEW_FILES[:] = NEW_FILES + [f for f in NEW_FILES2 if (R / "Tinodios" / f).exists() and f not in NEW_FILES]
 edit("Tinodios.xcodeproj/project.pbxproj", add_files)
 
@@ -716,3 +717,91 @@ def chat_style_attach(s):
 
 
 edit("Tinodios/Linia2ChatStyle.swift", chat_style_attach)
+
+
+# ---- Финальные правки: подложка под полем ввода, iOS 15 ----
+def send_bar_host_bg(s):
+    if "LINIA2_HOST_BG" in s:
+        return s
+    return must(s, "    // MARK: - Configuration\n",
+                "    // LINIA2_HOST_BG: системная подложка под полем ввода (зона индикатора «домой») — в цвет фона.\n"
+                "    override func didMoveToWindow() {\n"
+                "        super.didMoveToWindow()\n"
+                "        backgroundColor = L2.background\n"
+                "        var v = superview\n"
+                "        var depth = 0\n"
+                "        while let cur = v, depth < 4 {\n"
+                "            cur.backgroundColor = L2.background\n"
+                "            v = cur.superview\n"
+                "            depth += 1\n"
+                "        }\n"
+                "    }\n\n"
+                "    // MARK: - Configuration\n")
+
+
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar_host_bg)
+for proj in ("Tinodios", "TinodeSDK", "TinodiosDB"):
+    edit(proj + ".xcodeproj/project.pbxproj", lambda s: re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = 1[0-4]\.\d+;", "IPHONEOS_DEPLOYMENT_TARGET = 15.0;", s))
+edit("Podfile", lambda s: s.replace("platform :ios, '14.0'", "platform :ios, '15.0'"))
+print("done-final-A")
+
+
+def app_delegate_reconnect(s):
+    if "LINIA2_FAST_RECONNECT" in s:
+        return s
+    return must(s, "    func applicationDidBecomeActive(_ application: UIApplication) {\n        Linia2Turn.shared.prefetch()\n",
+                "    func applicationDidBecomeActive(_ application: UIApplication) {\n        Linia2Turn.shared.prefetch()\n"
+                "        // LINIA2_FAST_RECONNECT: при возврате в приложение переподключаемся сразу, без паузы backoff —\n"
+                "        // иначе новые сообщения приходят только через несколько секунд.\n"
+                "        let tinode = Cache.tinode\n"
+                "        if !tinode.isConnected && BaseDb.sharedInstance.isReady {\n"
+                "            _ = tinode.reconnectNow(interactively: true, reset: false)\n"
+                "        }\n")
+
+
+edit("Tinodios/AppDelegate.swift", app_delegate_reconnect)
+
+
+# ---- Блок B: keepalive WebSocket — мёртвое соединение обнаруживается за секунды, а не минуты ----
+def ws_keepalive(s):
+    if "LINIA2_KEEPALIVE" in s:
+        return s
+    s = must(s, "    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {\n        self.state = .open\n",
+             "    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {\n        self.state = .open\n        self.startKeepalive(webSocketTask)\n")
+    s = must(s, "    private func listen()  {\n",
+             "    // LINIA2_KEEPALIVE: ping каждые 15 с; нет ответа за 5 с — соединение считаем потерянным,\n"
+             "    // Connection переподключается сразу, и сообщения не «зависают» на мёртвом сокете.\n"
+             "    private var keepaliveTimer: DispatchSourceTimer?\n"
+             "    private func startKeepalive(_ task: URLSessionWebSocketTask) {\n"
+             "        keepaliveTimer?.cancel()\n"
+             "        let t = DispatchSource.makeTimerSource(queue: webSocketQueue)\n"
+             "        t.schedule(deadline: .now() + 15, repeating: 15)\n"
+             "        t.setEventHandler { [weak self, weak task] in\n"
+             "            guard let self = self, let task = task, task === self.socket, self.state == .open else {\n"
+             "                self?.keepaliveTimer?.cancel()\n"
+             "                return\n"
+             "            }\n"
+             "            var answered = false\n"
+             "            task.sendPing { [weak self] error in\n"
+             "                self?.webSocketQueue.async {\n"
+             "                    answered = true\n"
+             "                    if let error = error, task === self?.socket { self?.errorHandler(error) }\n"
+             "                }\n"
+             "            }\n"
+             "            self.webSocketQueue.asyncAfter(deadline: .now() + 5) { [weak self, weak task] in\n"
+             "                guard let self = self, let task = task, !answered, task === self.socket, self.state == .open else { return }\n"
+             "                self.keepaliveTimer?.cancel()\n"
+             "                task.cancel(with: .goingAway, reason: nil)\n"
+             "                self.errorHandler(NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT)))\n"
+             "            }\n"
+             "        }\n"
+             "        keepaliveTimer = t\n"
+             "        t.resume()\n"
+             "    }\n\n"
+             "    private func listen()  {\n")
+    s = must(s, "    func close() {\n        state = .closing\n",
+             "    func close() {\n        keepaliveTimer?.cancel()\n        keepaliveTimer = nil\n        state = .closing\n")
+    return s
+
+
+edit("TinodeSDK/WebSocket.swift", ws_keepalive)

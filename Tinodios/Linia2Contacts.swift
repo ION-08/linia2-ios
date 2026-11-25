@@ -396,6 +396,10 @@ final class Linia2ContactCardViewController: UIViewController {
     private let loginLabel = UILabel()
     private let statusLabel = UILabel()
     private var listener: Linia2TinodeListener?
+    // Жалоба и блокировка (Linia2Report.swift).
+    private let reportButton = L2Button("Пожаловаться", kind: .secondary, symbol: "exclamationmark.bubble")
+    private let blockButton = L2Button("Заблокировать", kind: .destructive, symbol: "hand.raised")
+    private let moderation = UIStackView()
 
     init(topicName: String) {
         self.topicName = topicName
@@ -461,7 +465,16 @@ final class Linia2ContactCardViewController: UIViewController {
         info.spacing = 8
         info.setCustomSpacing(18, after: avatarBox)
 
-        let stack = UIStackView(arrangedSubviews: [info, actions])
+        reportButton.accessibilityIdentifier = "l2.contact.report"
+        blockButton.accessibilityIdentifier = "l2.contact.block"
+        reportButton.addTarget(self, action: #selector(reportTapped), for: .touchUpInside)
+        blockButton.addTarget(self, action: #selector(blockTapped), for: .touchUpInside)
+        moderation.axis = .vertical
+        moderation.spacing = 12
+        moderation.addArrangedSubview(reportButton)
+        moderation.addArrangedSubview(blockButton)
+
+        let stack = UIStackView(arrangedSubviews: [info, actions, moderation])
         stack.axis = .vertical
         stack.spacing = 32
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -509,8 +522,11 @@ final class Linia2ContactCardViewController: UIViewController {
             statusLabel.text = nil
             dot.isHidden = true
             avatar.set(pub: nil, id: topicName, deleted: false)
+            moderation.isHidden = true
             return
         }
+        moderation.isHidden = !topic.isP2PType
+        blockButton.setTitle(Linia2Moderation.isBlocked(topic) ? "Разблокировать" : "Заблокировать", for: .normal)
         nameLabel.text = Linia2ContactInfo.name(of: topic)
         avatar.set(pub: topic.pub, id: topic.name, deleted: topic.deleted)
         avatar.letterTileFont = L2.rounded(48, .semibold)
@@ -539,5 +555,22 @@ final class Linia2ContactCardViewController: UIViewController {
     @objc private func videoTapped() {
         L2.haptic()
         Linia2Root.openChat(topicName, call: .video)
+    }
+
+    @objc private func reportTapped() {
+        L2.haptic()
+        // Жалоба на профиль: без seq и текста сообщения.
+        Linia2Moderation.report(from: self, topic: topicName, reported: topicName, sourceView: reportButton)
+    }
+
+    @objc private func blockTapped() {
+        L2.haptic()
+        guard let topic = Cache.tinode.getTopic(topicName: topicName) as? DefaultComTopic else {
+            UiUtils.showToast(message: "Контакт ещё загружается, попробуйте через пару секунд.", level: .warning)
+            return
+        }
+        Linia2Moderation.confirmToggleBlock(from: self, topic: topic, sourceView: blockButton) { [weak self] _ in
+            self?.refresh()
+        }
     }
 }

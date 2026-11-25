@@ -87,7 +87,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             SharedUtils.identifyAndConfigureBranding()
         }
         SharedUtils.registerUserDefaults()
-        // LINIA2: тёмная тема с фиолетовым акцентом.
+        // LINIA2: удалённые настройки (цвета, тексты, функции) — до применения темы.
+        Linia2Config.shared.start()
+        // LINIA2: тема и акцент.
         Linia2Theme.apply(to: window)
         // LINIA2: блокировка приложения PIN-кодом / Face ID.
         Linia2AppLock.shared.start()
@@ -152,6 +154,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         Linia2Turn.shared.prefetch()
+        // LINIA2_FAST_RECONNECT: при возврате в приложение переподключаемся сразу, без паузы backoff —
+        // иначе новые сообщения приходят только через несколько секунд.
+        let tinode = Cache.tinode
+        if !tinode.isConnected && BaseDb.sharedInstance.isReady {
+            _ = tinode.reconnectNow(interactively: true, reset: false)
+        }
         if let call = Cache.callManager.callInProgress, !UiUtils.isShowingCallVC(forTopic: call.topic) {
             // App just entered the foreground and there's a call in progress. Go to the CallVC.
             // Typically happens when the app wasn't running and screen was locked at the moment

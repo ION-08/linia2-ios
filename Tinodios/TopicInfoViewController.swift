@@ -59,6 +59,8 @@ class TopicInfoViewController: UITableViewController {
         super.viewDidLoad()
         setup()
         reloadData()
+        // LINIA2: «⋯» — пожаловаться / заблокировать (Linia2Report.swift).
+        linia2InstallModerationMenu()
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)

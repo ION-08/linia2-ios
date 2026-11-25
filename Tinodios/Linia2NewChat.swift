@@ -480,6 +480,13 @@ final class Linia2NewChatViewController: UIViewController, UITableViewDataSource
 
     private func showPage(_ index: Int) {
         view.endEditing(true)
+        // LINIA2: создание групп можно выключить в удалённых настройках.
+        if index == 1 && !Linia2Config.shared.feature("groups") {
+            chips.select(0)
+            UiUtils.showToast(message: "Создание групп временно отключено.", level: .info)
+            showPage(0)
+            return
+        }
         searchPage.isHidden = index != 0
         groupPage.isHidden = index != 1
         invitePage.isHidden = index != 2

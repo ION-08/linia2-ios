@@ -4,6 +4,7 @@
 //
 
 import UIKit
+import SafariServices
 import TinodeSDK
 import TinodiosDB
 
@@ -328,14 +329,12 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     }
 
     private func openProfileEditor() {
-        // Экран Tinode «General Settings» (AccountGeneralSettingsViewController) требует me-топик.
+        // Экран профиля «Линия 2.0» (Linia2Profile.swift) работает с me-топиком.
         guard Cache.tinode.getMeTopic() != nil else {
             UiUtils.showToast(message: "Профиль ещё загружается, попробуйте через пару секунд.", level: .warning)
             return
         }
-        let vc = UIStoryboard(name: "Main", bundle: nil).instantiateViewController(withIdentifier: "General Settings")
-        vc.title = "Профиль"
-        push(vc)
+        push(Linia2ProfileViewController())
     }
 
     private func confirmLogout() {
@@ -366,6 +365,7 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
         case .profile:
             guard let cell = tableView.dequeueReusableCell(withIdentifier: L2ProfileCell.reuseId, for: indexPath) as? L2ProfileCell else { return UITableViewCell() }
             cell.configure()
+            cell.accessibilityIdentifier = "l2.settings.profile"
             return cell
         case .menu:
             let row = menu[indexPath.row]
@@ -672,15 +672,12 @@ final class Linia2BlockedContactsViewController: Linia2GroupedTableViewControlle
         present(sheet, animated: true)
     }
 
-    // Как в BlockedContactsTableViewController: подписка восстанавливает доступ, затем топик отпускается.
+    // Общая логика разблокировки (Linia2Report.swift): как в BlockedContactsTableViewController —
+    // подписка восстанавливает доступ, затем топик отпускается.
     private func unblock(_ topic: DefaultComTopic) {
-        topic.subscribe().then(
-            onSuccess: { [weak self] _ in
-                DispatchQueue.main.async { self?.reload() }
-                return nil
-            },
-            onFailure: UiUtils.ToastFailureHandler)
-        topic.leave()
+        Linia2Moderation.setBlocked(false, topic: topic) { [weak self] _ in
+            self?.reload()
+        }
     }
 
     private func deleteChat(_ topic: DefaultComTopic) {
@@ -905,7 +902,29 @@ final class Linia2AboutViewController: UIViewController {
         let site = L2Button("Открыть \(SharedUtils.kLinia2Host)", kind: .outline, symbol: "safari")
         site.addTarget(self, action: #selector(openSite), for: .touchUpInside)
 
-        let stack = UIStackView(arrangedSubviews: [logoRow, infoCard, site])
+        // Страницы и документы: HTML страниц приходит из удалённых настроек (если нет — строку не показываем).
+        var pageRows: [L2LinkRow] = []
+        if Linia2Config.shared.page("about") != nil {
+            pageRows.append(row("Подробнее о приложении", "info.circle", #selector(openAboutPage)))
+        }
+        if Linia2Config.shared.page("help") != nil {
+            pageRows.append(row("Помощь", "questionmark.circle", #selector(openHelpPage)))
+        }
+        if Linia2Config.shared.page("whatsNew") != nil {
+            pageRows.append(row("Что нового", "sparkles", #selector(openWhatsNewPage)))
+        }
+        let docRows = [
+            row("Политика конфиденциальности", "hand.raised", #selector(openPrivacy)),
+            row("Условия использования", "doc.text", #selector(openTerms)),
+            row("Связаться с нами", "envelope", #selector(contactUs)),
+        ]
+
+        var items: [UIView] = [logoRow, infoCard]
+        if !pageRows.isEmpty { items.append(Self.rowsCard(pageRows)) }
+        items.append(Self.rowsCard(docRows))
+        items.append(site)
+
+        let stack = UIStackView(arrangedSubviews: items)
         stack.axis = .vertical
         stack.spacing = 24
         stack.setCustomSpacing(36, after: logoRow)
@@ -946,5 +965,191 @@ final class Linia2AboutViewController: UIViewController {
     @objc private func openSite() {
         guard let url = Self.siteURL else { return }
         UIApplication.shared.open(url)
+    }
+
+    private func row(_ title: String, _ symbol: String, _ action: Selector) -> L2LinkRow {
+        let r = L2LinkRow(title: title, symbol: symbol)
+        r.addTarget(self, action: action, for: .touchUpInside)
+        return r
+    }
+
+    /// Карточка со строками и тонкими разделителями.
+    private static func rowsCard(_ rows: [L2LinkRow]) -> UIView {
+        let card = UIView()
+        card.backgroundColor = L2.surface
+        card.layer.cornerRadius = 20
+        card.clipsToBounds = true
+        let v = UIStackView()
+        v.axis = .vertical
+        for (i, r) in rows.enumerated() {
+            if i > 0 {
+                let sep = UIView()
+                sep.backgroundColor = L2.separator
+                sep.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale).isActive = true
+                v.addArrangedSubview(sep)
+            }
+            v.addArrangedSubview(r)
+        }
+        v.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(v)
+        NSLayoutConstraint.activate([
+            v.topAnchor.constraint(equalTo: card.topAnchor),
+            v.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            v.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+        ])
+        return card
+    }
+
+    private func openPage(_ name: String, title: String) {
+        guard let html = Linia2Config.shared.page(name) else {
+            UiUtils.showToast(message: "Страница пока недоступна. Попробуйте позже.", level: .warning)
+            return
+        }
+        navigationController?.pushViewController(Linia2HTMLPageViewController(title: title, html: html), animated: true)
+    }
+
+    @objc private func openAboutPage() { openPage("about", title: "О приложении") }
+    @objc private func openHelpPage() { openPage("help", title: "Помощь") }
+    @objc private func openWhatsNewPage() { openPage("whatsNew", title: "Что нового") }
+
+    @objc private func openPrivacy() { Linia2Links.open(Linia2Links.privacy, from: self) }
+    @objc private func openTerms() { Linia2Links.open(Linia2Links.terms, from: self) }
+
+    @objc private func contactUs() {
+        guard let url = Linia2Links.support, url.scheme?.lowercased() == "mailto" || url.scheme?.lowercased() == "https" else {
+            showSupportAddress()
+            return
+        }
+        if url.scheme?.lowercased() == "https" {
+            Linia2Links.open(url, from: self)
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { [weak self] ok in
+            if !ok { self?.showSupportAddress() }
+        }
+    }
+
+    /// Почта не настроена: показываем адрес и копируем его в буфер обмена.
+    private func showSupportAddress() {
+        let address = Linia2Links.supportEmail
+        UIPasteboard.general.string = address
+        let alert = UIAlertController(title: "Связаться с нами",
+                                      message: "Напишите нам на \(address)\nАдрес скопирован в буфер обмена.",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+}
+
+/// Строка-кнопка в карточке: иконка, заголовок, шеврон.
+final class L2LinkRow: UIControl {
+    init(title: String, symbol: String) {
+        super.init(frame: .zero)
+        let icon = UIImageView(image: L2.symbol(symbol, 18, .medium))
+        icon.tintColor = L2.accent
+        icon.contentMode = .center
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        let label = UILabel()
+        label.text = title
+        label.font = L2.font(17, .medium)
+        label.textColor = L2.textPrimary
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let chevron = UIImageView(image: L2.symbol("chevron.right", 13, .semibold))
+        chevron.tintColor = L2.textSecondary
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        for v in [icon, label, chevron] as [UIView] {
+            v.isUserInteractionEnabled = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 26),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        isAccessibilityElement = true
+        accessibilityLabel = title
+        accessibilityTraits = .button
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    override var isHighlighted: Bool { didSet { backgroundColor = isHighlighted ? L2.surface2 : .clear } }
+}
+
+// MARK: - Ссылки на документы (из удалённых настроек, с запасными адресами)
+
+enum Linia2Links {
+    static let supportEmail = "it_ion@icloud.com"
+
+    static var privacy: URL? { Linia2Config.shared.link("privacy") ?? URL(string: "https://v2.chat-linia.site/privacy") }
+    static var terms: URL? { Linia2Config.shared.link("terms") ?? URL(string: "https://v2.chat-linia.site/terms") }
+    static var support: URL? { Linia2Config.shared.link("support") ?? URL(string: "mailto:" + supportEmail) }
+
+    /// Открыть веб-страницу внутри приложения (SFSafariViewController); mailto — системным способом.
+    static func open(_ url: URL?, from vc: UIViewController?) {
+        guard let url = url else {
+            UiUtils.showToast(message: "Ссылка недоступна. Попробуйте позже.", level: .warning)
+            return
+        }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "http" || scheme == "https", let vc = vc {
+            let safari = SFSafariViewController(url: url)
+            safari.preferredControlTintColor = L2.accent
+            vc.present(safari, animated: true)
+        } else {
+            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        }
+    }
+}
+
+/// Неизменяемый текст с нажимаемыми ссылками (без выделения текста). Ссылки открываются в SFSafariViewController.
+final class L2LegalTextView: UITextView, UITextViewDelegate {
+    weak var presenter: UIViewController?
+
+    /// parts: пары (текст, ссылка или nil).
+    init(parts: [(String, URL?)]) {
+        super.init(frame: .zero, textContainer: nil)
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineSpacing = 2
+        let text = NSMutableAttributedString()
+        for (str, url) in parts {
+            var attrs: [NSAttributedString.Key: Any] = [.font: L2.font(13), .foregroundColor: L2.textSecondary, .paragraphStyle: para]
+            if let url = url { attrs[.link] = url }
+            text.append(NSAttributedString(string: str, attributes: attrs))
+        }
+        attributedText = text
+        linkTextAttributes = [.foregroundColor: L2.accent, .underlineStyle: NSUnderlineStyle.single.rawValue]
+        isEditable = false
+        isSelectable = true      // нужно для нажатия на ссылки; выделение текста сбрасываем ниже
+        isScrollEnabled = false
+        backgroundColor = .clear
+        textContainerInset = .zero
+        textContainer.lineFragmentPadding = 0
+        dataDetectorTypes = []
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool { false }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        if textView.selectedRange.length > 0 { textView.selectedRange = NSRange(location: 0, length: 0) }
+    }
+
+    func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
+        if interaction == .invokeDefault {
+            Linia2Links.open(URL, from: presenter)
+        }
+        return false
     }
 }
