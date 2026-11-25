@@ -19,6 +19,7 @@ final class TinodiosUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchArguments = ["-l2-uitest"]
         // Системные запросы (контакты, уведомления, микрофон) — закрываем.
         addUIInterruptionMonitor(withDescription: "Системные запросы") { alert in
             for title in ["Allow", "Разрешить", "OK", "Don’t Allow", "Don't Allow", "Не разрешать", "Allow While Using App"] {
@@ -61,6 +62,21 @@ final class TinodiosUITests: XCTestCase {
             let b = app.buttons[title].firstMatch
             if b.waitForExistence(timeout: 1) { b.tap() }
         }
+    }
+
+    /// Нажать элемент; если его закрывает клавиатура — прокрутить экран.
+    private func tapVisible(_ e: XCUIElement) {
+        wait(e, "элемент \(e.identifier)")
+        var tries = 0
+        while !e.isHittable && tries < 4 { app.swipeUp(); tries += 1 }
+        e.tap()
+    }
+
+    /// Ввести текст в поле, предварительно нажав на него.
+    private func fill(_ e: XCUIElement, _ text: String) {
+        tapVisible(e)
+        dismissKeyboardTips()
+        e.typeText(text)
     }
 
     private func type(_ text: String, into e: XCUIElement) {
@@ -174,14 +190,12 @@ final class TinodiosUITests: XCTestCase {
         dismissKeyboardTips()
         screenshot("register")
         // Как пользователь: ввод и «Далее» на клавиатуре; последнее «Готово» отправляет форму.
-        app.textFields["l2.reg.name"].tap()
-        dismissKeyboardTips()
-        app.typeText("Test CI\n")
-        app.typeText(regLogin + "\n")
-        app.typeText(regPassword + "\n")
-        app.typeText(regPassword)
+        fill(app.textFields["l2.reg.name"], "Test CI")
+        fill(app.textFields["l2.reg.login"], regLogin)
+        fill(app.secureTextFields["l2.reg.password"], regPassword)
+        fill(app.secureTextFields["l2.reg.password2"], regPassword)
         screenshot("register-filled")
-        app.typeText("\n")
+        tapVisible(app.buttons["l2.reg.submit"])
         createPinAndReachChats("reg")
 
         // 2. Все вкладки, «Новый чат», «Добавить контакт», каждый пункт настроек.
@@ -198,10 +212,10 @@ final class TinodiosUITests: XCTestCase {
             lf.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: v.count + 2))
         }
         dismissKeyboardTips()
-        lf.typeText(login + "\n")
-        app.typeText(password)
+        lf.typeText(login)
+        fill(app.secureTextFields["l2.login.password"], password)
         screenshot("login-filled")
-        app.typeText("\n")
+        tapVisible(app.buttons["l2.login.submit"])
         createPinAndReachChats("login")
 
         // 4. Повторный запуск — экран PIN, затем Чаты.

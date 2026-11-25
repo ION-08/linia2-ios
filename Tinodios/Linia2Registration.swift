@@ -296,7 +296,7 @@ final class Linia2LoginViewController: Linia2FormViewController, UITextFieldDele
         loginField.returnKeyType = .next
         loginField.delegate = self
         loginField.text = SharedUtils.getSavedLoginUserName()
-        passwordField.textContentType = .password
+        passwordField.textContentType = ProcessInfo.processInfo.arguments.contains("-l2-uitest") ? nil : .password
         passwordField.addSecureToggle()
         passwordField.returnKeyType = .go
         passwordField.delegate = self
@@ -559,9 +559,11 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
         loginField.autocorrectionType = .no
         loginField.spellCheckingType = .no
         loginField.keyboardType = .asciiCapable
+        // Под UI-тестом (флаг -l2-uitest) без «надёжного пароля» iOS — он перехватывает ввод в симуляторе.
+        let uiTest = ProcessInfo.processInfo.arguments.contains("-l2-uitest")
         for f in [passwordField, password2Field] {
             f.addSecureToggle()
-            f.textContentType = .newPassword
+            f.textContentType = uiTest ? nil : .newPassword
         }
         let hint = UILabel()
         hint.text = "Логин — латиница, цифры, точка, _ или -. По нему вас найдут собеседники."
