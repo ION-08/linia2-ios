@@ -63,9 +63,19 @@ jobs:
             echo "::error::Не заданы секреты ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8_BASE64"; exit 1
           fi
           mkdir -p "$RUNNER_TEMP/asc"
-          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
-          chmod 600 "$RUNNER_TEMP/asc/AuthKey.p8"
-          echo "ASC_KEY_PATH=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
+          KEY="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
+          { echo "$ASC_KEY_P8_BASE64" | base64 --decode; echo; } | sed '/^$/d' > "$KEY"
+          chmod 600 "$KEY"
+          echo "ASC_KEY_PATH=$KEY" >> "$GITHUB_ENV"
+          # Проверка ключа напрямую через App Store Connect API (токен не выводится).
+          node -e '
+            const c=require("crypto"),fs=require("fs");const e=process.env,n=Math.floor(Date.now()/1000);
+            const b=o=>Buffer.from(JSON.stringify(o)).toString("base64url");
+            const h=b({alg:"ES256",kid:e.ASC_KEY_ID,typ:"JWT"}),p=b({iss:e.ASC_ISSUER_ID,iat:n,exp:n+600,aud:"appstoreconnect-v1"});
+            const s=c.sign("sha256",Buffer.from(h+"."+p),{key:fs.readFileSync(process.argv[1]),dsaEncoding:"ieee-p1363"}).toString("base64url");
+            fetch("https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=info.codix.liniya2",{headers:{Authorization:"Bearer "+h+"."+p+"."+s}})
+              .then(async r=>{const j=await r.json();console.log("ASC API:",r.status,(j.data||[]).map(a=>a.attributes.name).join(","));if(r.status!==200)process.exit(1);});
+          ' "$KEY"
 
       - name: CocoaPods
         run: |
