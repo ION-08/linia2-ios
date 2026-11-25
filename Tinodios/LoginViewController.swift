@@ -51,6 +51,9 @@ class LoginViewController: UIViewController {
             self.configureConnectionButton.isHidden = false
             self.poweredByStack.isHidden = true
         }
+        // LINIA2: никаких настроек подключения на экране входа.
+        self.configureConnectionButton.isHidden = true
+        self.poweredByStack.isHidden = true
         if let logo = SharedUtils.smallIcon {
             self.logoView.image = logo
         }

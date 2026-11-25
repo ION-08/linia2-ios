@@ -224,3 +224,66 @@ def signup(s):
 
 edit("Tinodios/SignupViewController.swift", signup)
 print("done")
+
+# ---- Сервер зашит жёстко, никаких настроек подключения в приложении ----
+def fixed_server(s):
+    if "LINIA2_FIXED_SERVER" in s:
+        return s
+    s = must(s, "    static func getConnectionSettings() -> (hostName: String?, useTLS: Bool?) {\n        return (hostName: kAppDefaults.string(forKey: kPrefHostName), useTLS: kAppDefaults.bool(forKey: kPrefUseTLS))\n    }",
+             "    // LINIA2_FIXED_SERVER: адрес сервера зашит в приложение и не меняется пользователем.\n    public static let kLinia2Host = \"%s\"\n    static func getConnectionSettings() -> (hostName: String?, useTLS: Bool?) {\n        return (hostName: kLinia2Host, useTLS: true)\n    }" % HOST)
+    s = must(s, "    static func setConnectionSettings(_ hostName: String?, _ useTLS: String?) {\n",
+             "    static func setConnectionSettings(_ hostName: String?, _ useTLS: String?) {\n        // LINIA2: подменить сервер нельзя — всегда сохраняем фиксированный адрес.\n        let hostName: String? = kLinia2Host, useTLS: String? = \"true\"\n")
+    return s
+
+
+edit("TinodiosDB/SharedUtils.swift", fixed_server)
+
+
+def login_no_conn(s):
+    if "LINIA2" in s:
+        return s
+    return must(s, "        if let logo = SharedUtils.smallIcon {",
+                "        // LINIA2: никаких настроек подключения на экране входа.\n"
+                "        self.configureConnectionButton.isHidden = true\n"
+                "        self.poweredByStack.isHidden = true\n"
+                "        if let logo = SharedUtils.smallIcon {")
+
+
+edit("Tinodios/LoginViewController.swift", login_no_conn)
+
+
+def help_no_server(s):
+    if "LINIA2" in s:
+        return s
+    s = must(s, "        let (host, tls) = Tinode.getConnectionParams()\n        serverAddressLabel.text = (tls ? \"https://\" : \"http://\") + host\n",
+             "        // LINIA2: адрес сервера пользователю не показываем.\n        serverAddressLabel.text = \"\"\n")
+    s = must(s, "    override func viewDidLayoutSubviews() {",
+             "    // LINIA2: скрываем строку с адресом сервера.\n"
+             "    override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {\n"
+             "        let cell = super.tableView(tableView, cellForRowAt: indexPath)\n"
+             "        if let label = serverAddressLabel, label.isDescendant(of: cell) { return 0.01 }\n"
+             "        return super.tableView(tableView, heightForRowAt: indexPath)\n"
+             "    }\n\n"
+             "    override func viewDidLayoutSubviews() {")
+    return s
+
+
+edit("Tinodios/SettingsHelpViewController.swift", help_no_server)
+
+# Настройки iOS (приложение «Настройки»): убираем раздел «Connection settings».
+def root_plist(s):
+    i = s.find("<string>ConnectionSettings</string>")
+    if i < 0:
+        return s
+    start = s.rfind("\t\t<dict>", 0, i)
+    end = s.find("</dict>", i) + len("</dict>\n")
+    return s[:start] + s[end:]
+
+
+edit("Tinodios/Settings.bundle/Root.plist", root_plist)
+cs = R / "Tinodios/Settings.bundle/ConnectionSettings.plist"
+if cs.exists():
+    cs.unlink()
+    print("removed ConnectionSettings.plist")
+for l in (R / "Tinodios/Settings.bundle").glob("*.lproj/ConnectionSettings.strings"):
+    l.unlink()

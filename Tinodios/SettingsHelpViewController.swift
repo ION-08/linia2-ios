@@ -70,8 +70,8 @@ class SettingsHelpViewController: UITableViewController {
         components.host = privacyUrl!.host
         serviceLinkLabel.text = components.url!.absoluteString
         // Server address.
-        let (host, tls) = Tinode.getConnectionParams()
-        serverAddressLabel.text = (tls ? "https://" : "http://") + host
+        // LINIA2: адрес сервера пользователю не показываем.
+        serverAddressLabel.text = ""
 
         // Precompute content height.
         // Table is confitured as static cells. Can use simple loop.
@@ -88,6 +88,13 @@ class SettingsHelpViewController: UITableViewController {
             self.isUsingCustomBranding = true
         }
         self.poweredByView.isHidden = !isUsingCustomBranding
+    }
+
+    // LINIA2: скрываем строку с адресом сервера.
+    override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        let cell = super.tableView(tableView, cellForRowAt: indexPath)
+        if let label = serverAddressLabel, label.isDescendant(of: cell) { return 0.01 }
+        return super.tableView(tableView, heightForRowAt: indexPath)
     }
 
     override func viewDidLayoutSubviews() {

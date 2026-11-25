@@ -284,11 +284,15 @@ public class SharedUtils {
         return success
     }
 
+    // LINIA2_FIXED_SERVER: адрес сервера зашит в приложение и не меняется пользователем.
+    public static let kLinia2Host = "v2.chat-linia.site"
     static func getConnectionSettings() -> (hostName: String?, useTLS: Bool?) {
-        return (hostName: kAppDefaults.string(forKey: kPrefHostName), useTLS: kAppDefaults.bool(forKey: kPrefUseTLS))
+        return (hostName: kLinia2Host, useTLS: true)
     }
 
     static func setConnectionSettings(_ hostName: String?, _ useTLS: String?) {
+        // LINIA2: подменить сервер нельзя — всегда сохраняем фиксированный адрес.
+        let hostName: String? = kLinia2Host, useTLS: String? = "true"
         if hostName != nil {
             kAppDefaults.set(hostName, forKey: kPrefHostName)
             UserDefaults.standard.set(hostName, forKey: kPrefHostName)
