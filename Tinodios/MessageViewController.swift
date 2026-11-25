@@ -67,20 +67,20 @@ class MessageViewController: UIViewController {
         static let kProgressBarRightPadding: CGFloat = 25
 
         // Light/dark gray color: outgoing messages
-        static let kOutgoingBubbleColorLight = UIColor(red: 244/255, green: 244/255, blue: 244/255, alpha: 1)
-        static let kOutgoingBubbleColorDark = L2.accentStrong  // LINIA2_COLORS: свои — фиолетовые
+        static var kOutgoingBubbleColorLight: UIColor { L2.accentStrong }
+        static var kOutgoingBubbleColorDark: UIColor { L2.accentStrong }  // LINIA2_COLORS: свои — цвет акцента
         // And corresponding text color
         static let kOutgoingTextColorLight = UIColor.darkText
-        static let kOutgoingTextColorDark = UIColor.white
+        static var kOutgoingTextColorDark: UIColor { UIColor.white }
         // Bright/dark green color
-        static let kIncomingBubbleColorLight = UIColor(red: 69/255, green: 193/255, blue: 89/255, alpha: 1)
-        static let kIncomingBubbleColorDark = L2.surface2
+        static var kIncomingBubbleColorLight: UIColor { L2.surface2 }
+        static var kIncomingBubbleColorDark: UIColor { L2.surface2 }
         // And corresponding font color
-        static let kIncomingTextColorLight = UIColor.white
-        static let kIncomingTextColorDark = UIColor.white
+        static var kIncomingTextColorLight: UIColor { L2.textPrimary }
+        static var kIncomingTextColorDark: UIColor { L2.textPrimary }
         // Meta-messages, such as "Content deleted".
-        static let kDeletedMessageBubbleColorLight = UIColor(fromHexCode: 0xffe3f2fd)
-        static let kDeletedMessageBubbleColorDark = L2.surface
+        static var kDeletedMessageBubbleColorLight: UIColor { L2.surface }
+        static var kDeletedMessageBubbleColorDark: UIColor { L2.surface }
         static let kDeletedMessageTextColor = UIColor.gray
 
         static let kContentFont = UIFont.preferredFont(forTextStyle: .body)

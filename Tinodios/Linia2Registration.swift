@@ -358,7 +358,7 @@ final class Linia2CodeCellsView: UIControl, UIKeyInput, UITextInputTraits {
     // UITextInputTraits
     var keyboardType: UIKeyboardType = .numberPad
     var textContentType: UITextContentType! = .oneTimeCode
-    var keyboardAppearance: UIKeyboardAppearance = .dark
+    var keyboardAppearance: UIKeyboardAppearance = .default
 
     override init(frame: CGRect) {
         super.init(frame: frame)

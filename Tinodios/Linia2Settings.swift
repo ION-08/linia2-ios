@@ -693,69 +693,34 @@ final class Linia2BlockedContactsViewController: Linia2GroupedTableViewControlle
     }
 }
 
-// MARK: - Внешний вид
+// MARK: - Внешний вид: тема и цвет акцента (сохраняются и сразу применяются ко всему приложению)
 
-/// В Tinode нет настройки размера текста сообщений, поэтому экран описывает фиксированную тему и показывает превью.
 final class Linia2AppearanceViewController: UIViewController {
+    private let scroll = UIScrollView()
+    private let stack = UIStackView()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Внешний вид"
-        view.backgroundColor = L2.background
         navigationItem.largeTitleDisplayMode = .never
-
-        let themeTitle = UILabel()
-        themeTitle.text = "Тёмная тема с фиолетовым акцентом"
-        themeTitle.font = L2.rounded(22, .bold)
-        themeTitle.textColor = L2.textPrimary
-        themeTitle.numberOfLines = 0
-        let themeText = UILabel()
-        themeText.text = "«Линия 2.0» всегда использует тёмное оформление: оно бережёт глаза вечером и экономит заряд на OLED-экранах."
-        themeText.font = L2.font(15)
-        themeText.textColor = L2.textSecondary
-        themeText.numberOfLines = 0
-
-        // Превью переписки.
-        let preview = UIStackView(arrangedSubviews: [
-            bubble("Привет! Как тебе новая тема?", incoming: true),
-            bubble("Очень нравится 💜", incoming: false),
-        ])
-        preview.axis = .vertical
-        preview.spacing = 8
-        let previewCard = card(preview)
-
-        // Палитра.
-        let swatches: [(UIColor, String)] = [
-            (L2.background, "Фон"), (L2.surface, "Карточки"), (L2.accent, "Акцент"),
-            (L2.accentStrong, "Сообщения"), (L2.online, "В сети"),
-        ]
-        let palette = UIStackView(arrangedSubviews: swatches.map { swatch($0.0, $0.1) })
-        palette.axis = .horizontal
-        palette.distribution = .fillEqually
-        palette.spacing = 8
-        let paletteCard = card(palette)
-
-        let stack = UIStackView(arrangedSubviews: [themeTitle, themeText, previewCard, paletteCard])
-        stack.axis = .vertical
-        stack.spacing = 12
-        stack.setCustomSpacing(20, after: themeText)
-        stack.setCustomSpacing(16, after: previewCard)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let scroll = UIScrollView()
-        scroll.alwaysBounceVertical = true
+        view.backgroundColor = L2.background
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
+        stack.axis = .vertical
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(stack)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.topAnchor),
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 20),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -32),
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -20),
         ])
+        build()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -763,69 +728,138 @@ final class Linia2AppearanceViewController: UIViewController {
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
-    private func card(_ content: UIView) -> UIView {
-        let v = UIView()
-        v.backgroundColor = L2.surface
-        v.layer.cornerRadius = 20
-        content.translatesAutoresizingMaskIntoConstraints = false
-        v.addSubview(content)
-        NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: v.topAnchor, constant: 16),
-            content.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -16),
-            content.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 16),
-            content.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -16),
-        ])
-        return v
+    private func sectionTitle(_ t: String) -> UILabel {
+        let l = UILabel()
+        l.text = t.uppercased()
+        l.font = L2.font(13, .semibold)
+        l.textColor = L2.textSecondary
+        return l
     }
 
-    private func bubble(_ text: String, incoming: Bool) -> UIView {
-        let label = UILabel()
-        label.text = text
-        label.font = L2.font(16)
-        label.textColor = L2.textPrimary
-        label.numberOfLines = 0
-        let b = UIView()
-        b.backgroundColor = incoming ? L2.surface2 : L2.accentStrong
-        b.layer.cornerRadius = 18
-        label.translatesAutoresizingMaskIntoConstraints = false
-        b.addSubview(label)
-        b.translatesAutoresizingMaskIntoConstraints = false
-        let row = UIView()
-        row.addSubview(b)
-        NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: b.topAnchor, constant: 10),
-            label.bottomAnchor.constraint(equalTo: b.bottomAnchor, constant: -10),
-            label.leadingAnchor.constraint(equalTo: b.leadingAnchor, constant: 14),
-            label.trailingAnchor.constraint(equalTo: b.trailingAnchor, constant: -14),
-            b.topAnchor.constraint(equalTo: row.topAnchor),
-            b.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-            b.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.8),
-            incoming ? b.leadingAnchor.constraint(equalTo: row.leadingAnchor) : b.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-        ])
+    private func card(_ content: UIView) -> UIView {
+        let c = UIView()
+        c.backgroundColor = L2.surface
+        c.layer.cornerRadius = 18
+        content.translatesAutoresizingMaskIntoConstraints = false
+        c.addSubview(content)
+        NSLayoutConstraint.activate([content.topAnchor.constraint(equalTo: c.topAnchor, constant: 14),
+                                     content.bottomAnchor.constraint(equalTo: c.bottomAnchor, constant: -14),
+                                     content.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 14),
+                                     content.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -14)])
+        return c
+    }
+
+    private func build() {
+        // Тема
+        stack.addArrangedSubview(sectionTitle("Тема"))
+        let themes: [(Linia2Appearance.Theme, String, String)] = [(.dark, "Тёмная", "moon.fill"), (.light, "Светлая", "sun.max.fill"), (.system, "Как в системе", "circle.lefthalf.filled")]
+        let themeRow = UIStackView()
+        themeRow.axis = .horizontal
+        themeRow.spacing = 10
+        themeRow.distribution = .fillEqually
+        for (t, name, sym) in themes {
+            let b = UIButton(type: .system)
+            let on = Linia2Appearance.theme == t
+            b.setTitle(name, for: .normal)
+            b.setImage(L2.symbol(sym, 20, .medium), for: .normal)
+            b.titleLabel?.font = L2.font(14, .semibold)
+            b.titleLabel?.adjustsFontSizeToFitWidth = true
+            b.titleLabel?.minimumScaleFactor = 0.7
+            b.backgroundColor = on ? L2.accent : L2.surface2
+            b.tintColor = on ? L2.onAccent : L2.textPrimary
+            b.setTitleColor(on ? L2.onAccent : L2.textPrimary, for: .normal)
+            b.layer.cornerRadius = 16
+            b.heightAnchor.constraint(equalToConstant: 84).isActive = true
+            b.contentHorizontalAlignment = .center
+            b.contentVerticalAlignment = .center
+            // Иконка над подписью.
+            b.imageEdgeInsets = UIEdgeInsets(top: -22, left: 0, bottom: 0, right: 0)
+            b.titleEdgeInsets = UIEdgeInsets(top: 30, left: -20, bottom: 0, right: 0)
+            b.tag = t.rawValue
+            b.accessibilityLabel = "Тема: " + name + (on ? ", выбрана" : "")
+            b.addTarget(self, action: #selector(themeTapped(_:)), for: .touchUpInside)
+            themeRow.addArrangedSubview(b)
+        }
+        stack.addArrangedSubview(card(themeRow))
+
+        // Цвет
+        stack.setCustomSpacing(26, after: stack.arrangedSubviews.last ?? themeRow)
+        stack.addArrangedSubview(sectionTitle("Цвет акцента"))
+        let colors = UIStackView()
+        colors.axis = .horizontal
+        colors.distribution = .equalSpacing
+        for (i, a) in L2.accents.enumerated() {
+            let on = Linia2Appearance.accentIndex == i || (!L2.accents.indices.contains(Linia2Appearance.accentIndex) && i == 0)
+            let b = UIButton(type: .custom)
+            b.backgroundColor = L2.hex(a.strong)
+            b.layer.cornerRadius = 22
+            b.layer.borderWidth = on ? 3 : 0
+            b.layer.borderColor = L2.textPrimary.resolvedColor(with: traitCollection).cgColor
+            b.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            if on {
+                b.setImage(L2.symbol("checkmark", 16, .bold), for: .normal)
+                b.tintColor = .white
+            }
+            b.tag = i
+            b.accessibilityLabel = a.name + (on ? ", выбран" : "")
+            b.addTarget(self, action: #selector(accentTapped(_:)), for: .touchUpInside)
+            colors.addArrangedSubview(b)
+        }
+        let colorsCard = card(colors)
+        stack.addArrangedSubview(colorsCard)
+        let accentName = UILabel()
+        accentName.text = L2.accentSet.name
+        accentName.font = L2.font(14)
+        accentName.textColor = L2.textSecondary
+        accentName.textAlignment = .center
+        stack.addArrangedSubview(accentName)
+
+        // Превью
+        stack.setCustomSpacing(26, after: accentName)
+        stack.addArrangedSubview(sectionTitle("Так будут выглядеть сообщения"))
+        let preview = UIStackView()
+        preview.axis = .vertical
+        preview.spacing = 10
+        preview.addArrangedSubview(bubble("Привет! Уже дома?", mine: false))
+        preview.addArrangedSubview(bubble("Да, только приехала", mine: true))
+        stack.addArrangedSubview(card(preview))
+    }
+
+    private func bubble(_ text: String, mine: Bool) -> UIView {
+        let l = PaddedBubbleLabel()
+        l.text = text
+        l.font = L2.font(16)
+        l.numberOfLines = 0
+        l.textColor = mine ? .white : L2.textPrimary
+        l.backgroundColor = mine ? L2.accentStrong : L2.surface2
+        l.layer.cornerRadius = 16
+        l.clipsToBounds = true
+        let row = UIStackView(arrangedSubviews: mine ? [UIView(), l] : [l, UIView()])
+        row.axis = .horizontal
         return row
     }
 
-    private func swatch(_ color: UIColor, _ name: String) -> UIView {
-        let circle = UIView()
-        circle.backgroundColor = color
-        circle.layer.cornerRadius = 20
-        circle.layer.borderWidth = 1
-        circle.layer.borderColor = L2.hex(0xFFFFFF, 0.15).cgColor
-        circle.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([circle.widthAnchor.constraint(equalToConstant: 40),
-                                     circle.heightAnchor.constraint(equalToConstant: 40)])
-        let label = UILabel()
-        label.text = name
-        label.font = L2.font(11, .medium)
-        label.textColor = L2.textSecondary
-        label.textAlignment = .center
-        label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.7
-        let v = UIStackView(arrangedSubviews: [circle, label])
-        v.axis = .vertical
-        v.alignment = .center
-        v.spacing = 6
-        return v
+    @objc private func themeTapped(_ b: UIButton) {
+        guard let t = Linia2Appearance.Theme(rawValue: b.tag), t != Linia2Appearance.theme else { return }
+        L2.haptic()
+        Linia2Appearance.theme = t
+        Linia2Theme.reapplyEverywhere(reopen: { Linia2AppearanceViewController() })
+    }
+
+    @objc private func accentTapped(_ b: UIButton) {
+        guard L2.accents.indices.contains(b.tag), b.tag != Linia2Appearance.accentIndex else { return }
+        L2.haptic()
+        Linia2Appearance.accentIndex = b.tag
+        Linia2Theme.reapplyEverywhere(reopen: { Linia2AppearanceViewController() })
+    }
+}
+
+private final class PaddedBubbleLabel: UILabel {
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: UIEdgeInsets(top: 9, left: 14, bottom: 9, right: 14))) }
+    override var intrinsicContentSize: CGSize {
+        let s = super.intrinsicContentSize
+        return CGSize(width: s.width + 28, height: s.height + 18)
     }
 }
 

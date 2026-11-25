@@ -449,7 +449,7 @@ print("done-2")
 # =====================================================================
 # Дизайн «Линия 2.0» (тёмная тема, вкладки, онбординг) — ноябрь 2026
 # =====================================================================
-NEW_FILES2 = ["Linia2Theme.swift", "Linia2TabBar.swift", "Linia2Calls.swift", "Linia2Contacts.swift",
+NEW_FILES2 = ["Linia2NewChat.swift", "Linia2Theme.swift", "Linia2TabBar.swift", "Linia2Calls.swift", "Linia2Contacts.swift",
               "Linia2Settings.swift", "Linia2ChatStyle.swift", "Linia2Reactions.swift"]
 NEW_FILES[:] = NEW_FILES + [f for f in NEW_FILES2 if (R / "Tinodios" / f).exists() and f not in NEW_FILES]
 edit("Tinodios.xcodeproj/project.pbxproj", add_files)
@@ -541,10 +541,8 @@ edit("Tinodios/AppDelegate.swift", app_delegate_theme)
 
 
 def info_dark(s):
-    if "UIUserInterfaceStyle" in s:
-        return s
-    return s.replace("\t<key>UIViewControllerBasedStatusBarAppearance</key>",
-                     "\t<key>UIUserInterfaceStyle</key>\n\t<string>Dark</string>\n\t<key>UIViewControllerBasedStatusBarAppearance</key>", 1)
+    # Тема выбирается в приложении («Внешний вид»), поэтому принудительную тёмную тему не ставим.
+    return s.replace("\t<key>UIUserInterfaceStyle</key>\n\t<string>Dark</string>\n", "")
 
 
 edit("Tinodios/Info.plist", info_dark)
@@ -673,3 +671,48 @@ print("done-6")
 edit("Tinodios/MessageViewController.swift", lambda s: s if "linia2InstallReactionGestures()" in s else must(
     s, "    override func viewDidLoad() {\n        super.viewDidLoad()\n\n        if let layout = collectionView?.collectionViewLayout as? MessageViewLayout {",
     "    override func viewDidLoad() {\n        super.viewDidLoad()\n        defer { linia2InstallReactionGestures() }\n\n        if let layout = collectionView?.collectionViewLayout as? MessageViewLayout {"))
+
+
+def message_vc_dynamic(s):
+    for o, n in [('        static let kOutgoingBubbleColorDark = L2.accentStrong  // LINIA2_COLORS: свои — фиолетовые', '        static var kOutgoingBubbleColorDark: UIColor { L2.accentStrong }  // LINIA2_COLORS: свои — цвет акцента'), ('        static let kOutgoingTextColorDark = UIColor.white', '        static var kOutgoingTextColorDark: UIColor { UIColor.white }'), ('        static let kIncomingBubbleColorDark = L2.surface2', '        static var kIncomingBubbleColorDark: UIColor { L2.surface2 }'), ('        static let kIncomingTextColorDark = UIColor.white', '        static var kIncomingTextColorDark: UIColor { L2.textPrimary }'), ('        static let kDeletedMessageBubbleColorDark = L2.surface', '        static var kDeletedMessageBubbleColorDark: UIColor { L2.surface }'), ('        static let kOutgoingBubbleColorLight = UIColor(red: 244/255, green: 244/255, blue: 244/255, alpha: 1)', '        static var kOutgoingBubbleColorLight: UIColor { L2.accentStrong }'), ('        static let kIncomingBubbleColorLight = UIColor(red: 69/255, green: 193/255, blue: 89/255, alpha: 1)', '        static var kIncomingBubbleColorLight: UIColor { L2.surface2 }'), ('        static let kIncomingTextColorLight = UIColor.white', '        static var kIncomingTextColorLight: UIColor { L2.textPrimary }'), ('        static let kDeletedMessageBubbleColorLight = UIColor(fromHexCode: 0xffe3f2fd)', '        static var kDeletedMessageBubbleColorLight: UIColor { L2.surface }')]:
+        s = s.replace(o, n, 1)
+    return s
+
+
+edit("Tinodios/MessageViewController.swift", message_vc_dynamic)
+
+
+def send_bar_circles(s):
+    if "L2.circleIcon" in s:
+        return s
+    s = re.sub(r'static let kSendButtonImageWave = UIImage\(systemName: "[^"]+".*\n',
+               'static var kSendButtonImageWave: UIImage { L2.circleIcon("mic.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent) }\n', s, count=1)
+    s = re.sub(r'static let kSendButtonImageWavePressed = UIImage\(systemName: "[^"]+".*\n',
+               'static var kSendButtonImageWavePressed: UIImage { L2.circleIcon("mic.fill", diameter: 54, fill: L2.accent, tint: L2.onAccent) }\n', s, count=1)
+    s = re.sub(r'static let kSendButtonImageArrow = UIImage\(systemName: "[^"]+".*\n',
+               'static var kSendButtonImageArrow: UIImage { L2.circleIcon("paperplane.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent, symbolSize: 14) }\n', s, count=1)
+    s = re.sub(r'static let kSendButtonImageEditCheck = UIImage\(systemName: "[^"]+".*\n',
+               'static var kSendButtonImageEditCheck: UIImage? { L2.circleIcon("checkmark", diameter: 32, fill: L2.accent, tint: L2.onAccent) }\n', s, count=1)
+    return s
+
+
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar_circles)
+
+
+def chat_style_attach(s):
+    return s.replace('''        attachButton.setImage(L2.symbol("plus", 20, .medium), for: .normal)
+        attachButton.tintColor = L2.textPrimary
+        attachButton.backgroundColor = L2.surface
+        attachButton.layer.cornerRadius = 18
+        sendButton.tintColor = L2.accent''', '''        // «+» — круг с плюсом строго по центру (картинка размером с кнопку).
+        attachButton.setImage(L2.circleIcon("plus", diameter: 32, fill: L2.surface2, tint: L2.textPrimary), for: .normal)
+        attachButton.backgroundColor = .clear
+        attachButton.contentHorizontalAlignment = .center
+        attachButton.contentVerticalAlignment = .center
+        attachButton.imageView?.contentMode = .center
+        sendButton.contentHorizontalAlignment = .center
+        sendButton.contentVerticalAlignment = .center
+        sendButton.imageView?.contentMode = .center''')
+
+
+edit("Tinodios/Linia2ChatStyle.swift", chat_style_attach)

@@ -60,10 +60,10 @@ class SendMessageBar: UIView {
         // Initial input text weight.
         static let kInitialInputFieldHeight: CGFloat = 40
 
-        static let kSendButtonImageWave = UIImage(systemName: "mic.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))!
-        static let kSendButtonImageWavePressed = UIImage(systemName: "mic.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsPressed))!
-        static let kSendButtonImageArrow = UIImage(systemName: "paperplane.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))!
-        static let kSendButtonImageEditCheck = UIImage(systemName: "checkmark.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))
+        static var kSendButtonImageWave: UIImage { L2.circleIcon("mic.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent) }
+        static var kSendButtonImageWavePressed: UIImage { L2.circleIcon("mic.fill", diameter: 54, fill: L2.accent, tint: L2.onAccent) }
+        static var kSendButtonImageArrow: UIImage { L2.circleIcon("paperplane.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent, symbolSize: 14) }
+        static var kSendButtonImageEditCheck: UIImage? { L2.circleIcon("checkmark", diameter: 32, fill: L2.accent, tint: L2.onAccent) }
         static let kWaveInsetsShort = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 88)
         static let kWaveInsetsLong = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 52)
     }

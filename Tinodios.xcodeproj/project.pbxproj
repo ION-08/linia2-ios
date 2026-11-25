@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1623F627D85E691BAFF390B0 /* Linia2NewChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73A78F57258C0BC93DBFD1D6 /* Linia2NewChat.swift */; };
 		372EEED0502B5410DF7DA175 /* Linia2Reactions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BA71F78C91757FADEAC011 /* Linia2Reactions.swift */; };
 		656085FF6BACD5541A8FF72C /* Linia2Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83DE4AB614966AF4346B9084 /* Linia2Settings.swift */; };
 		6780B5EBF34258EB9E41DE34 /* Linia2Contacts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA26E52B1337E281CDDE425 /* Linia2Contacts.swift */; };
@@ -196,6 +197,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		73A78F57258C0BC93DBFD1D6 /* Linia2NewChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2NewChat.swift; sourceTree = "<group>"; };
 		56BA71F78C91757FADEAC011 /* Linia2Reactions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Reactions.swift; sourceTree = "<group>"; };
 		83DE4AB614966AF4346B9084 /* Linia2Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Settings.swift; sourceTree = "<group>"; };
 		AFA26E52B1337E281CDDE425 /* Linia2Contacts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Contacts.swift; sourceTree = "<group>"; };
@@ -451,6 +453,7 @@
 		0A0380D621B3CC8100A3FA0E /* Tinodios */ = {
 			isa = PBXGroup;
 			children = (
+				73A78F57258C0BC93DBFD1D6 /* Linia2NewChat.swift */,
 				56BA71F78C91757FADEAC011 /* Linia2Reactions.swift */,
 				83DE4AB614966AF4346B9084 /* Linia2Settings.swift */,
 				AFA26E52B1337E281CDDE425 /* Linia2Contacts.swift */,
@@ -1012,6 +1015,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1623F627D85E691BAFF390B0 /* Linia2NewChat.swift in Sources */,
 				372EEED0502B5410DF7DA175 /* Linia2Reactions.swift in Sources */,
 				656085FF6BACD5541A8FF72C /* Linia2Settings.swift in Sources */,
 				6780B5EBF34258EB9E41DE34 /* Linia2Contacts.swift in Sources */,

@@ -12,17 +12,36 @@ enum L2 {
         UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: a)
     }
 
-    static let background = hex(0x0A0E1B)      // фон экранов
-    static let surface = hex(0x222839)         // поиск, неактивные фильтры, поле ввода, карточки
-    static let surface2 = hex(0x292F42)        // входящие пузыри, кнопки на поверхностях
-    static let elevated = hex(0x161D2E)        // круглые кнопки в шапке
-    static let tabBar = hex(0x121826)          // плавающее меню
-    static let separator = hex(0xFFFFFF, 0.08)
-    static let accent = hex(0xB3A0F6)          // активные элементы, бейджи, кнопка отправки
-    static let accentStrong = hex(0x8373D3)    // свои пузыри
-    static let onAccent = hex(0x14112B)        // текст/иконки на светлом фиолетовом
-    static let textPrimary = UIColor.white
-    static let textSecondary = hex(0x8A92A3)
+    /// Цвет, который сам выбирает тёмный или светлый вариант по текущей теме.
+    static func dyn(_ dark: UInt32, _ light: UInt32, _ da: CGFloat = 1, _ la: CGFloat = 1) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .light ? hex(light, la) : hex(dark, da) }
+    }
+
+    // Наборы акцентного цвета: (светлый акцент в тёмной теме, пузырь, текст на акценте, акцент в светлой теме).
+    struct AccentSet { let name: String; let accentDark: UInt32; let strong: UInt32; let onAccent: UInt32; let accentLight: UInt32 }
+    static let accents: [AccentSet] = [
+        AccentSet(name: "Фиолетовый", accentDark: 0xB3A0F6, strong: 0x8373D3, onAccent: 0x14112B, accentLight: 0x6E5EC4),
+        AccentSet(name: "Синий", accentDark: 0x8FB8FF, strong: 0x4F7FE0, onAccent: 0x0B1730, accentLight: 0x3D6BD0),
+        AccentSet(name: "Бирюзовый", accentDark: 0x7FE3C9, strong: 0x2FA387, onAccent: 0x06231B, accentLight: 0x1F8F73),
+        AccentSet(name: "Розовый", accentDark: 0xF6A0C8, strong: 0xD3618F, onAccent: 0x2B1120, accentLight: 0xC24E80),
+        AccentSet(name: "Оранжевый", accentDark: 0xFFC08A, strong: 0xE08A3C, onAccent: 0x2B1806, accentLight: 0xC9711F),
+    ]
+    static var accentSet: AccentSet {
+        let i = Linia2Appearance.accentIndex
+        return accents.indices.contains(i) ? accents[i] : accents[0]
+    }
+
+    static var background: UIColor { dyn(0x0A0E1B, 0xF4F3FA) }      // фон экранов
+    static var surface: UIColor { dyn(0x222839, 0xFFFFFF) }         // поиск, фильтры, поле ввода, карточки
+    static var surface2: UIColor { dyn(0x292F42, 0xE9E7F3) }        // входящие пузыри, кнопки на поверхностях
+    static var elevated: UIColor { dyn(0x161D2E, 0xFFFFFF) }        // круглые кнопки в шапке
+    static var tabBar: UIColor { dyn(0x121826, 0xFFFFFF) }          // плавающее меню
+    static var separator: UIColor { dyn(0xFFFFFF, 0x12111C, 0.08, 0.08) }
+    static var accent: UIColor { let a = accentSet; return dyn(a.accentDark, a.accentLight) }   // активные элементы
+    static var accentStrong: UIColor { hex(accentSet.strong) }      // свои пузыри
+    static var onAccent: UIColor { let a = accentSet; return dyn(a.onAccent, 0xFFFFFF) }        // текст на акценте
+    static var textPrimary: UIColor { dyn(0xFFFFFF, 0x12111C) }
+    static var textSecondary: UIColor { dyn(0x8A92A3, 0x6B6F80) }
     static let online = hex(0x2CE2A6)
     static let callOutgoing = hex(0x2FD1A2)
     static let danger = hex(0xFF6B7A)
@@ -45,13 +64,51 @@ enum L2 {
     }
 
     static func haptic() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+
+    /// Круг с SF-символом строго по центру (для «+», микрофона, отправки).
+    static func circleIcon(_ symbol: String, diameter: CGFloat, fill: UIColor, tint: UIColor, symbolSize: CGFloat? = nil) -> UIImage {
+        let size = CGSize(width: diameter, height: diameter)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = UIScreen.main.scale
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            fill.setFill()
+            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+            let sym = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: symbolSize ?? diameter * 0.42, weight: .semibold))?
+                .withTintColor(tint, renderingMode: .alwaysOriginal)
+            if let sym = sym {
+                let r = CGRect(x: (diameter - sym.size.width) / 2, y: (diameter - sym.size.height) / 2, width: sym.size.width, height: sym.size.height)
+                sym.draw(in: r)
+            }
+        }.withRenderingMode(.alwaysOriginal)
+    }
 }
 
 // MARK: - Глобальное оформление
 
+/// Настройки внешнего вида (сохраняются): тема и акцентный цвет.
+enum Linia2Appearance {
+    enum Theme: Int { case system = 0, dark = 1, light = 2 }
+    private static let kTheme = "linia2.appearance.theme"
+    private static let kAccent = "linia2.appearance.accent"
+
+    static var theme: Theme {
+        get { UserDefaults.standard.object(forKey: kTheme) == nil ? .dark : (Theme(rawValue: UserDefaults.standard.integer(forKey: kTheme)) ?? .dark) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: kTheme) }
+    }
+
+    static var accentIndex: Int {
+        get { UserDefaults.standard.integer(forKey: kAccent) }
+        set { UserDefaults.standard.set(newValue, forKey: kAccent) }
+    }
+
+    static var interfaceStyle: UIUserInterfaceStyle {
+        switch theme { case .system: return .unspecified; case .dark: return .dark; case .light: return .light }
+    }
+}
+
 enum Linia2Theme {
     static func apply(to window: UIWindow?) {
-        window?.overrideUserInterfaceStyle = .dark
+        window?.overrideUserInterfaceStyle = Linia2Appearance.interfaceStyle
         window?.tintColor = L2.accent
         window?.backgroundColor = L2.background
 
@@ -74,11 +131,28 @@ enum Linia2Theme {
         UITableViewCell.appearance().backgroundColor = L2.background
         UICollectionView.appearance().backgroundColor = L2.background
         UISwitch.appearance().onTintColor = L2.accentStrong
-        UITextField.appearance().keyboardAppearance = .dark
-        UITextView.appearance().keyboardAppearance = .dark
         UISearchBar.appearance().barTintColor = L2.background
         UIPageControl.appearance().currentPageIndicatorTintColor = L2.accent
         UISegmentedControl.appearance().selectedSegmentTintColor = L2.accentStrong
+    }
+
+    /// Применить изменённые тему/цвет ко всему приложению сразу: пересобираем экраны.
+    static func reapplyEverywhere(reopen: (() -> UIViewController)? = nil) {
+        guard let window = Linia2Root.window else { return }
+        apply(to: window)
+        for w in UIApplication.shared.windows {
+            w.overrideUserInterfaceStyle = Linia2Appearance.interfaceStyle
+            w.tintColor = L2.accent
+        }
+        if window.rootViewController is Linia2TabBarController {
+            let tabs = Linia2TabBarController.make()
+            window.rootViewController = tabs
+            tabs.selectTab(.settings)
+            if let vc = reopen?(), let nav = tabs.selectedViewController as? UINavigationController {
+                nav.pushViewController(vc, animated: false)
+                tabs.updateBarVisibility(animated: false)
+            }
+        }
     }
 }
 
@@ -148,6 +222,11 @@ final class L2CircleButton: UIButton {
         super.init(frame: .zero)
         setImage(L2.symbol(symbol, size * 0.42, .medium), for: .normal)
         tintColor = L2.textPrimary
+        contentHorizontalAlignment = .center
+        contentVerticalAlignment = .center
+        contentEdgeInsets = .zero
+        imageEdgeInsets = .zero
+        imageView?.contentMode = .center
         backgroundColor = L2.elevated
         layer.cornerRadius = size / 2
         layer.borderWidth = 1
@@ -219,7 +298,7 @@ final class L2TextField: UITextField {
         layer.borderWidth = 1
         layer.borderColor = UIColor.clear.cgColor
         attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [.foregroundColor: L2.textSecondary])
-        keyboardAppearance = .dark
+        keyboardAppearance = .default
         heightAnchor.constraint(equalToConstant: L2.fieldHeight).isActive = true
     }
 
@@ -261,6 +340,9 @@ final class L2TextField: UITextField {
 }
 
 final class L2SearchField: UITextField {
+    private static let side: CGFloat = 16      // отступ текста слева
+    private static let iconBox: CGFloat = 48   // место под лупу справа (иконка по центру, ~16pt от края)
+
     init(placeholder: String = "Поиск") {
         super.init(frame: .zero)
         backgroundColor = L2.surface
@@ -271,17 +353,28 @@ final class L2SearchField: UITextField {
         let icon = UIImageView(image: L2.symbol("magnifyingglass", 17, .medium))
         icon.tintColor = L2.textSecondary
         icon.contentMode = .center
-        icon.frame = CGRect(x: 0, y: 0, width: 46, height: 44)
-        leftView = icon
-        leftViewMode = .always
-        clearButtonMode = .whileEditing
+        icon.frame = CGRect(x: 0, y: 0, width: Self.iconBox, height: 46)
+        rightView = icon
+        rightViewMode = .always
+        clearButtonMode = .never
         returnKeyType = .search
         autocorrectionType = .no
-        keyboardAppearance = .dark
+        keyboardAppearance = .default
+        accessibilityLabel = placeholder
         heightAnchor.constraint(equalToConstant: 46).isActive = true
     }
 
     required init?(coder: NSCoder) { return nil }
+
+    private func textArea(_ b: CGRect) -> CGRect {
+        CGRect(x: b.minX + Self.side, y: b.minY, width: max(0, b.width - Self.side - Self.iconBox), height: max(0, b.height))
+    }
+    override func textRect(forBounds b: CGRect) -> CGRect { textArea(b) }
+    override func editingRect(forBounds b: CGRect) -> CGRect { textArea(b) }
+    override func placeholderRect(forBounds b: CGRect) -> CGRect { textArea(b) }
+    override func rightViewRect(forBounds b: CGRect) -> CGRect {
+        CGRect(x: max(0, b.maxX - Self.iconBox), y: 0, width: min(Self.iconBox, b.width), height: max(0, b.height))
+    }
 }
 
 // MARK: - Фильтры-«пилюли»

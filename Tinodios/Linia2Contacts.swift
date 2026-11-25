@@ -297,11 +297,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
     @objc private func addTapped() {
         L2.haptic()
         view.endEditing(true)
-        // Существующий экран Tinode «Найти людей» (FindViewController, storyboardIdentifier = "Find").
-        let find = UIStoryboard(name: "Main", bundle: nil).instantiateViewController(withIdentifier: "Find")
-        find.title = "Найти собеседника"
-        find.navigationItem.title = "Найти собеседника"
-        navigationController?.pushViewController(find, animated: true)
+        navigationController?.pushViewController(Linia2NewChatViewController(mode: .addContact), animated: true)
     }
 
     // MARK: UITableViewDataSource / Delegate

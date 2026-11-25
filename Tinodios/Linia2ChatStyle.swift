@@ -23,7 +23,7 @@ extension ChatListViewController: UITextFieldDelegate {
 
     func linia2InstallHeader() {
         let addContact = L2CircleButton(symbol: "person.badge.plus", accessibility: "Добавить контакт")
-        addContact.addTarget(self, action: #selector(linia2NewChat), for: .touchUpInside)
+        addContact.addTarget(self, action: #selector(linia2AddContact), for: .touchUpInside)
         let compose = L2CircleButton(symbol: "square.and.pencil", accessibility: "Новый чат")
         compose.addTarget(self, action: #selector(linia2NewChat), for: .touchUpInside)
         let header = L2Header(title: "Чаты", buttons: [addContact, compose])
@@ -77,7 +77,11 @@ extension ChatListViewController: UITextFieldDelegate {
     }
 
     @objc func linia2NewChat() {
-        performSegue(withIdentifier: "Chats2NewChat", sender: nil)
+        navigationController?.pushViewController(Linia2NewChatViewController(mode: .newChat), animated: true)
+    }
+
+    @objc func linia2AddContact() {
+        navigationController?.pushViewController(Linia2NewChatViewController(mode: .addContact), animated: true)
     }
 
     func linia2EmptyNote() -> UIView {
@@ -264,11 +268,15 @@ extension SendMessageBar {
         inputField.layer.cornerRadius = 20
         inputField.placeholderText = "Сообщение"
         inputField.font = L2.font(17)
-        inputField.keyboardAppearance = .dark
-        attachButton.setImage(L2.symbol("plus", 20, .medium), for: .normal)
-        attachButton.tintColor = L2.textPrimary
-        attachButton.backgroundColor = L2.surface
-        attachButton.layer.cornerRadius = 18
-        sendButton.tintColor = L2.accent
+        inputField.keyboardAppearance = .default
+        // «+» — круг с плюсом строго по центру (картинка размером с кнопку).
+        attachButton.setImage(L2.circleIcon("plus", diameter: 32, fill: L2.surface2, tint: L2.textPrimary), for: .normal)
+        attachButton.backgroundColor = .clear
+        attachButton.contentHorizontalAlignment = .center
+        attachButton.contentVerticalAlignment = .center
+        attachButton.imageView?.contentMode = .center
+        sendButton.contentHorizontalAlignment = .center
+        sendButton.contentVerticalAlignment = .center
+        sendButton.imageView?.contentMode = .center
     }
 }
