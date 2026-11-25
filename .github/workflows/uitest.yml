@@ -80,7 +80,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests/TinodiosUITests/testFullFlow \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
-            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|Test Case|failed|passed|crash|\*\* TEST' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
 
