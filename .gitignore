@@ -81,3 +81,19 @@ fastlane/test_output
 
 iOSInjectionProject/
 .DS_Store
+
+# Линия 2.0: секреты никогда не коммитим
+*.p8
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+.env
+.env.*
+secrets/
+GoogleService-Info.plist
+!ci/GoogleService-Info.stub.plist
+app-review*.txt
+*.jwt
