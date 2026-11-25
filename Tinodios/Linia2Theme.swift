@@ -113,9 +113,20 @@ enum Linia2Appearance {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: kTheme) }
     }
 
+    /// Цвет хранится по названию (а не номеру), чтобы изменения списка цветов не сбивали выбор.
+    /// Старое значение по номеру (до сборки 10) не используется — у всех по умолчанию мятный.
+    private static let kAccentName = "linia2.appearance.accentName"
     static var accentIndex: Int {
-        get { UserDefaults.standard.integer(forKey: kAccent) }
-        set { UserDefaults.standard.set(newValue, forKey: kAccent) }
+        get {
+            guard let name = UserDefaults.standard.string(forKey: kAccentName) else { return 0 }
+            return L2.accents.firstIndex { $0.name == name } ?? 0
+        }
+        set {
+            UserDefaults.standard.removeObject(forKey: kAccent)
+            if L2.accents.indices.contains(newValue) {
+                UserDefaults.standard.set(L2.accents[newValue].name, forKey: kAccentName)
+            }
+        }
     }
 
     static var interfaceStyle: UIUserInterfaceStyle {

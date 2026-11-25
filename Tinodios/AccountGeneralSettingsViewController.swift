@@ -191,7 +191,7 @@ extension AccountGeneralSettingsViewController: ImagePickerDelegate {
         UiUtils.updateAvatar(forTopic: self.me, image: image)
             .thenApply { _ in
                 DispatchQueue.main.async {
-                    UiUtils.showToast(message: "Avatar successfully updated", level: .info)
+                    UiUtils.showToast(message: Linia2Texts.t("Avatar successfully updated"), level: .info)
                     self.reloadData()
                 }
                 return nil

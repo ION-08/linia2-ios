@@ -55,17 +55,17 @@ open class ImagePicker: NSObject {
 
         let alertController = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
 
-        if let action = self.action(for: .camera, title: "Take photo") {
+        if let action = self.action(for: .camera, title: Linia2Texts.t("Take photo")) {
             alertController.addAction(action)
         }
-        if let action = self.action(for: .savedPhotosAlbum, title: "Camera roll") {
+        if let action = self.action(for: .savedPhotosAlbum, title: Linia2Texts.t("Camera roll")) {
             alertController.addAction(action)
         }
-        if let action = self.action(for: .photoLibrary, title: "Photo library") {
+        if let action = self.action(for: .photoLibrary, title: Linia2Texts.t("Photo library")) {
             alertController.addAction(action)
         }
 
-        alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        alertController.addAction(UIAlertAction(title: Linia2Texts.t("Cancel"), style: .cancel, handler: nil))
 
         if UIDevice.current.userInterfaceIdiom == .pad {
             alertController.popoverPresentationController?.sourceView = sourceView

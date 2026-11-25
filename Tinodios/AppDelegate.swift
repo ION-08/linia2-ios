@@ -284,7 +284,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         }
         DispatchQueue.global(qos: .userInitiated).async {
             if !SharedUtils.connectAndLoginSync(using: tinode, inBackground: false) {
-                DispatchQueue.main.async { UiUtils.showToast(message: "Failed to connect to server") }
+                DispatchQueue.main.async { UiUtils.showToast(message: Linia2Texts.t("Failed to connect to server")) }
             } else {
                 UiUtils.routeToMessageVC(forTopic: topicName)
             }

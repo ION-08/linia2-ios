@@ -202,7 +202,7 @@ class ResetPasswordViewController: UITableViewController {
         let pwd = UiUtils.ensureDataInTextField(newPasswordTextField)
 
         guard let auth = try? AuthScheme.codeInstance(code: code, method: method, value: value) else {
-            UiUtils.showToast(message: "Invalid params")
+            UiUtils.showToast(message: Linia2Texts.t("Invalid params"))
             return
         }
 
@@ -210,17 +210,17 @@ class ResetPasswordViewController: UITableViewController {
         Cache.tinode.updateAccountBasic(usingAuthScheme: auth, username: "", password: pwd).then(onSuccess: { msg in
             if let ctrl = msg?.ctrl, 200 <= ctrl.code && ctrl.code < 300 {
                 DispatchQueue.main.async {
-                    UiUtils.showToast(message: "Password successfully updated", level: .info)
+                    UiUtils.showToast(message: Linia2Texts.t("Password successfully updated"), level: .info)
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
                     self.navigationController?.popViewController(animated: true)
                 }
             } else {
-                DispatchQueue.main.async { UiUtils.showToast(message: "Invalid or incorrect code") }
+                DispatchQueue.main.async { UiUtils.showToast(message: Linia2Texts.t("Invalid or incorrect code")) }
             }
             return nil
         }, onFailure: { err in
-            DispatchQueue.main.async { UiUtils.showToast(message: "Invalid or incorrect code") }
+            DispatchQueue.main.async { UiUtils.showToast(message: Linia2Texts.t("Invalid or incorrect code")) }
             return nil
         }).thenFinally {
             DispatchQueue.main.async {

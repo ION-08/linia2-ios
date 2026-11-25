@@ -102,6 +102,14 @@ final class TinodiosUITests: XCTestCase {
 
     /// Ввод цифр нажатиями клавиш цифровой клавиатуры (надёжнее typeText для своего поля ввода кода).
     private func typeDigits(_ digits: String) {
+        // Тестовое поле приложения (только под -l2-uitest) — надёжный ввод кода.
+        let ti = app.textFields["l2.code.testinput"].firstMatch
+        if ti.waitForExistence(timeout: 2) {
+            if !ti.isHittable { app.swipeUp() }
+            ti.tap()
+            ti.typeText(digits)
+            return
+        }
         for ch in digits {
             let k = app.keys[String(ch)].firstMatch
             if k.waitForExistence(timeout: 2) && k.isHittable { k.tap() } else { app.typeText(String(ch)) }

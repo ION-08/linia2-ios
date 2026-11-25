@@ -155,7 +155,7 @@ class VideoPreviewController: UIViewController {
         } else if let stream = stream as? InputStream {
             media = VLCMedia(stream: stream)
         } else {
-            DispatchQueue.main.async { UiUtils.showToast(message: "Invalid input") }
+            DispatchQueue.main.async { UiUtils.showToast(message: Linia2Texts.t("Invalid input")) }
             return
         }
         player.media = media
@@ -324,7 +324,7 @@ extension VideoPreviewController: VLCMediaPlayerDelegate {
             controlsView.backgroundColor = .clear
             controlsView.alpha = 1
             playPauseButton.isHidden = false
-            UiUtils.showToast(message: "Video playback error")
+            UiUtils.showToast(message: Linia2Texts.t("Video playback error"))
         case .ended:
             // Update slider position and ts label
             // in case the corresponding VLCMediaPlayer event doesn't fire for whatever reason.

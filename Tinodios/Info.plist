@@ -37,17 +37,17 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Линия 2.0 takes photos with the camera to use as avatar or to send them to your contacts</string>
+	<string>Камера нужна, чтобы сделать фото профиля или отправить снимок собеседнику</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Face ID is used to unlock Линия 2.0</string>
+	<string>Face ID используется для разблокировки «Линия 2.0»</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Линия 2.0 uses microphone to record audio messages you send to your contacts</string>
+	<string>Микрофон нужен для звонков и голосовых сообщений</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Линия 2.0 sends only emails and phone numbers to the Линия 2.0 server to help you connect with other users</string>
+	<string>«Линия 2.0» использует контакты только для поиска знакомых в приложении</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Images and pictures from Линия 2.0 can be saved in the photo library</string>
+	<string>Фото и картинки из «Линия 2.0» можно сохранять в медиатеку</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Линия 2.0 needs access to your photos to let you you send them to your contacts</string>
+	<string>Доступ к фото нужен, чтобы отправлять их собеседникам</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

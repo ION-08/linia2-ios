@@ -805,3 +805,102 @@ def ws_keepalive(s):
 
 
 edit("TinodeSDK/WebSocket.swift", ws_keepalive)
+
+
+# ---- Сборка 10: зашитые английские строки → Linia2Texts.t(...) (русский) ----
+HARDCODED = ["Attachment", "Image / Video", "File", "Cancel", "Take photo", "Camera roll", "Photo library", "Scan QR code",
+             "Avatar successfully updated", "Server error", "Failed to connect to server", "Video playback error", "Invalid input",
+             "Removed non-existent user.", "Added non-existent user", "Invalid member selection. Try again.",
+             "Confirmation code sent", "Credentials confirmed", "Password successfully updated", "Invalid or incorrect code", "Invalid params"]
+
+
+def ru_hardcoded(s):
+    for h in HARDCODED:
+        for pre in ("title: ", "message: "):
+            s = s.replace('%s"%s"' % (pre, h), '%sLinia2Texts.t("%s")' % (pre, h))
+    return s
+
+
+for f in ["Tinodios/widgets/SendMessageBar.swift", "Tinodios/widgets/ImagePicker.swift", "Tinodios/FindViewController.swift",
+          "Tinodios/TopicSecurityViewController.swift", "Tinodios/TopicInfoViewController.swift", "Tinodios/AccountGeneralSettingsViewController.swift",
+          "Tinodios/NewGroupViewController.swift", "Tinodios/SettingsSecurityViewController.swift", "Tinodios/CredentialsChangeViewController.swift",
+          "Tinodios/AppDelegate.swift", "Tinodios/ResetPasswordViewController.swift", "Tinodios/VideoPreviewController.swift"]:
+    edit(f, ru_hardcoded)
+
+
+def info_plist_ru(s):
+    rep = {
+        "Линия 2.0 takes photos with the camera to use as avatar or to send them to your contacts": "Камера нужна, чтобы сделать фото профиля или отправить снимок собеседнику",
+        "Face ID is used to unlock Линия 2.0": "Face ID используется для разблокировки «Линия 2.0»",
+        "Линия 2.0 uses microphone to record audio messages you send to your contacts": "Микрофон нужен для звонков и голосовых сообщений",
+        "Линия 2.0 sends only emails and phone numbers to the Линия 2.0 server to help you connect with other users": "«Линия 2.0» использует контакты только для поиска знакомых в приложении",
+        "Images and pictures from Линия 2.0 can be saved in the photo library": "Фото и картинки из «Линия 2.0» можно сохранять в медиатеку",
+        "Линия 2.0 needs access to your photos to let you you send them to your contacts": "Доступ к фото нужен, чтобы отправлять их собеседникам",
+    }
+    for a, b in rep.items():
+        s = s.replace(a, b)
+    return s
+
+
+edit("Tinodios/Info.plist", info_plist_ru)
+
+
+# ---- Сборка 10: экран чата одного цвета (область сообщений, панель ввода и полоса под ней) ----
+def message_view_bg(s):
+    return s.replace('''        if traitCollection.userInterfaceStyle == .dark {
+            backgroundColor = .black
+        } else {
+            backgroundColor = .white
+        }''', '''        backgroundColor = L2.background   // LINIA2: как остальное приложение''')
+
+
+edit("Tinodios/MessageView.swift", message_view_bg)
+
+
+def send_bar_backdrop(s):
+    if "LINIA2_HIDE_BACKDROP" in s:
+        return s
+    return must(s, '''        while let cur = v, depth < 4 {
+            cur.backgroundColor = L2.background
+''', '''        while let cur = v, depth < 4 {
+            cur.backgroundColor = L2.background
+            // LINIA2_HIDE_BACKDROP: системная серая «подложка» клавиатурной зоны — прячем, остаётся наш фон.
+            for sub in cur.subviews where sub !== self && depth < 2 {
+                let name = NSStringFromClass(type(of: sub))
+                if sub is UIVisualEffectView || name.contains("Backdrop") { sub.isHidden = true }
+            }
+''')
+
+
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar_backdrop)
+
+
+# ---- Сборка 10: история не загружалась («пустой чат», хотя на сервере сообщения есть) ----
+# Если локальный кэш пуст, а на сервере в чате есть сообщения — явно запрашиваем последнюю страницу с сервера.
+def history_fallback(s):
+    if "LINIA2_HISTORY_FALLBACK" in s:
+        return s
+    s = must(s, '''            if let messagePage = BaseDb.sharedInstance.sqlStore?.getMessagePage(topic: t, from: Int.max, limit: numToLoad, forward: false) {
+                // Replace messages with the new page.
+                self.messages = messagePage.map { $0 as! StoredMessage }.reversed()
+                self.presenter?.presentMessages(messages: self.messages, scrollToMostRecentMessage)
+            }''', '''            if let messagePage = BaseDb.sharedInstance.sqlStore?.getMessagePage(topic: t, from: Int.max, limit: numToLoad, forward: false) {
+                // Replace messages with the new page.
+                self.messages = messagePage.compactMap { $0 as? StoredMessage }.reversed()
+                self.presenter?.presentMessages(messages: self.messages, scrollToMostRecentMessage)
+            }
+            // LINIA2_HISTORY_FALLBACK: кэш пуст, а на сервере есть сообщения — запросить последнюю страницу с сервера (один раз).
+            if self.messages.isEmpty, (t.seq ?? 0) > 0, t.attached, !self.linia2HistoryRequested {
+                self.linia2HistoryRequested = true
+                let q = t.metaGetBuilder().withData(since: nil, before: nil, limit: MessageInteractor.kMessagesPerPage).build()
+                t.getMeta(query: q).thenApply { [weak self] _ in
+                    self?.loadMessagesFromCache(scrollToMostRecentMessage: true)
+                    return nil
+                }
+            }''')
+    s = must(s, "    private static let kMessagesPerPage = 24\n",
+             "    private static let kMessagesPerPage = 24\n    private var linia2HistoryRequested = false\n")
+    return s
+
+
+edit("Tinodios/MessageInteractor.swift", history_fallback)

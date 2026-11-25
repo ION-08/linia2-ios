@@ -184,7 +184,7 @@ class FindViewController: UITableViewController, FindDisplayLogic {
                 UiUtils.showToast(message: NSLocalizedString("No access to messages", comment: "Toast error message"))
             }
         }))
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        alert.addAction(UIAlertAction(title: Linia2Texts.t("Cancel"), style: .cancel, handler: nil))
         self.present(alert, animated: true)
     }
 

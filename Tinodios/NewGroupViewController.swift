@@ -226,7 +226,7 @@ extension NewGroupViewController: EditMembersDelegate {
                 return IndexPath(row: row + 1, section: 1)
             } else {
                 success = false
-                UiUtils.showToast(message: "Removed non-existent user.")
+                UiUtils.showToast(message: Linia2Texts.t("Removed non-existent user."))
                 return IndexPath(row: -1, section: 1)
             }
         })
@@ -236,12 +236,12 @@ extension NewGroupViewController: EditMembersDelegate {
             if let row = newSelection.firstIndex(where: { h in h.uniqueId == add }) {
                 return IndexPath(row: row + 1, section: 1)
             } else {
-                UiUtils.showToast(message: "Added non-existent user")
+                UiUtils.showToast(message: Linia2Texts.t("Added non-existent user"))
                 return IndexPath(row: -1, section: 1)
             }
         })
         guard success && selectedUids.count == newSelection.count else {
-            UiUtils.showToast(message: "Invalid member selection. Try again.")
+            UiUtils.showToast(message: Linia2Texts.t("Invalid member selection. Try again."))
             return
         }
 

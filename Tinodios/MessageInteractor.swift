@@ -75,6 +75,7 @@ struct UploadDef {
 
 class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, MessageDataStore {
     private static let kMessagesPerPage = 24
+    private var linia2HistoryRequested = false
 
     public enum AttachmentType: Int {
         case audio // Audio record
@@ -420,8 +421,17 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         self.messageInteractorQueue.async {
             if let messagePage = BaseDb.sharedInstance.sqlStore?.getMessagePage(topic: t, from: Int.max, limit: numToLoad, forward: false) {
                 // Replace messages with the new page.
-                self.messages = messagePage.map { $0 as! StoredMessage }.reversed()
+                self.messages = messagePage.compactMap { $0 as? StoredMessage }.reversed()
                 self.presenter?.presentMessages(messages: self.messages, scrollToMostRecentMessage)
+            }
+            // LINIA2_HISTORY_FALLBACK: кэш пуст, а на сервере есть сообщения — запросить последнюю страницу с сервера (один раз).
+            if self.messages.isEmpty, (t.seq ?? 0) > 0, t.attached, !self.linia2HistoryRequested {
+                self.linia2HistoryRequested = true
+                let q = t.metaGetBuilder().withData(since: nil, before: nil, limit: MessageInteractor.kMessagesPerPage).build()
+                t.getMeta(query: q).thenApply { [weak self] _ in
+                    self?.loadMessagesFromCache(scrollToMostRecentMessage: true)
+                    return nil
+                }
             }
         }
     }

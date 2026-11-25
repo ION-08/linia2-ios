@@ -297,7 +297,7 @@ class TopicSecurityViewController: UITableViewController {
 
     @objc func reportGroupClicked(sender: UITapGestureRecognizer) {
         let alert = UIAlertController(title: NSLocalizedString("Report Group?", comment: "Alert title"), message: NSLocalizedString("Also block and remove all messages", comment: "Alert explanation"), preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        alert.addAction(UIAlertAction(title: Linia2Texts.t("Cancel"), style: .cancel, handler: nil))
         alert.addAction(UIAlertAction(
             title: NSLocalizedString("Report", comment: "Alert action"), style: .destructive,
             handler: { _ in self.reportTopic(reason: "TODO") }))

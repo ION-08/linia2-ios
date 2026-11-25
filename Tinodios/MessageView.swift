@@ -19,11 +19,7 @@ class MessageView: UICollectionView {
 
     public override init(frame: CGRect, collectionViewLayout layout: UICollectionViewLayout) {
         super.init(frame: frame, collectionViewLayout: layout)
-        if traitCollection.userInterfaceStyle == .dark {
-            backgroundColor = .black
-        } else {
-            backgroundColor = .white
-        }
+        backgroundColor = L2.background   // LINIA2: как остальное приложение
 
         // Reusable message cells
         register(MessageCell.self, forCellWithReuseIdentifier: String(describing: MessageCell.self))

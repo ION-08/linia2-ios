@@ -184,7 +184,7 @@ class SettingsSecurityViewController: UITableViewController {
                     if let ctrl = msg?.ctrl, 200 <= ctrl.code && ctrl.code < 300 {
                         UiUtils.showToast(message: NSLocalizedString("Password updated", comment: "Success message"), level: .info)
                     } else {
-                        UiUtils.showToast(message: "Server error")
+                        UiUtils.showToast(message: Linia2Texts.t("Server error"))
                     }
                 }
                 return nil

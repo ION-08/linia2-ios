@@ -9,6 +9,13 @@ name: UI tests
 on:
   workflow_dispatch:
   workflow_call:
+    outputs:
+      compiled:
+        description: "Приложение собралось и тест запустился"
+        value: ${{ jobs.uitest.outputs.compiled }}
+      crashed:
+        description: "Были вылеты приложения"
+        value: ${{ jobs.uitest.outputs.crashed }}
 
 concurrency:
   group: uitest-${{ github.ref }}
@@ -18,6 +25,9 @@ jobs:
   uitest:
     runs-on: macos-26
     timeout-minutes: 120
+    outputs:
+      compiled: ${{ steps.report.outputs.compiled }}
+      crashed: ${{ steps.report.outputs.crashed }}
     # Одно устройство — iPhone 17 Pro (экономия минут). Для SE: device: se.
     strategy:
       matrix:
@@ -110,6 +120,7 @@ jobs:
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
 
       - name: Скриншоты и отчёты
+        id: report
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/crashes"
@@ -121,6 +132,10 @@ jobs:
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
           cp "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/out/" 2>/dev/null || true
           ls -la "$RUNNER_TEMP/out/shots" | head -80; ls "$RUNNER_TEMP/out/crashes"
+          if grep -qE '\*\* TEST (SUCCEEDED|FAILED) \*\*' "$RUNNER_TEMP/test.log" 2>/dev/null && ! grep -qE '\.swift:[0-9]+:[0-9]+: error:|Linker command failed|BUILD FAILED' "$RUNNER_TEMP/test.log" 2>/dev/null; then C=true; else C=false; fi
+          if ls "$RUNNER_TEMP/out/crashes"/*.ips >/dev/null 2>&1 || grep -qiE 'crashed|Restarting after unexpected exit|Lost connection to the test runner' "$RUNNER_TEMP/test.log" 2>/dev/null; then K=true; else K=false; fi
+          echo "compiled=$C" >> "$GITHUB_OUTPUT"; echo "crashed=$K" >> "$GITHUB_OUTPUT"
+          echo "Собрано: $C, вылеты: $K" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()

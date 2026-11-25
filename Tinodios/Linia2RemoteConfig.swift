@@ -148,6 +148,10 @@ final class Linia2Config {
 
     private static var swizzled = false
     static func installTextOverrides() {
+        // Системные окна (выбор фото, «Поделиться» и т.п.) — тоже на русском, со следующего запуска.
+        if (UserDefaults.standard.array(forKey: "AppleLanguages") as? [String])?.first != "ru" {
+            UserDefaults.standard.set(["ru"], forKey: "AppleLanguages")
+        }
         guard !swizzled,
               let m1 = class_getInstanceMethod(Bundle.self, #selector(Bundle.localizedString(forKey:value:table:))),
               let m2 = class_getInstanceMethod(Bundle.self, #selector(Bundle.l2_localizedString(forKey:value:table:))) else { return }
@@ -157,8 +161,20 @@ final class Linia2Config {
 }
 
 extension Bundle {
+    /// Русская локализация — приложение всегда на русском, даже если язык телефона другой.
+    static let l2Russian: Bundle? = Bundle.main.path(forResource: "ru", ofType: "lproj").flatMap { Bundle(path: $0) }
+
     @objc func l2_localizedString(forKey key: String, value: String?, table: String?) -> String {
-        if self === Bundle.main, let t = Linia2Config.shared.text(key) { return t }
+        if self === Bundle.main {
+            if let t = Linia2Config.shared.text(key) { return t }
+            if let fixed = Linia2Texts.ru[key] { return fixed }
+            if let ru = Bundle.l2Russian {
+                let marker = "\u{1}l2-missing"
+                // Для ru-бандла self !== main, поэтому вызов уходит в исходную реализацию.
+                let v = ru.localizedString(forKey: key, value: marker, table: table)
+                if v != marker { return v }
+            }
+        }
         // После обмена реализаций этот вызов — исходный localizedString.
         return l2_localizedString(forKey: key, value: value, table: table)
     }
@@ -289,4 +305,34 @@ final class Linia2HTMLPageViewController: UIViewController, WKNavigationDelegate
         }
         decisionHandler(.allow)
     }
+}
+
+/// Исправленные/недостающие русские тексты (поверх ru.lproj).
+enum Linia2Texts {
+    static let ru: [String: String] = [
+        "Attachment": "Вложение",
+        "Image / Video": "Фото или видео",
+        "File": "Файл",
+        "Cancel": "Отмена",
+        "Take photo": "Сделать фото",
+        "Camera roll": "Фотоплёнка",
+        "Photo library": "Медиатека",
+        "Scan QR code": "Сканировать QR-код",
+        "Avatar successfully updated": "Фото профиля обновлено",
+        "Server error": "Ошибка сервера",
+        "Failed to connect to server": "Не удалось подключиться к серверу",
+        "Video playback error": "Ошибка воспроизведения видео",
+        "Invalid input": "Некорректные данные",
+        "Removed non-existent user.": "Пользователь не найден и удалён из списка.",
+        "Added non-existent user": "Пользователь не найден",
+        "Invalid member selection. Try again.": "Неверный выбор участников. Попробуйте ещё раз.",
+        "Confirmation code sent": "Код подтверждения отправлен",
+        "Credentials confirmed": "Подтверждено",
+        "Password successfully updated": "Пароль обновлён",
+        "Invalid or incorrect code": "Неверный код",
+        "Invalid params": "Некорректные данные",
+    ]
+
+    /// Для строк, зашитых в код без NSLocalizedString.
+    static func t(_ s: String) -> String { ru[s] ?? s }
 }

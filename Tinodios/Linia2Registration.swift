@@ -510,6 +510,27 @@ final class Linia2InviteCodeViewController: Linia2FormViewController {
         stack.setCustomSpacing(26, after: errorText)
         stack.addArrangedSubview(nextButton)
         stack.addArrangedSubview(paste)
+        // Только для автотеста (флаг -l2-uitest): обычное поле ввода, которое передаёт цифры в ячейки —
+        // XCUITest не умеет печатать в собственное поле ввода кода. В приложении у пользователей его нет.
+        if ProcessInfo.processInfo.arguments.contains("-l2-uitest") {
+            let t = UITextField()
+            t.accessibilityIdentifier = "l2.code.testinput"
+            t.keyboardType = .numberPad
+            t.textColor = L2.textSecondary
+            t.font = L2.font(12)
+            t.placeholder = "автотест"
+            t.heightAnchor.constraint(equalToConstant: 32).isActive = true
+            t.addTarget(self, action: #selector(testInputChanged(_:)), for: .editingChanged)
+            stack.addArrangedSubview(t)
+        }
+    }
+
+    @objc private func testInputChanged(_ t: UITextField) {
+        let digits = (t.text ?? "").filter { $0.isNumber }
+        guard digits.count >= 6 else { return }
+        t.text = ""
+        cells.clear()
+        cells.insertText(String(digits.prefix(6)))
     }
 
     override func viewDidAppear(_ animated: Bool) {

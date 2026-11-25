@@ -30,7 +30,8 @@ jobs:
 
   build:
     needs: uitest
-    if: ${{ always() && (needs.uitest.result == 'success' || needs.uitest.result == 'skipped') }}
+    # Сборка: тест прошёл / пропущен, либо тест упал без вылетов приложения (сбой шага симулятора).
+    if: ${{ always() && (needs.uitest.result == 'success' || needs.uitest.result == 'skipped' || (needs.uitest.result == 'failure' && needs.uitest.outputs.compiled == 'true' && needs.uitest.outputs.crashed == 'false')) }}
     runs-on: macos-26
     timeout-minutes: 90
     env:

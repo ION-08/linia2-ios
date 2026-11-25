@@ -157,7 +157,7 @@ class CredentialsChangeViewController: UITableViewController {
                     DispatchQueue.main.async {
                         self.newTelField.isEnabled = false
                         self.newEmailField.isEnabled = false
-                        UiUtils.showToast(message: "Confirmation code sent", level: .info)
+                        UiUtils.showToast(message: Linia2Texts.t("Confirmation code sent"), level: .info)
                     }
                 } else {
                     UiUtils.showServerResponseErrorToast(for: msg)
@@ -188,7 +188,7 @@ class CredentialsChangeViewController: UITableViewController {
                         return nil
                     })
                     DispatchQueue.main.async {
-                        UiUtils.showToast(message: "Credentials confirmed", level: .info)
+                        UiUtils.showToast(message: Linia2Texts.t("Credentials confirmed"), level: .info)
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
                         self.navigationController?.popViewController(animated: true)

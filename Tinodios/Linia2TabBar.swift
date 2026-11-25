@@ -151,6 +151,12 @@ final class Linia2FloatingBar: UIView {
             pill.topAnchor.constraint(equalTo: stack.topAnchor), pill.bottomAnchor.constraint(equalTo: stack.bottomAnchor),
             pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(Self.tabs.count), constant: -12),
         ])
+        // Сразу привязываем выделение к первой вкладке — без этого до первого select() оно прижималось к левому краю.
+        if let first = items.first {
+            pillLeading = pill.centerXAnchor.constraint(equalTo: first.centerXAnchor)
+            pillLeading?.isActive = true
+            (first as? Linia2TabItem)?.setSelected(true)
+        }
         accessibilityTraits = .tabBar
     }
 

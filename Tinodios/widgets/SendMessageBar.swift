@@ -140,14 +140,14 @@ class SendMessageBar: UIView {
     @IBAction func attach(_ sender: UIButton) {
         inputField.resignFirstResponder()
 
-        let alert = UIAlertController(title: "Attachment", message: nil, preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "Image / Video", style: .default, handler: { _ in
+        let alert = UIAlertController(title: Linia2Texts.t("Attachment"), message: nil, preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: Linia2Texts.t("Image / Video"), style: .default, handler: { _ in
             self.delegate?.sendMessageBar(attachment: false)
         }))
-        alert.addAction(UIAlertAction(title: "File", style: .default, handler: { _ in
+        alert.addAction(UIAlertAction(title: Linia2Texts.t("File"), style: .default, handler: { _ in
             self.delegate?.sendMessageBar(attachment: true)
         }))
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        alert.addAction(UIAlertAction(title: Linia2Texts.t("Cancel"), style: .cancel, handler: nil))
         self.window?.rootViewController?.present(alert, animated: true, completion: nil)
     }
 
@@ -293,6 +293,11 @@ class SendMessageBar: UIView {
         var depth = 0
         while let cur = v, depth < 4 {
             cur.backgroundColor = L2.background
+            // LINIA2_HIDE_BACKDROP: системная серая «подложка» клавиатурной зоны — прячем, остаётся наш фон.
+            for sub in cur.subviews where sub !== self && depth < 2 {
+                let name = NSStringFromClass(type(of: sub))
+                if sub is UIVisualEffectView || name.contains("Backdrop") { sub.isHidden = true }
+            }
             v = cur.superview
             depth += 1
         }

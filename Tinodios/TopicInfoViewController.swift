@@ -193,7 +193,7 @@ class TopicInfoViewController: UITableViewController {
 
 
     @IBAction func showTopicIDQRCode(_ sender: Any) {
-        let alert = UIAlertController(title: "Scan QR code", message: "\n\n\n\n\n\n\n\n", preferredStyle: .alert)
+        let alert = UIAlertController(title: Linia2Texts.t("Scan QR code"), message: "\n\n\n\n\n\n\n\n", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
         let qrcode = UIImageView(image: Utils.generateQRCode(from: Utils.kTopicUriPrefix + topic.name))
         alert.view.addSubview(qrcode)
