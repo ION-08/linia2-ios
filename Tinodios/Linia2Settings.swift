@@ -1147,7 +1147,7 @@ final class L2LegalTextView: UITextView, UITextViewDelegate {
     }
 
     func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-        if interaction == .invokeDefault {
+        if interaction == .invokeDefaultAction {
             Linia2Links.open(URL, from: presenter)
         }
         return false
