@@ -118,7 +118,7 @@ final class Linia2ContactCell: UITableViewCell {
         separatorInset = UIEdgeInsets(top: 0, left: 86, bottom: 0, right: 0)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     func configure(_ topic: DefaultComTopic) {
         let name = Linia2ContactInfo.name(of: topic)
@@ -151,7 +151,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let searchField = L2SearchField(placeholder: "Поиск по имени или логину")
     private let addButton = L2CircleButton(symbol: "person.badge.plus", accessibility: "Добавить контакт")
-    private var header: L2TableHeader!
+    private var header: L2TableHeader?
     private var headerWidth: CGFloat = 0
 
     private var allTopics: [DefaultComTopic] = []
@@ -189,7 +189,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
         searchField.delegate = self
         searchField.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
         header = L2TableHeader([L2Header(title: "Контакты", buttons: [addButton]), searchField])
-        header.install(in: tableView)
+        header?.install(in: tableView)
         headerWidth = tableView.bounds.width
     }
 
@@ -197,7 +197,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
         super.viewDidLayoutSubviews()
         if tableView.bounds.width > 0, tableView.bounds.width != headerWidth {
             headerWidth = tableView.bounds.width
-            header.install(in: tableView)
+            header?.install(in: tableView)
         }
     }
 
@@ -313,7 +313,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: Linia2ContactCell.reuseId, for: indexPath) as! Linia2ContactCell
+        guard let cell = tableView.dequeueReusableCell(withIdentifier: Linia2ContactCell.reuseId, for: indexPath) as? Linia2ContactCell else { return UITableViewCell() }
         cell.configure(sections[indexPath.section].topics[indexPath.row])
         return cell
     }
@@ -385,7 +385,7 @@ final class L2ActionTile: UIControl {
         accessibilityTraits = .button
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.6 : 1 } }
 }
@@ -406,7 +406,7 @@ final class Linia2ContactCardViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func viewDidLoad() {
         super.viewDidLoad()

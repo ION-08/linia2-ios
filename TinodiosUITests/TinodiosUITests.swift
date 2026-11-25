@@ -1,482 +1,204 @@
 //
 //  TinodiosUITests.swift
-//  TinodiosUITests
+//  Линия 2.0: автопроверка перед загрузкой в TestFlight (iOS Simulator, XCUITest).
 //
-//  Copyright © 2022 Tinode LLC. All rights reserved.
+//  Данные приходят из окружения (xcodebuild TEST_RUNNER_*):
+//    L2_CODE, L2_REG_LOGIN, L2_REG_PASSWORD — регистрация по коду;
+//    L2_LOGIN, L2_PASSWORD — вход готовым тестовым пользователем.
+//  Скриншот каждого экрана сохраняется во вложениях xcresult.
 //
 
 import XCTest
 
-import Network
-@testable import TinodeSDK
-
-class FakeTinodeServer {
-    var listener: NWListener
-    var connectedClients: [NWConnection] = []
-
-    // Request types.
-    enum RequestType {
-        case none, hi, acc, login, sub, get, set, pub, leave, note, del
-    }
-    // Request handlers.
-    var requestHandlers: [RequestType : ((ClientMessage<Int, Int>) -> [ServerMessage])] = [:]
-
-    init(port: UInt16) {
-        let parameters = NWParameters(tls: nil)
-        parameters.allowLocalEndpointReuse = true
-        parameters.includePeerToPeer = true
-
-        let wsOptions = NWProtocolWebSocket.Options()
-        wsOptions.autoReplyPing = true
-
-        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
-
-        do {
-            if let port = NWEndpoint.Port(rawValue: port) {
-                listener = try NWListener(using: parameters, on: port)
-            } else {
-                fatalError("Unable to start WebSocket server on port \(port)")
-            }
-        } catch {
-            fatalError(error.localizedDescription)
-        }
-    }
-
-    func startServer() {
-        let serverQueue = DispatchQueue(label: "ServerQueue")
-
-        listener.newConnectionHandler = { newConnection in
-            print("New connection connecting")
-
-            self.connectedClients.append(newConnection)
-            func receive() {
-                newConnection.receiveMessage { (data, context, isComplete, error) in
-                    if let data = data, let context = context {
-                        print("Received a new message from client")
-                        try! self.handleClientMessage(data: data, context: context, stringVal: "", connection: newConnection)
-                        receive()
-                    }
-                }
-            }
-            receive()
-
-            newConnection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    print("Client ready")
-                case .failed(let error):
-                    print("Client connection failed \(error.localizedDescription)")
-                case .waiting(let error):
-                    print("Waiting for long time \(error.localizedDescription)")
-                default:
-                    break
-                }
-            }
-
-            newConnection.start(queue: serverQueue)
-        }
-
-        listener.stateUpdateHandler = { state in
-            print(state)
-            switch state {
-            case .ready:
-                print("Server Ready")
-            case .failed(let error):
-                print("Server failed with \(error.localizedDescription)")
-            default:
-                break
-            }
-        }
-
-        listener.start(queue: serverQueue)
-    }
-
-    func stopServer() {
-        listener.cancel()
-    }
-
-    func handleClientMessage(data: Data, context: NWConnection.ContentContext, stringVal: String, connection: NWConnection) throws {
-        let message = try Tinode.jsonDecoder.decode(ClientMessage<Int, Int>.self, from: data)
-
-        print("--> received: \(String(decoding: data, as: UTF8.self))")
-        var reqType: RequestType = .none
-        if message.hi != nil {
-            reqType = .hi
-        } else if message.login != nil {
-            reqType = .login
-        } else if message.sub != nil {
-            reqType = .sub
-        } else if message.get != nil {
-            reqType = .get
-        } else if message.set != nil {
-            reqType = .set
-        } else if message.pub != nil {
-            reqType = .pub
-        } else if message.leave != nil {
-            reqType = .leave
-        } else if message.note != nil {
-            reqType = .note
-        } else if message.del != nil {
-            reqType = .del
-        }
-        self.requestHandlers[reqType]?(message).forEach { self.sendResponse(response: $0, into: connection) }
-    }
-
-    func addHandler(forRequestType type: RequestType, handler: @escaping ((ClientMessage<Int, Int>) -> [ServerMessage])) {
-        self.requestHandlers[type] = handler
-    }
-
-    func sendResponse(response: ServerMessage, into connection: NWConnection) {
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(identifier: "textContext",
-                                                  metadata: [metadata])
-        do {
-            let data = try Tinode.jsonEncoder.encode(response)
-            print("sending --> \(String(decoding: data, as: UTF8.self))")
-            connection.send(content: data, contentContext: context, isComplete: true,
-                            completion: .contentProcessed({ error in
-                                if let error = error {
-                                    print(error.localizedDescription)
-                                }
-                            }))
-        } catch {
-            print("Error sending response: \(error)")
-        }
-    }
-}
-
 final class TinodiosUITests: XCTestCase {
-    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-    var tinodeServer: FakeTinodeServer!
-    var app: XCUIApplication!
-
-    // Delete installed Tinode app.
-    private func deleteTinode() {
-        app.terminate()
-        let icon = springboard.icons["Tinode"]
-        if icon.exists {
-            let iconFrame = icon.frame
-            let springboardFrame = springboard.frame
-            icon.press(forDuration: 5)
-
-            // Tap the little "-" button at approximately where it is. The "-" is not exposed directly
-            springboard.coordinate(withNormalizedOffset: CGVector(dx: (iconFrame.minX + 3) / springboardFrame.maxX, dy: (iconFrame.minY + 3) / springboardFrame.maxY)).tap()
-
-            springboard.alerts.buttons["Delete App"].tap()
-            // Confirm the choice once again.
-            springboard.alerts.buttons["Delete"].tap()
-        }
-    }
+    private var app: XCUIApplication!
+    private var shot = 0
+    private let env = ProcessInfo.processInfo.environment
+    private let pin = ["1", "3", "5", "7"]
 
     override func setUpWithError() throws {
-        app = XCUIApplication()
-        app.launch()
-        // Tinode will connect to localhost:6060 by default.
-        tinodeServer = FakeTinodeServer(port: 6060)
-        tinodeServer.startServer()
-
         continueAfterFailure = false
-    }
-
-    override func tearDownWithError() throws {
-        deleteTinode()
-        tinodeServer.requestHandlers.removeAll()
-        tinodeServer.stopServer()
-    }
-
-    // Tinode message handlers.
-    private func hiHandler() {
-        tinodeServer.addHandler(forRequestType: .hi, handler: { req in
-            let hi = req.hi!
-            let response = ServerMessage()
-            response.ctrl = MsgServerCtrl(id: hi.id, topic: nil, code: 200, text: "", ts: Date(), params: nil)
-            return [response]
-        })
-    }
-
-    private func loginHandler(success: Bool) {
-        tinodeServer.addHandler(forRequestType: .login, handler: { req in
-            let login = req.login!
-            let response = ServerMessage()
-            response.ctrl = success ?
-                MsgServerCtrl(id: login.id, topic: nil, code: 200, text: "ok", ts: Date(),
-                                          params: ["authlvl": .string("auth"), "token": .string("fake"),
-                                                   "user": .string("usrAlice")]) :
-                MsgServerCtrl(id: login.id, topic: nil, code: 401, text: "authentication failed", ts: Date(), params: nil)
-            return [response]
-        })
-    }
-
-    private func subHandler() {
-        func metaDescMsg(forId id: String?, onTopic topic: String?, currentTime now: Date,
-                         defacs: Defacs?, acs: Acs?, lastSeen: Date?, pub: TheCard?, priv: PrivateType?) -> ServerMessage {
-            let result = ServerMessage()
-            let desc = Description<TheCard, PrivateType>()
-            if topic == "me" {
-                desc.created = now.addingTimeInterval(-86400)
-                desc.updated = desc.created
-                desc.touched = desc.created
-            }
-            desc.defacs = defacs
-            desc.acs = acs
-            desc.pub = pub
-            desc.priv = priv
-            if let lastSeen = lastSeen {
-                desc.seen = LastSeen(when: lastSeen, ua: "dummy")
-            }
-            result.meta = MsgServerMeta(id: id, topic: topic, ts: now, desc: desc, sub: nil, del: nil, tags: nil, cred: nil, aux: nil)
-
-            return result
-        }
-        func subMsg(topic: String, updatedTs: Date?, read: Int, recv: Int, acs: Acs?, pub: TheCard?, priv: PrivateType?) -> DefaultSubscription {
-            let sub = DefaultSubscription()
-            sub.topic = topic
-            sub.updated = updatedTs
-            sub.read = read
-            sub.recv = recv
-            sub.pub = pub
-            sub.priv = priv
-            sub.acs = acs
-            return sub
-        }
-        tinodeServer.addHandler(forRequestType: .sub, handler: { req in
-            let sreq = req.sub!
-            guard let topic = sreq.topic else { return [] }
-            switch topic {
-            case "me":
-                let now = Date()
-                let responseCtrl = ServerMessage()
-                responseCtrl.ctrl = MsgServerCtrl(id: sreq.id, topic: sreq.topic, code: 200, text: "ok", ts: now, params: nil)
-
-                let metaDesc = metaDescMsg(forId: sreq.id, onTopic: "me", currentTime: now, defacs: Defacs(auth: "JRWPA", anon: "N"), acs: nil, lastSeen: nil, pub: TheCard(fn: "Alice"), priv: ["comment": .string("no comment")])
-
-                let metaSub = ServerMessage()
-                let subBob = subMsg(topic: "usrBob", updatedTs: now.addingTimeInterval(-86400), read: 2, recv: 2, acs: Acs(given: "JRWPS", want: "JRWPS", mode: "JRWPS"), pub: TheCard(fn: "Bob"), priv: ["comment": .string("bla")])
-
-                let subGrp = subMsg(topic: "grpGroup", updatedTs: now.addingTimeInterval(-100000), read: 0, recv: 0, acs: Acs(given: "JRWPS", want: "JRWPS", mode: "JRWPS"), pub: TheCard(fn: "Test group"), priv: ["comment": .string("Group description")])
-                metaSub.meta = MsgServerMeta(id: sreq.id, topic: "me", ts: now, desc: nil, sub: [subBob, subGrp], del: nil, tags: nil, cred: nil, aux: nil)
-                return [responseCtrl, metaDesc, metaSub]
-            case "usrBob":
-                let now = Date()
-                let responseCtrl = ServerMessage()
-                responseCtrl.ctrl = MsgServerCtrl(id: sreq.id, topic: sreq.topic, code: 200, text: "ok", ts: now, params: nil)
-
-                let metaDesc = metaDescMsg(forId: sreq.id, onTopic: sreq.topic, currentTime: now, defacs: nil, acs: Acs(given: "JRWPA", want: "JRWPA", mode: "JRWPA"), lastSeen: now.addingTimeInterval(-10), pub: nil, priv: nil)
-
-                let metaSub = ServerMessage()
-                let sub1 = subMsg(topic: "usrBob", updatedTs: now.addingTimeInterval(-100), read: 2, recv: 2, acs: Acs(given: "JRWPS", want: "JRWPS", mode: "JRWPS"), pub: nil, priv: nil)
-                let sub2 = subMsg(topic: "usrAlice", updatedTs: now.addingTimeInterval(-100), read: 2, recv: 2, acs: Acs(given: "JRWPS", want: "JRWPS", mode: "JRWPS"), pub: nil, priv: nil)
-                metaSub.meta = MsgServerMeta(id: sreq.id, topic: sreq.topic, ts: now, desc: nil, sub: [sub1, sub2], del: nil, tags: nil, cred: nil, aux: nil)
-
-                let data1 = ServerMessage()
-                data1.data = MsgServerData(id: sreq.id, topic: sreq.topic, from: sreq.topic, ts: now.addingTimeInterval(-2000), head: nil, seq: 1, content: Drafty(plainText: "hello message"))
-
-                let data2 = ServerMessage()
-                data2.data = MsgServerData(id: sreq.id, topic: sreq.topic, from: "usrAlice", ts: now.addingTimeInterval(-1000), head: nil, seq: 2, content: Drafty(plainText: "wassup?"))
-
-                return [responseCtrl, metaDesc, metaSub, data1, data2]
-            case "grpGroup":
-                let now = Date()
-                let responseCtrl = ServerMessage()
-                responseCtrl.ctrl = MsgServerCtrl(id: sreq.id, topic: sreq.topic, code: 200, text: "ok", ts: now, params: nil)
-
-                let metaDesc = metaDescMsg(forId: sreq.id, onTopic: sreq.topic, currentTime: now, defacs: Defacs(auth: "JRWPS", anon: "JR"), acs: Acs(given: "JRWPA", want: "JRWPA", mode: "JRWPA"), lastSeen: nil, pub: nil, priv: nil)
-
-                let metaSub = ServerMessage()
-                let sub1 = subMsg(topic: "usrBob", updatedTs: now.addingTimeInterval(-100000), read: 0, recv: 0, acs: Acs(given: "JRWPS", want: "JRWPS", mode: "JRWPS"), pub: nil, priv: nil)
-                let sub2 = subMsg(topic: "usrAlice", updatedTs: now.addingTimeInterval(-100000), read: 0, recv: 0, acs: Acs(given: "JRWPASDO", want: "JRWPASDO", mode: "JRWPASDO"), pub: nil, priv: nil)
-                metaSub.meta = MsgServerMeta(id: sreq.id, topic: sreq.topic, ts: now, desc: nil, sub: [sub1, sub2], del: nil, tags: nil, cred: nil, aux: nil)
-
-                return [responseCtrl, metaDesc, metaSub]
-            default:
-                return []
-            }
-        })
-    }
-
-    private func pubHandler(responseSeq: Int) {
-        tinodeServer.addHandler(forRequestType: .pub, handler: { req in
-            let preq = req.pub!
-            let now = Date()
-            let responseCtrl = ServerMessage()
-            responseCtrl.ctrl = MsgServerCtrl(id: preq.id, topic: preq.topic, code: 200, text: "accepted", ts: now,
-                                              params: ["seq": .int(responseSeq)])
-            return [responseCtrl]
-        })
-    }
-
-    private func allowLocalNotifications() -> NSObjectProtocol {
-        return addUIInterruptionMonitor(withDescription: "Local Notifications") { (alert) -> Bool in
-            let notifPermission = "Would Like to Send You Notifications"
-            if alert.label.contains(notifPermission) {
-                alert.buttons["Allow"].tap()
-                return true
+        app = XCUIApplication()
+        // Системные запросы (контакты, уведомления, микрофон) — закрываем.
+        addUIInterruptionMonitor(withDescription: "Системные запросы") { alert in
+            for title in ["Allow", "Разрешить", "OK", "Don’t Allow", "Don't Allow", "Не разрешать", "Allow While Using App"] {
+                if alert.buttons[title].exists { alert.buttons[title].tap(); return true }
             }
             return false
         }
     }
 
-    private func logIntoTinode(shouldSucceed: Bool) {
-        // Log in as "alice".
-        let elementsQuery = app.scrollViews.otherElements
-        let loginText = elementsQuery.textFields["usernameText"]
-        XCTAssertTrue(loginText.exists)
-        loginText.tap()
-        loginText.typeText("alice")
+    // MARK: - Помощники
 
-        let passwordText = elementsQuery.secureTextFields["passwordText"]
-        XCTAssertTrue(passwordText.exists)
-        passwordText.tap()
-        passwordText.typeText("alice123")
-
-        let signInButton = elementsQuery.staticTexts["Sign In"]
-        XCTAssertTrue(signInButton.exists)
-        signInButton.tap()
-
-        // Check if user name field is still available. If so login has failed.
-        XCTAssertNotEqual(loginText.exists, shouldSucceed)
+    private func screenshot(_ name: String) {
+        shot += 1
+        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        a.name = String(format: "%02d-%@", shot, name)
+        a.lifetime = .keepAlways
+        add(a)
     }
 
-    func testLoginFailure() throws {
-        hiHandler()
-        loginHandler(success: false)
-
-        logIntoTinode(shouldSucceed: false)
+    @discardableResult
+    private func wait(_ e: XCUIElement, _ what: String, timeout: TimeInterval = 20) -> XCUIElement {
+        if !e.waitForExistence(timeout: timeout) {
+            screenshot("НЕ НАЙДЕНО-" + what)
+            XCTFail("Не появился элемент: \(what)")
+        }
+        return e
     }
 
-    func testLoginBasic() throws {
-        hiHandler()
-        loginHandler(success: true)
-        subHandler()
-
-        // Allow notifications.
-        let monitor = allowLocalNotifications()
-        defer { removeUIInterruptionMonitor(monitor) }
-
-        logIntoTinode(shouldSucceed: true)
-
-        // "Allow Notifications?" dialog. Make sure modal dialog handler gets triggered.
-        app.tap()
-
-        let table = app.tables.element
-        XCTAssertTrue(table.exists)
-
-        table.cells.waitForCount(2)
-        XCTAssertTrue(table.staticTexts["Bob"].exists)
-        XCTAssertTrue(table.staticTexts["Test group"].exists)
-    }
-
-    private func sendMessage(withContent content: String) {
-        // Send another one.
-        let inputField = app.children(matching: .window).element(boundBy: 1).children(matching: .other).element.children(matching: .other).element(boundBy: 1)
-        inputField.tap()
-        inputField.typeText(content)
-
-        let arrowUpCircleButton = app.buttons["Arrow Up Circle"]
-        arrowUpCircleButton.tap()
-    }
-
-    func testPublishP2P() {
-        hiHandler()
-        loginHandler(success: true)
-        subHandler()
-        pubHandler(responseSeq: 3)
-
-        // Allow notifications.
-        let monitor = allowLocalNotifications()
-        defer { removeUIInterruptionMonitor(monitor) }
-
-        logIntoTinode(shouldSucceed: true)
-
-        // "Allow Notifications?" dialog. Make sure modal dialog handler gets triggered.
-        app.tap()
-
-        let table = app.tables.element
-        XCTAssertTrue(table.exists)
-
-        table.cells.waitForCount(2)
-        let cell = table.cells.staticTexts["Bob"]
-        cell.tap()
-        let messageView = app.collectionViews.element
-
-        // 2 messages.
-        messageView.cells.waitForCount(2)
-        XCTAssertTrue(messageView.containsMessage(text: "hello message"))
-        XCTAssertTrue(messageView.containsMessage(text: "wassup?"))
-
-        // Send another one.
-        sendMessage(withContent: "new msg")
-
-        // We should now have 3 messages.
-        messageView.cells.waitForCount(3)
-        XCTAssertTrue(messageView.containsMessage(text: "new msg"))
-    }
-
-    func testPublishGroup() {
-        hiHandler()
-        loginHandler(success: true)
-        subHandler()
-        pubHandler(responseSeq: 1)
-
-        // Allow notifications.
-        let monitor = allowLocalNotifications()
-        defer { removeUIInterruptionMonitor(monitor) }
-
-        logIntoTinode(shouldSucceed: true)
-
-        // "Allow Notifications?" dialog. Make sure modal dialog handler gets triggered.
-        app.tap()
-
-        let table = app.tables.element
-        XCTAssertTrue(table.exists)
-
-        table.cells.waitForCount(2)
-        let cell = table.cells.staticTexts["Test group"]
-        cell.tap()
-        let messageView = app.collectionViews.element
-
-        // 0 messages.
-        messageView.cells.waitForCount(0)
-
-        // Send a message.
-        sendMessage(withContent: "msg from alice")
-
-        // We should now have 1 message.
-        messageView.cells.waitForCount(1)
-        XCTAssertTrue(messageView.containsMessage(text: "msg from alice"))
-
-        // Simulate a message from Bob.
-        let msgFromBob = ServerMessage()
-        msgFromBob.data = MsgServerData(id: nil, topic: "grpGroup", from: "usrBob", ts: Date(), head: nil, seq: 2, content: Drafty(plainText: "msg from bob"))
-        tinodeServer.sendResponse(response: msgFromBob, into: tinodeServer.connectedClients.first!)
-
-        messageView.cells.waitForCount(2)
-        XCTAssertTrue(messageView.containsMessage(text: "msg from bob"))
-    }
-
-    func testLaunchPerformance() throws {
-        if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
-            // This measures how long it takes to launch your application.
-            measure(metrics: [XCTApplicationLaunchMetric()]) {
-                XCUIApplication().launch()
-            }
+    private func dismissSpringboardAlerts() {
+        let sb = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for title in ["Allow", "Разрешить", "OK", "Don’t Allow", "Don't Allow", "Не разрешать"] {
+            let b = sb.buttons[title]
+            if b.exists { b.tap() }
         }
     }
-}
 
-extension XCUIElementQuery {
-    func waitForCount(_ count: Int) {
-        let predicate = NSPredicate(format: "count == %d", count)
-        let expectation = XCTNSPredicateExpectation(predicate: predicate,
-                                                    object: self)
-        let result = XCTWaiter().wait(for: [expectation], timeout: 2)
-        XCTAssertEqual(result, XCTWaiter.Result.completed)
+    private func type(_ text: String, into e: XCUIElement) {
+        e.tap()
+        e.typeText(text)
     }
-}
 
-extension XCUIElement {
-    func containsMessage(text: String) -> Bool {
-        let predicate = NSPredicate(format: "label CONTAINS[c] %@", text)
-        return self.descendants(matching: .textView).containing(predicate).element.exists
+    private func enterPin() {
+        for d in pin { app.buttons[d].firstMatch.tap() }
+    }
+
+    private func tab(_ id: String) -> XCUIElement { app.otherElements[id].firstMatch.exists ? app.otherElements[id].firstMatch : app.descendants(matching: .any)[id].firstMatch }
+
+    private func back() {
+        let b = app.navigationBars.buttons.element(boundBy: 0)
+        if b.exists { b.tap() }
+    }
+
+    private func requireEnv(_ k: String) throws -> String {
+        guard let v = env[k], !v.isEmpty else { throw XCTSkip("нет переменной \(k)") }
+        return v
+    }
+
+    /// Создание PIN после входа/регистрации; Face ID в симуляторе нет — сразу «Чаты».
+    private func createPinAndReachChats(_ prefix: String) {
+        wait(app.staticTexts["Придумайте PIN-код"], "экран создания PIN")
+        screenshot(prefix + "-pin-1")
+        enterPin()
+        wait(app.staticTexts["Повторите PIN-код"], "повтор PIN")
+        enterPin()
+        let skip = app.buttons["Не сейчас"]
+        if skip.waitForExistence(timeout: 3) { screenshot(prefix + "-faceid"); skip.tap() }
+        wait(tab("l2.tab.chats"), "вкладки после входа", timeout: 30)
+        sleep(2)
+        screenshot(prefix + "-chats")
+    }
+
+    private func visitAllTabsAndSettings() {
+        for (id, name) in [("l2.tab.calls", "calls"), ("l2.tab.contacts", "contacts"), ("l2.tab.settings", "settings"), ("l2.tab.chats", "chats")] {
+            wait(tab(id), "вкладка \(name)").tap()
+            sleep(1)
+            screenshot("tab-" + name)
+            dismissSpringboardAlerts()
+        }
+        // Чаты → «Новый чат».
+        let compose = app.buttons["Новый чат"].firstMatch
+        if wait(compose, "кнопка «Новый чат»").exists {
+            compose.tap(); sleep(2); screenshot("new-chat"); back(); sleep(1)
+        }
+        // Контакты → «Добавить контакт».
+        tab("l2.tab.contacts").tap(); sleep(1)
+        let add = app.buttons["Добавить контакт"].firstMatch
+        if wait(add, "кнопка «Добавить контакт»").exists {
+            add.tap(); sleep(2); screenshot("add-contact"); back(); sleep(1)
+        }
+        // Настройки — каждый пункт.
+        tab("l2.tab.settings").tap(); sleep(1)
+        for item in ["Уведомления", "Конфиденциальность", "Внешний вид", "О приложении"] {
+            let cell = app.staticTexts[item].firstMatch
+            wait(cell, "пункт «\(item)»").tap()
+            sleep(2)
+            screenshot("settings-" + item)
+            if item == "Конфиденциальность" {
+                for sub in ["Блокировка приложения (PIN-код, Face ID)", "Безопасность аккаунта"] {
+                    let s = app.staticTexts[sub].firstMatch
+                    if s.waitForExistence(timeout: 3) { s.tap(); sleep(2); screenshot("privacy-" + sub); back(); sleep(1) }
+                }
+            }
+            back(); sleep(1)
+        }
+    }
+
+    private func logout() {
+        tab("l2.tab.settings").tap(); sleep(1)
+        let out = app.staticTexts["Выйти"].firstMatch
+        if !out.exists { app.swipeUp() }
+        wait(out, "«Выйти»").tap()
+        let confirm = app.alerts.buttons["Выйти"].firstMatch
+        wait(confirm, "подтверждение выхода").tap()
+        wait(app.buttons["l2.welcome.login"], "стартовый экран после выхода", timeout: 20)
+        screenshot("after-logout")
+    }
+
+    // MARK: - Сценарии
+
+    func testFullFlow() throws {
+        let code = try requireEnv("L2_CODE")
+        let regLogin = try requireEnv("L2_REG_LOGIN")
+        let regPassword = try requireEnv("L2_REG_PASSWORD")
+        let login = try requireEnv("L2_LOGIN")
+        let password = try requireEnv("L2_PASSWORD")
+
+        app.launch()
+        dismissSpringboardAlerts()
+
+        // 1. Стартовый экран → код приглашения → регистрация → PIN → Чаты.
+        wait(app.buttons["l2.welcome.code"], "стартовый экран")
+        screenshot("welcome")
+        app.buttons["l2.welcome.code"].tap()
+        let cells = wait(app.descendants(matching: .any)["l2.code.cells"].firstMatch, "ячейки кода")
+        screenshot("code-empty")
+        // Сначала неверный код — должна быть понятная ошибка, без вылета.
+        cells.tap()
+        app.typeText("000000")
+        sleep(3)
+        screenshot("code-wrong")
+        XCTAssertTrue(app.state == .runningForeground, "приложение упало на неверном коде")
+        cells.tap()
+        app.typeText(code)
+        wait(app.textFields["l2.reg.name"], "экран регистрации", timeout: 25)
+        screenshot("register")
+        type("Тест CI", into: app.textFields["l2.reg.name"])
+        type(regLogin, into: app.textFields["l2.reg.login"])
+        type(regPassword, into: app.secureTextFields["l2.reg.password"])
+        type(regPassword, into: app.secureTextFields["l2.reg.password2"])
+        screenshot("register-filled")
+        app.buttons["l2.reg.submit"].tap()
+        createPinAndReachChats("reg")
+
+        // 2. Все вкладки, «Новый чат», «Добавить контакт», каждый пункт настроек.
+        visitAllTabsAndSettings()
+
+        // 3. Выход → «Войти» → вход тестовым пользователем → PIN → Чаты.
+        logout()
+        app.buttons["l2.welcome.login"].tap()
+        wait(app.textFields["l2.login.login"], "экран входа")
+        screenshot("login")
+        let lf = app.textFields["l2.login.login"]
+        lf.tap()
+        if let v = lf.value as? String, !v.isEmpty, v != "Логин" {
+            lf.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: v.count + 2))
+        }
+        lf.typeText(login)
+        type(password, into: app.secureTextFields["l2.login.password"])
+        app.buttons["l2.login.submit"].tap()
+        createPinAndReachChats("login")
+
+        // 4. Повторный запуск — экран PIN, затем Чаты.
+        app.terminate()
+        app.launch()
+        wait(app.staticTexts["Введите PIN-код"], "экран PIN при запуске")
+        screenshot("relaunch-pin")
+        enterPin()
+        wait(tab("l2.tab.chats"), "Чаты после PIN")
+        sleep(1)
+        screenshot("relaunch-chats")
+        tab("l2.tab.settings").tap(); sleep(1); screenshot("relaunch-settings")
     }
 }

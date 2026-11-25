@@ -79,7 +79,7 @@ final class L2MenuCell: UITableViewCell {
         separatorInset = UIEdgeInsets(top: 0, left: 64, bottom: 0, right: 0)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     func configure(symbol: String, color: UIColor, title: String, subtitle: String? = nil, chevron: Bool = true) {
         icon.image = L2.symbol(symbol, 15, .semibold)
@@ -147,7 +147,7 @@ final class L2ProfileCell: UITableViewCell {
         ])
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     func configure() {
         let me = Linia2Profile.me
@@ -184,7 +184,7 @@ class Linia2GroupedTableViewController: UITableViewController {
     var groups: [Group] = [] { didSet { if isViewLoaded { tableView.reloadData() } } }
 
     init() { super.init(style: .insetGrouped) }
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -218,7 +218,7 @@ class Linia2GroupedTableViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let row = groups[indexPath.section].rows[indexPath.row]
-        let cell = tableView.dequeueReusableCell(withIdentifier: L2MenuCell.reuseId, for: indexPath) as! L2MenuCell
+        guard let cell = tableView.dequeueReusableCell(withIdentifier: L2MenuCell.reuseId, for: indexPath) as? L2MenuCell else { return UITableViewCell() }
         cell.configure(symbol: row.symbol, color: row.color, title: row.title, subtitle: row.subtitle)
         return cell
     }
@@ -241,7 +241,7 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     private enum Sec: Int, CaseIterable { case profile, menu, logout }
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
-    private var header: L2TableHeader!
+    private var header: L2TableHeader?
     private var headerWidth: CGFloat = 0
     private var listener: Linia2TinodeListener?
 
@@ -285,7 +285,7 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
         ])
 
         header = L2TableHeader([L2Header(title: "Настройки")])
-        header.install(in: tableView)
+        header?.install(in: tableView)
         headerWidth = tableView.bounds.width
     }
 
@@ -293,7 +293,7 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
         super.viewDidLayoutSubviews()
         if tableView.bounds.width > 0, tableView.bounds.width != headerWidth {
             headerWidth = tableView.bounds.width
-            header.install(in: tableView)
+            header?.install(in: tableView)
         }
     }
 
@@ -364,12 +364,12 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         switch Sec(rawValue: indexPath.section) {
         case .profile:
-            let cell = tableView.dequeueReusableCell(withIdentifier: L2ProfileCell.reuseId, for: indexPath) as! L2ProfileCell
+            guard let cell = tableView.dequeueReusableCell(withIdentifier: L2ProfileCell.reuseId, for: indexPath) as? L2ProfileCell else { return UITableViewCell() }
             cell.configure()
             return cell
         case .menu:
             let row = menu[indexPath.row]
-            let cell = tableView.dequeueReusableCell(withIdentifier: L2MenuCell.reuseId, for: indexPath) as! L2MenuCell
+            guard let cell = tableView.dequeueReusableCell(withIdentifier: L2MenuCell.reuseId, for: indexPath) as? L2MenuCell else { return UITableViewCell() }
             cell.configure(symbol: row.symbol, color: row.color, title: row.title, subtitle: row.subtitle)
             return cell
         default:
@@ -649,7 +649,7 @@ final class Linia2BlockedContactsViewController: Linia2GroupedTableViewControlle
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: Linia2ContactCell.reuseId, for: indexPath) as! Linia2ContactCell
+        guard let cell = tableView.dequeueReusableCell(withIdentifier: Linia2ContactCell.reuseId, for: indexPath) as? Linia2ContactCell else { return UITableViewCell() }
         cell.configure(topics[indexPath.row])
         return cell
     }

@@ -1,0 +1,125 @@
+# Автопроверка «Линия 2.0»: сборка для iOS Simulator и прохождение сценариев XCUITest
+# (стартовый экран → код → регистрация → PIN → Чаты; все вкладки; каждый пункт Настроек;
+#  «Добавить контакт», «Новый чат»; выход → «Войти»; перезапуск с PIN).
+# Скриншоты каждого экрана и crash-отчёты — в артефактах. Тестовые пользователи удаляются всегда.
+# Секрет репозитория: CI_TOKEN (служебный доступ к /invite/api/ci/* на сервере).
+name: UI tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+
+jobs:
+  uitest:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      API: https://v2.chat-linia.site/invite/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1); sudo xcode-select -s "${XC:-/Applications/Xcode.app}"; xcodebuild -version
+
+      - name: Подготовка
+        run: |
+          cp ci/GoogleService-Info.stub.plist GoogleService-Info.plist
+          which pod || sudo gem install cocoapods --no-document
+          pod install --repo-update
+
+      - name: Тестовые данные на сервере
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          [ -n "$CI_TOKEN" ] || { echo "::error::нет секрета CI_TOKEN"; exit 1; }
+          RUN="${{ github.run_id }}${{ github.run_attempt }}"; RUN="${RUN: -10}"
+          curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
+               -d "{\"run\":\"$RUN\"}" -o "$RUNNER_TEMP/ci.json"
+          python3 - "$RUNNER_TEMP/ci.json" >> "$GITHUB_ENV" <<'PY'
+          import json, secrets, sys
+          d = json.load(open(sys.argv[1]))
+          regpw = "Ci-" + secrets.token_urlsafe(10)
+          for k, v in [("L2_CODE", d["code"]), ("L2_LOGIN", d["login"]), ("L2_PASSWORD", d["password"]),
+                       ("L2_REG_LOGIN", d["reg_login"]), ("L2_REG_PASSWORD", regpw)]:
+              print(f"{k}={v}")
+          PY
+          echo "::add-mask::$(grep '^L2_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
+          echo "::add-mask::$(grep '^L2_REG_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
+
+      - name: Симулятор
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json,sys,re
+          d=json.load(sys.stdin)["devices"]
+          best=None
+          for rt,devs in d.items():
+              if "iOS" not in rt: continue
+              ver=tuple(int(x) for x in re.findall(r"\d+", rt.split("iOS")[-1])[:2])
+              for x in devs:
+                  if x["name"].startswith("iPhone") and "Pro" in x["name"] and "Max" not in x["name"]:
+                      k=(ver, x["name"])
+                      if best is None or k>best[0]: best=(k,x["udid"])
+          print(best[1] if best else "")')
+          [ -n "$UDID" ] || UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone[^(]*([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl list devices | grep "$UDID"
+          xcrun simctl boot "$UDID" || true
+
+      - name: XCUITest
+        id: test
+        run: |
+          set -o pipefail
+          export TEST_RUNNER_L2_CODE="$L2_CODE" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" \
+                 TEST_RUNNER_L2_REG_LOGIN="$L2_REG_LOGIN" TEST_RUNNER_L2_REG_PASSWORD="$L2_REG_PASSWORD"
+          xcodebuild test \
+            -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -only-testing:TinodiosUITests/TinodiosUITests/testFullFlow \
+            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|Test Case|failed|passed|crash|\*\* TEST' || true
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
+
+      - name: Скриншоты и отчёты
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/crashes"
+          if [ -d "$RUNNER_TEMP/ui.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" || true
+            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ui.xcresult" > "$RUNNER_TEMP/out/summary.json" 2>/dev/null || true
+            xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/ui.xcresult" > "$RUNNER_TEMP/out/tests.json" 2>/dev/null || true
+          fi
+          find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
+          cp "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          ls -la "$RUNNER_TEMP/out/shots" | head -80; ls "$RUNNER_TEMP/out/crashes"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-test-results
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+      - name: Удалить тестовых пользователей
+        if: always()
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          cat > "$RUNNER_TEMP/del.mjs" <<'EOF'
+          const [login, pass] = process.argv.slice(2);
+          const ws = new WebSocket('wss://v2.chat-linia.site/v0/channels?apikey=AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K');
+          const send = o => ws.send(JSON.stringify(o));
+          ws.onopen = () => send({hi:{id:'1',ver:'0.25'}});
+          ws.onmessage = ev => { const m = JSON.parse(ev.data); if (!m.ctrl) return;
+            if (m.ctrl.id==='1') send({login:{id:'2',scheme:'basic',secret:Buffer.from(login+':'+pass).toString('base64')}});
+            else if (m.ctrl.id==='2') { if (m.ctrl.code>=300) { console.log(login, 'вход', m.ctrl.code); process.exit(0); } send({del:{id:'3',what:'user',hard:true}}); }
+            else if (m.ctrl.id==='3') { console.log(login, 'удалён', m.ctrl.code); process.exit(0); } };
+          setTimeout(()=>{ console.log(login, 'таймаут'); process.exit(0); }, 15000);
+          EOF
+          [ -n "$L2_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_LOGIN" "$L2_PASSWORD" || true
+          [ -n "$L2_REG_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_REG_LOGIN" "$L2_REG_PASSWORD" || true
+          curl -s -X POST "$API/ci/cleanup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' -d '{}'; echo

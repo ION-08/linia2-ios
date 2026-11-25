@@ -216,7 +216,9 @@ final class Linia2WelcomeViewController: Linia2FormViewController {
         let titles = bigTitle("Добро пожаловать\nв «Линия 2.0»", "Мессенджер для своих. Регистрация — только по приглашению.")
         let code = L2Button("У меня есть код приглашения", kind: .primary, symbol: "ticket")
         code.addTarget(self, action: #selector(codeTapped), for: .touchUpInside)
+        code.accessibilityIdentifier = "l2.welcome.code"
         let login = L2Button("Войти", kind: .secondary)
+        login.accessibilityIdentifier = "l2.welcome.login"
         login.addTarget(self, action: #selector(loginTapped), for: .touchUpInside)
 
         stack.addArrangedSubview(logo)
@@ -224,7 +226,7 @@ final class Linia2WelcomeViewController: Linia2FormViewController {
         stack.addArrangedSubview(wmWrap)
         stack.setCustomSpacing(28, after: wmWrap)
         titles.forEach { stack.addArrangedSubview($0) }
-        stack.setCustomSpacing(36, after: titles.last!)
+        if let last = titles.last { stack.setCustomSpacing(36, after: last) }
         stack.addArrangedSubview(code)
         stack.addArrangedSubview(login)
 
@@ -278,6 +280,9 @@ final class Linia2LoginViewController: Linia2FormViewController, UITextFieldDele
         passwordField.delegate = self
         for f in [loginField, passwordField] { f.addTarget(self, action: #selector(edited), for: .editingChanged) }
         loginButton.addTarget(self, action: #selector(loginTapped), for: .touchUpInside)
+        loginField.accessibilityIdentifier = "l2.login.login"
+        passwordField.accessibilityIdentifier = "l2.login.password"
+        loginButton.accessibilityIdentifier = "l2.login.submit"
         let code = UIButton(type: .system)
         code.setTitle("У меня есть код приглашения", for: .normal)
         code.setTitleColor(L2.accent, for: .normal)
@@ -289,7 +294,7 @@ final class Linia2LoginViewController: Linia2FormViewController, UITextFieldDele
         stack.setCustomSpacing(22, after: logo)
         let titles = bigTitle("Вход", "Введите логин и пароль")
         titles.forEach { stack.addArrangedSubview($0) }
-        stack.setCustomSpacing(28, after: titles.last!)
+        if let last = titles.last { stack.setCustomSpacing(28, after: last) }
         stack.addArrangedSubview(loginField)
         stack.addArrangedSubview(passwordField)
         stack.addArrangedSubview(errorText)
@@ -384,7 +389,7 @@ final class Linia2CodeCellsView: UIControl, UIKeyInput, UITextInputTraits {
         render()
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override var canBecomeFirstResponder: Bool { true }
     @objc private func tapped() { becomeFirstResponder() }
@@ -449,6 +454,8 @@ final class Linia2InviteCodeViewController: Linia2FormViewController {
         }
         cells.onComplete = { [weak self] _ in self?.check() }
         nextButton.isEnabled = false
+        nextButton.accessibilityIdentifier = "l2.code.next"
+        cells.accessibilityIdentifier = "l2.code.cells"
         nextButton.addTarget(self, action: #selector(check), for: .touchUpInside)
         let paste = UIButton(type: .system)
         paste.setTitle("Вставить из буфера", for: .normal)
@@ -459,7 +466,7 @@ final class Linia2InviteCodeViewController: Linia2FormViewController {
         stack.addArrangedSubview(logo)
         stack.setCustomSpacing(22, after: logo)
         titles.forEach { stack.addArrangedSubview($0) }
-        stack.setCustomSpacing(30, after: titles.last!)
+        if let last = titles.last { stack.setCustomSpacing(30, after: last) }
         stack.addArrangedSubview(cells)
         stack.addArrangedSubview(errorText)
         stack.setCustomSpacing(26, after: errorText)
@@ -518,7 +525,7 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
         super.init(nibName: nil, bundle: nil)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -541,7 +548,7 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
 
         let titles = bigTitle("Регистрация", "Код принят. Осталось придумать логин и пароль.")
         titles.forEach { stack.addArrangedSubview($0) }
-        stack.setCustomSpacing(26, after: titles.last!)
+        if let last = titles.last { stack.setCustomSpacing(26, after: last) }
         let fields = [nameField, loginField, passwordField, password2Field]
         for (i, f) in fields.enumerated() {
             f.delegate = self
@@ -551,6 +558,11 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
             if f === loginField { stack.addArrangedSubview(hint) }
         }
         registerButton.addTarget(self, action: #selector(registerTapped), for: .touchUpInside)
+        registerButton.accessibilityIdentifier = "l2.reg.submit"
+        nameField.accessibilityIdentifier = "l2.reg.name"
+        loginField.accessibilityIdentifier = "l2.reg.login"
+        passwordField.accessibilityIdentifier = "l2.reg.password"
+        password2Field.accessibilityIdentifier = "l2.reg.password2"
         stack.addArrangedSubview(errorText)
         stack.setCustomSpacing(22, after: errorText)
         stack.addArrangedSubview(registerButton)
@@ -678,7 +690,7 @@ final class Linia2BiometryOfferViewController: Linia2FormViewController {
         super.init(nibName: nil, bundle: nil)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -694,7 +706,7 @@ final class Linia2BiometryOfferViewController: Linia2FormViewController {
         no.addTarget(self, action: #selector(skip), for: .touchUpInside)
         stack.addArrangedSubview(icon)
         titles.forEach { stack.addArrangedSubview($0) }
-        stack.setCustomSpacing(34, after: titles.last!)
+        if let last = titles.last { stack.setCustomSpacing(34, after: last) }
         stack.addArrangedSubview(yes)
         stack.addArrangedSubview(no)
     }

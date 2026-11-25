@@ -19,7 +19,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  uitest:
+    uses: ./.github/workflows/uitest.yml
+    secrets: inherit
+
   build:
+    needs: uitest
     runs-on: macos-26
     timeout-minutes: 90
     env:

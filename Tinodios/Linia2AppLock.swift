@@ -244,7 +244,7 @@ final class Linia2PinViewController: UIViewController {
         modalPresentationStyle = .fullScreen
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 
@@ -357,7 +357,7 @@ final class Linia2PinViewController: UIViewController {
         case .unlock:
             titleLabel.text = "Введите PIN-код"
             hintLabel.text = Linia2AppLock.shared.useBiometrics && Linia2AppLock.shared.biometryName != nil
-                ? "или используйте \(Linia2AppLock.shared.biometryName!)" : "для входа в «Линия 2.0»"
+                ? "или используйте \(Linia2AppLock.shared.biometryName ?? "Face ID")" : "для входа в «Линия 2.0»"
         case .confirmOld:
             titleLabel.text = "Текущий PIN-код"
             hintLabel.text = "Введите текущий PIN-код"
@@ -513,7 +513,7 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
     private let bioSwitch = UISwitch()
 
     init() { super.init(style: .insetGrouped) }
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -557,7 +557,7 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
             cell.textLabel?.text = "PIN-код для входа"
             cell.accessoryView = lockSwitch
         case (1, 0) where lock.biometryName != nil:
-            cell.textLabel?.text = "Разблокировка по \(lock.biometryName!)"
+            cell.textLabel?.text = "Разблокировка по \(lock.biometryName ?? "Face ID")"
             cell.accessoryView = bioSwitch
         default:
             cell.textLabel?.text = "Сменить PIN-код"

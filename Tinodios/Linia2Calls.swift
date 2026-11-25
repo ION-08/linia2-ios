@@ -217,7 +217,7 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: Linia2CallCell.reuseId, for: indexPath) as! Linia2CallCell
+        guard let cell = tableView.dequeueReusableCell(withIdentifier: Linia2CallCell.reuseId, for: indexPath) as? Linia2CallCell else { return UITableViewCell() }
         let item = items[indexPath.row]
         let t = topic(item.topicName)
         cell.configure(item: item, pub: t?.pub, timeText: Linia2CallsViewController.timeText(item.date))
@@ -376,7 +376,7 @@ private final class Linia2CallCell: UITableViewCell {
         ])
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func setHighlighted(_ highlighted: Bool, animated: Bool) {
         super.setHighlighted(highlighted, animated: animated)

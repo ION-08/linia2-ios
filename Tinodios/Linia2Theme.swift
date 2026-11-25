@@ -98,7 +98,7 @@ final class L2PulseView: UIView {
         layer.addSublayer(shape)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -138,7 +138,7 @@ final class L2LogoView: UIStackView {
         accessibilityLabel = "Линия 2.0"
     }
 
-    required init(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init(coder: NSCoder) { super.init(coder: coder) }
 }
 
 // MARK: - Кнопки
@@ -157,7 +157,7 @@ final class L2CircleButton: UIButton {
         accessibilityLabel = accessibility
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.6 : 1 } }
 }
@@ -201,7 +201,7 @@ final class L2Button: UIButton {
         setTitleColor(titleColor(for: .normal)?.withAlphaComponent(0.5), for: .disabled)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.75 : 1 } }
     override var isEnabled: Bool { didSet { alpha = isEnabled ? 1 : 0.6 } }
@@ -223,16 +223,24 @@ final class L2TextField: UITextField {
         heightAnchor.constraint(equalToConstant: L2.fieldHeight).isActive = true
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     var isInvalid = false {
         didSet { layer.borderColor = (isInvalid ? L2.danger : UIColor.clear).cgColor }
     }
 
-    override func textRect(forBounds b: CGRect) -> CGRect { b.insetBy(dx: 18, dy: 0) }
-    override func editingRect(forBounds b: CGRect) -> CGRect { b.insetBy(dx: 18, dy: 0).inset(by: UIEdgeInsets(top: 0, left: 0, bottom: 0, right: rightView == nil ? 0 : 30)) }
-    override func placeholderRect(forBounds b: CGRect) -> CGRect { b.insetBy(dx: 18, dy: 0) }
-    override func rightViewRect(forBounds b: CGRect) -> CGRect { CGRect(x: b.maxX - 44, y: (b.height - 44) / 2, width: 44, height: 44) }
+    // Без insetBy: при нулевой ширине (до раскладки) он даёт CGRect.null с бесконечными координатами,
+    // а это вылет CALayerInvalidGeometry. Считаем прямоугольники вручную, ширина не меньше нуля.
+    private func textArea(_ b: CGRect) -> CGRect {
+        let right: CGFloat = rightView == nil ? 18 : 48
+        return CGRect(x: b.minX + 18, y: b.minY, width: max(0, b.width - 18 - right), height: max(0, b.height))
+    }
+    override func textRect(forBounds b: CGRect) -> CGRect { textArea(b) }
+    override func editingRect(forBounds b: CGRect) -> CGRect { textArea(b) }
+    override func placeholderRect(forBounds b: CGRect) -> CGRect { textArea(b) }
+    override func rightViewRect(forBounds b: CGRect) -> CGRect {
+        CGRect(x: max(0, b.maxX - 44), y: max(0, (b.height - 44) / 2), width: 44, height: min(44, max(0, b.height)))
+    }
 
     /// Кнопка «показать/скрыть пароль».
     func addSecureToggle() {
@@ -273,7 +281,7 @@ final class L2SearchField: UITextField {
         heightAnchor.constraint(equalToConstant: 46).isActive = true
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 }
 
 // MARK: - Фильтры-«пилюли»
@@ -306,7 +314,7 @@ final class L2Chips: UIStackView {
         render()
     }
 
-    required init(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init(coder: NSCoder) { super.init(coder: coder) }
 
     func select(_ i: Int) { selected = i; render() }
 
@@ -364,7 +372,7 @@ final class L2Header: UIView {
                                      v.trailingAnchor.constraint(equalTo: trailingAnchor)])
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 }
 
 // MARK: - Табличная шапка (для UITableView.tableHeaderView): корректный расчёт высоты
@@ -385,7 +393,7 @@ final class L2TableHeader: UIView {
                                      stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20)])
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     /// Установить как tableHeaderView с правильной высотой.
     func install(in table: UITableView) {

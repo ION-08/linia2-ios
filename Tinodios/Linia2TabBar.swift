@@ -21,14 +21,15 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
 
     static func make() -> Linia2TabBarController {
         let storyboard = UIStoryboard(name: "Main", bundle: nil)
-        let chats = storyboard.instantiateViewController(withIdentifier: "ChatsNavigator") as! UINavigationController
+        let chats = (storyboard.instantiateViewController(withIdentifier: "ChatsNavigator") as? UINavigationController)
+            ?? UINavigationController(rootViewController: UIViewController())
         let tc = Linia2TabBarController()
         tc.chatsNavigator = chats
         let calls = UINavigationController(rootViewController: Linia2CallsViewController())
         let contacts = UINavigationController(rootViewController: Linia2ContactsViewController())
         let settings = UINavigationController(rootViewController: Linia2SettingsViewController())
         tc.viewControllers = [chats, calls, contacts, settings]
-        for nav in tc.viewControllers as! [UINavigationController] {
+        for case let nav as UINavigationController in tc.viewControllers ?? [] {
             nav.delegate = tc
             nav.view.backgroundColor = L2.background
         }
@@ -135,6 +136,7 @@ final class Linia2FloatingBar: UIView {
         for (i, t) in Self.tabs.enumerated() {
             let item = Linia2TabItem(title: t.0, symbol: t.1, symbolSelected: t.2)
             item.tag = i
+            item.accessibilityIdentifier = ["l2.tab.chats", "l2.tab.calls", "l2.tab.contacts", "l2.tab.settings"][i]
             item.addTarget(self, action: #selector(tap(_:)), for: .touchUpInside)
             items.append(item)
             stack.addArrangedSubview(item)
@@ -150,7 +152,7 @@ final class Linia2FloatingBar: UIView {
         accessibilityTraits = .tabBar
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     @objc private func tap(_ c: UIControl) {
         L2.haptic()
@@ -202,7 +204,7 @@ private final class Linia2TabItem: UIControl {
         setSelected(false)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не используется") }
+    required init?(coder: NSCoder) { return nil }
 
     func setSelected(_ on: Bool) {
         icon.image = L2.symbol(on ? symbolSelected : symbol, 20, .medium)
