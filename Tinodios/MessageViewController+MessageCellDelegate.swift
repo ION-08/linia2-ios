@@ -127,6 +127,7 @@ extension MessageViewController: MessageCellDelegate {
 
         if !cell.isDeleted, let msgIndex = messageSeqIdIndex[cell.seqId], messages[msgIndex].isSynced {
             let msg = messages[msgIndex]
+            menuItems.append(MessageMenuItem(title: "Реакция", action: #selector(linia2ReactMenu(sender:)), seqId: cell.seqId))
             menuItems.append(MessageMenuItem(title: NSLocalizedString("Reply", comment: "Menu item"), action: #selector(showReplyPreview(sender:)), seqId: cell.seqId))
             menuItems.append(MessageMenuItem(title: NSLocalizedString("Forward", comment: "Menu item"), action: #selector(showForwardSelector(sender:)), seqId: cell.seqId))
             if isFromCurrentSender(message: msg), let content = msg.content {

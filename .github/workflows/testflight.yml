@@ -13,9 +13,6 @@ on:
       version:
         description: "Версия (CFBundleShortVersionString); пусто — из файла VERSION"
         required: false
-  push:
-    branches: [main]
-    paths-ignore: ["**.md"]
 
 concurrency:
   group: testflight

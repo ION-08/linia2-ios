@@ -8,7 +8,7 @@ import UIKit
 import TinodeSDK
 
 class AvatarWithOnlineIndicator: UIView {
-    static let kOnlineColor = UIColor.init(fromHexCode: 0xFF40C040)
+    static let kOnlineColor = L2.online
     static let kOfflineColor = UIColor.init(fromHexCode: 0xFFE0E0E0)
 
     @IBOutlet var contentView: UIView!

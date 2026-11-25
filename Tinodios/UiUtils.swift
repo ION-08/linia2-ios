@@ -254,12 +254,8 @@ class UiUtils {
 
     private static func routeToLoginVC(completion: (() -> (Void))? = nil) {
         DispatchQueue.main.async {
-            let storyboard = UIStoryboard(name: "Main", bundle: nil)
-            let destinationVC = storyboard.instantiateViewController(withIdentifier: "StartNavigator") as! UINavigationController
-
-            if let window = (UIApplication.shared.delegate as! AppDelegate).window {
-                window.rootViewController = destinationVC
-            }
+            // LINIA2: первый экран — «Добро пожаловать в Линия 2.0».
+            Linia2Root.setRoot(Linia2WelcomeViewController.makeRoot())
             completion?()
         }
     }
@@ -277,13 +273,9 @@ class UiUtils {
 
     public static func routeToChatListVC() {
         DispatchQueue.main.async {
-            let storyboard = UIStoryboard(name: "Main", bundle: nil)
-            let initialViewController = storyboard.instantiateViewController(withIdentifier: "ChatsNavigator") as! UINavigationController
-            if let serviceName = SharedUtils.serviceName {
-                initialViewController.title = serviceName
-            }
-            if let window = (UIApplication.shared.delegate as! AppDelegate).window {
-                window.rootViewController = initialViewController
+            // LINIA2: корень — вкладки Чаты | Звонки | Контакты | Настройки.
+            if !(Linia2Root.window?.rootViewController is Linia2TabBarController) {
+                Linia2Root.setRoot(Linia2TabBarController.make())
             }
             UiUtils.setUpPushNotifications()
         }
@@ -291,14 +283,14 @@ class UiUtils {
 
     // Returns the currently presented/active MessageVC if it's open and .
     private static func presentedMessageVC(forTopic topicName: String) -> MessageViewController? {
-        guard let rootVC = (UIApplication.shared.delegate as! AppDelegate).window?.rootViewController as? UINavigationController else {
+        guard let rootVC = Linia2Root.chatsNavigator() else {
             return nil
         }
         return rootVC.viewControllers.filter { ($0 as? MessageViewController)?.topic?.name == topicName }.first as? MessageViewController
     }
 
     private static func isShowingChatListVC() -> Bool {
-        guard let rootVC = (UIApplication.shared.delegate as! AppDelegate).window?.rootViewController as? UINavigationController else {
+        guard let rootVC = Linia2Root.chatsNavigator() else {
             return false
         }
         return rootVC.viewControllers.contains(where: { $0 is ChatListViewController })
@@ -306,7 +298,7 @@ class UiUtils {
 
     // Returns true if the app is showing the CallVC for the specified topic.
     public static func isShowingCallVC(forTopic topic: String) -> Bool {
-        guard let rootVC = (UIApplication.shared.delegate as! AppDelegate).window?.rootViewController as? UINavigationController else {
+        guard let rootVC = Linia2Root.chatsNavigator() else {
             return false
         }
         return rootVC.viewControllers.contains(where: { ($0 as? CallViewController)?.topic?.name == topic })
@@ -330,19 +322,19 @@ class UiUtils {
 
             var shouldReplaceRootVC = true
             var rootVC: UINavigationController
-            if isShowingChatListVC() {
-                rootVC = keyWindow.rootViewController as! UINavigationController
+            var newRoot: UIViewController? = nil
+            if isShowingChatListVC(), let chatsNav = Linia2Root.chatsNavigator() {
+                rootVC = chatsNav
+                Linia2TabBarController.current?.selectTab(.chats)
                 // The app is in the foreground.
                 while !(rootVC.topViewController is ChatListViewController) {
                     rootVC.popViewController(animated: false)
                 }
                 shouldReplaceRootVC = false
             } else {
-                rootVC = storyboard.instantiateViewController(
-                    withIdentifier: "ChatsNavigator") as! UINavigationController
-                if let serviceName = SharedUtils.serviceName {
-                    rootVC.title = serviceName
-                }
+                let tabs = Linia2TabBarController.make()
+                rootVC = tabs.chatsNavigator
+                newRoot = tabs
             }
             let messageVC =
                 storyboard.instantiateViewController(
@@ -350,7 +342,7 @@ class UiUtils {
             messageVC.topicName = topicId
             rootVC.pushViewController(messageVC, animated: false)
             if shouldReplaceRootVC {
-                keyWindow.rootViewController = rootVC
+                keyWindow.rootViewController = newRoot ?? rootVC
             }
             UiUtils.setUpPushNotifications()
             completion?(messageVC)

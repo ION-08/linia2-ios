@@ -68,19 +68,19 @@ class MessageViewController: UIViewController {
 
         // Light/dark gray color: outgoing messages
         static let kOutgoingBubbleColorLight = UIColor(red: 244/255, green: 244/255, blue: 244/255, alpha: 1)
-        static let kOutgoingBubbleColorDark = UIColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 1)
+        static let kOutgoingBubbleColorDark = L2.accentStrong  // LINIA2_COLORS: свои — фиолетовые
         // And corresponding text color
         static let kOutgoingTextColorLight = UIColor.darkText
-        static let kOutgoingTextColorDark = UIColor.lightText
+        static let kOutgoingTextColorDark = UIColor.white
         // Bright/dark green color
         static let kIncomingBubbleColorLight = UIColor(red: 69/255, green: 193/255, blue: 89/255, alpha: 1)
-        static let kIncomingBubbleColorDark = UIColor(red: 40/255, green: 120/255, blue: 60/255, alpha: 1)
+        static let kIncomingBubbleColorDark = L2.surface2
         // And corresponding font color
         static let kIncomingTextColorLight = UIColor.white
-        static let kIncomingTextColorDark = UIColor.lightText
+        static let kIncomingTextColorDark = UIColor.white
         // Meta-messages, such as "Content deleted".
         static let kDeletedMessageBubbleColorLight = UIColor(fromHexCode: 0xffe3f2fd)
-        static let kDeletedMessageBubbleColorDark = UIColor(fromHexCode: 0xff263238)
+        static let kDeletedMessageBubbleColorDark = L2.surface
         static let kDeletedMessageTextColor = UIColor.gray
 
         static let kContentFont = UIFont.preferredFont(forTextStyle: .body)
@@ -197,6 +197,9 @@ class MessageViewController: UIViewController {
 
     // Messages to be displayed
     var messages: [Message] = []
+    // LINIA2: реакции — seq сообщения → эмодзи → uid; свои реакции → seq сообщения-реакции.
+    var linia2Reactions: [Int: [String: [String]]] = [:]
+    var linia2MyReactions: [Int: [String: Int]] = [:]
     // For updating individual messages, we need:
     // * Tinode sequence id -> messages offset.
     var messageSeqIdIndex: [Int: Int] = [:]
@@ -369,7 +372,7 @@ class MessageViewController: UIViewController {
 
         // Setup "Go to latest message" button.
         let buttonGoToLatest = UIButton(type: .custom)
-        buttonGoToLatest.backgroundColor = .secondarySystemBackground
+        buttonGoToLatest.backgroundColor = L2.surface2
         buttonGoToLatest.imageView?.tintColor = .secondaryLabel
         buttonGoToLatest.setImage(UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)), for: .normal)
         buttonGoToLatest.sizeToFit()
@@ -394,6 +397,7 @@ class MessageViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        defer { linia2InstallReactionGestures() }
 
         if let layout = collectionView?.collectionViewLayout as? MessageViewLayout {
             layout.delegate = self
@@ -595,8 +599,8 @@ class MessageViewController: UIViewController {
     }
 
     private func setInterfaceColors() {
-        if traitCollection.userInterfaceStyle == .dark {
-            view.backgroundColor = .black
+        if true {
+            view.backgroundColor = L2.background
         } else {
             view.backgroundColor = .white
         }
@@ -703,6 +707,7 @@ extension MessageViewController: UICollectionViewDataSource {
 
         // Draw the bubble
         bubbleDecorator(for: message, at: indexPath)(cell.containerView)
+        linia2RenderReactions(cell: cell, message: message)
 
         return cell
     }
@@ -753,7 +758,7 @@ extension MessageViewController: UICollectionViewDataSource {
             cell.deliveryMarker.image = image
             cell.deliveryMarker.tintColor = tint
         }
-        let markerTextColor = isFromCurrentSender(message: message) ? UIColor.gray : UIColor.lightText
+        let markerTextColor = isFromCurrentSender(message: message) ? UIColor.white.withAlphaComponent(0.75) : L2.textSecondary
         if let ts = message.ts {
             cell.timestampLabel.text = RelativeDateFormatter.shared.timeOnly(from: ts)
             cell.timestampLabel.textColor = markerTextColor
@@ -774,7 +779,7 @@ extension MessageViewController: UICollectionViewDataSource {
 
     func newDateLabel(for message: Message, at indexPath: IndexPath) -> NSAttributedString? {
         if isNewDateLabelVisible(at: indexPath) {
-            return NSAttributedString(string: RelativeDateFormatter.shared.dateOnly(from: message.ts), attributes: [NSAttributedString.Key.font: Constants.kNewDateFont, NSAttributedString.Key.foregroundColor: UIColor.darkGray])
+            return NSAttributedString(string: RelativeDateFormatter.shared.dateOnly(from: message.ts), attributes: [NSAttributedString.Key.font: Constants.kNewDateFont, NSAttributedString.Key.foregroundColor: L2.textSecondary])
         }
         return nil
     }
@@ -791,7 +796,7 @@ extension MessageViewController: UICollectionViewDataSource {
 
         return NSAttributedString(string: senderName!, attributes: [
             NSAttributedString.Key.font: Constants.kSenderNameFont,
-            NSAttributedString.Key.foregroundColor: UIColor.gray
+            NSAttributedString.Key.foregroundColor: L2.accent
             ])
     }
 
@@ -925,7 +930,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
         let containerSize = calcContainerSize(for: message, avatarsVisible: hasAvatars, progressVisible: showUploadProgress)
         // Get cell size.
         let cellSize = !isDeleted ? calcCellSize(forItemAt: indexPath) : containerSize
-        attr.cellSpacing = Constants.kVerticalCellSpacing
+        attr.cellSpacing = Constants.kVerticalCellSpacing + linia2ReactionSpacing(for: message.seqId)
 
         // Height of the field with the current date above the first message of the day.
         let newDateLabelHeight = !isDeleted ? calcNewDateLabelHeight(at: indexPath) : 0

@@ -649,6 +649,91 @@ public class MessageDb {
         }
     }
 
+    /// Линия 2.0: последние звонки из всех топиков, новые сверху.
+    ///
+    /// В Tinode звонок — это сообщение с заголовком `webrtc` (исходное, обычно `started`) плюс
+    /// сообщения-замены (`head.replace = ":<seq>"`) с новыми состояниями (`accepted`, `finished`, `missed`…).
+    /// Метод возвращает по одной записи на звонок:
+    /// * `seq`, `ts`, `from`, `msgId` — исходного сообщения (если оно есть в БД, иначе — самой свежей версии);
+    /// * `head` — заголовок исходного сообщения, поверх которого наложен заголовок самой свежей версии
+    ///   (итоговое состояние `webrtc`, длительность `webrtc-duration`, признак `aonly`);
+    /// * `content` — самой свежей версии; `topic` — имя топика.
+    /// - Parameter limit: максимальное число звонков в результате.
+    public func queryRecentCalls(limit: Int) -> [StoredMessage] {
+        guard limit > 0, let topicDb = baseDb.topicDb else { return [] }
+        let topics = topicDb.table
+        // Заголовок хранится как "Dictionary<String, JSONValue>;{...json...}", поэтому ищем ключ "webrtc" подстрокой.
+        let query = self.table
+            .select(self.table[*], topics[topicDb.topic])
+            .join(.leftOuter, topics, on: self.table[self.topicId] == topics[topicDb.id])
+            .filter(self.table[self.delId] == nil && self.table[self.head].like("%\"webrtc\"%"))
+            .order(self.table[self.ts].desc)
+            .limit(limit * 4)
+
+        // Группировка версий одного звонка по ключу (topicId, seq исходного сообщения).
+        struct CallGroup {
+            var latest: Row
+            var latestSeq: Int
+            var original: Row?
+            var callSeq: Int
+        }
+        var groups: [String: CallGroup] = [:]
+        do {
+            for row in try db.prepare(query) {
+                guard let tid = row[self.topicId] else { continue }
+                let ownSeq = row[self.seq] ?? 0
+                let repl = row[self.replSeq]
+                let callSeq = repl ?? ownSeq
+                let key = "\(tid):\(callSeq)"
+                var g = groups[key] ?? CallGroup(latest: row, latestSeq: ownSeq, original: nil, callSeq: callSeq)
+                if ownSeq > g.latestSeq {
+                    g.latest = row
+                    g.latestSeq = ownSeq
+                }
+                if repl == nil {
+                    g.original = row
+                }
+                groups[key] = g
+            }
+        } catch SQLite.Result.error(message: let errMsg, code: let code, statement: _) {
+            BaseDb.log.error("MessageDb - queryRecentCalls SQLite error: code = %d, error = %@", code, errMsg)
+            return []
+        } catch {
+            BaseDb.log.error("MessageDb - queryRecentCalls operation failed: error = %@", error.localizedDescription)
+            return []
+        }
+
+        var result: [StoredMessage] = []
+        for g in groups.values {
+            let base = g.original ?? g.latest
+            let sm = StoredMessage()
+            sm.msgId = base[self.id]
+            sm.topicId = base[self.topicId]
+            sm.userId = base[self.userId]
+            sm.dbStatus = BaseDb.Status(rawValue: base[self.status] ?? 0) ?? .undefined
+            sm.from = base[self.sender]
+            if let orig = g.original {
+                sm.ts = orig[self.ts]
+            } else {
+                sm.ts = g.latest[self.effectiveTs] ?? g.latest[self.ts]
+            }
+            sm.seq = g.callSeq
+            var head: [String: JSONValue] = [:]
+            if let orig = g.original, let h: [String: JSONValue] = Tinode.deserializeObject(from: orig[self.head]) {
+                head = h
+            }
+            if let h: [String: JSONValue] = Tinode.deserializeObject(from: g.latest[self.head]) {
+                head.merge(h) { (_, new) in new }
+            }
+            sm.head = head
+            sm.content = Drafty.deserialize(from: g.latest[self.content])
+            sm.topic = base[topicDb.topic]
+            result.append(sm)
+        }
+        result.sort { ($0.ts ?? Date.distantPast) > ($1.ts ?? Date.distantPast) }
+        return Array(result.prefix(limit))
+    }
+
     func getMessage(fromTopic topicId: Int64, byEffectiveSeq seqId: Int) -> StoredMessage? {
         let record = self.table.filter(self.topicId == topicId && self.effectiveSeq == seqId)
         if let row = try? db.pluck(record) {

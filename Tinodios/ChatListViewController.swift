@@ -32,6 +32,12 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
     var router: ChatListRoutingLogic?
     // Archived chats footer
     var archivedChatsFooter: UIView?
+    // LINIA2: поиск и фильтры «Все / Непрочитанные».
+    var linia2All: [DefaultComTopic] = []
+    var linia2FilterIndex = 0
+    var linia2Query = ""
+    var linia2Header: L2TableHeader?
+    var linia2HeaderWidth: CGFloat = 0
 
     private func setup() {
         let viewController = self
@@ -53,7 +59,7 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
         archivedChatsFooter!.backgroundColor = tableView.backgroundColor
         let button = UIButton(frame: CGRect(x: 0, y: 0, width: tableView.frame.width, height: ChatListViewController.kFooterHeight))
         button.setTitle(NSLocalizedString("Archived Chats", comment: "View title"), for: .normal)
-        button.setTitleColor(UIColor.darkGray, for: .normal)
+        button.setTitleColor(L2.accent, for: .normal)
         button.titleLabel?.font = button.titleLabel?.font.withSize(15)
         button.addTarget(self, action: #selector(navigateToArchive), for: .touchUpInside)
         archivedChatsFooter!.addSubview(button)
@@ -76,6 +82,7 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
         super.viewDidLoad()
         // Do any additional setup after loading the view, typically from a nib.
         setup()
+        linia2Setup()
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(self.appGoingInactive),
@@ -123,15 +130,31 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
     //     self.interactor?.cleanup()
     // }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: animated)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: animated)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        linia2LayoutHeaderIfNeeded()
+    }
+
     func displayLoginView() {
         UiUtils.logoutAndRouteToLoginVC()
     }
 
     func displayChats(_ topics: [DefaultComTopic], archivedTopics: [DefaultComTopic]?) {
         assert(Thread.isMainThread)
-        self.topics = topics
+        self.linia2All = topics
+        self.topics = linia2Filtered(topics)
         self.archivedTopics = archivedTopics
-        self.rowIndex = Dictionary(uniqueKeysWithValues: topics.enumerated().map { (index, topic) in (topic.name, index) })
+        self.rowIndex = Dictionary(uniqueKeysWithValues: self.topics.enumerated().map { (index, topic) in (topic.name, index) })
         self.tableView!.reloadData()
         self.toggleFooter(visible: self.numArchivedTopics > 0)
     }
@@ -145,6 +168,7 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
 
     func deleteChat(_ name: String) {
         assert(Thread.isMainThread)
+        linia2All.removeAll { $0.name == name }
         guard let position = rowIndex[name] else { return }
         self.topics.remove(at: position)
         self.tableView!.deleteRows(at: [IndexPath(item: position, section: 0)], with: .fade)
@@ -205,6 +229,10 @@ extension ChatListViewController {
 
     /// Show notification that the chat list is empty
     public func toggleNoChatsNote(on show: Bool) {
+        if show {
+            tableView.backgroundView = linia2EmptyNote()
+            return
+        }
         if show {
             let rect = CGRect(x: 0, y: 0, width: view.bounds.width, height: view.bounds.height)
             let messageLabel = UILabel(frame: rect)

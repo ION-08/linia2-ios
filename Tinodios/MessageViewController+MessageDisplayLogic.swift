@@ -61,6 +61,7 @@ extension MessageViewController: MessageDisplayLogic {
             items.append(self.navBarCallBtn)
         }
         self.navigationItem.setRightBarButtonItems(items, animated: false)
+        linia2StyleTitleBar(pub: pub, online: isSlf ? nil : online)
     }
 
     func displayPinnedMessages(pins: [Int], selected: Int) {
@@ -85,11 +86,14 @@ extension MessageViewController: MessageDisplayLogic {
     func setOnline(online: Bool?) {
         assert(Thread.isMainThread)
         navBarAvatarView.online = online
+        navBarAvatarView.linia2StyleIndicator()
+        linia2SetStatus(online)
     }
 
     func runTypingAnimation() {
         assert(Thread.isMainThread)
         navBarAvatarView.presentTypingAnimation(steps: 30)
+        linia2SetTyping()
     }
 
     func reloadAllMessages() {
@@ -101,7 +105,7 @@ extension MessageViewController: MessageDisplayLogic {
         assert(Thread.isMainThread)
         guard collectionView != nil else { return }
         let oldData = self.messages
-        let newData: [StoredMessage] = messages
+        let newData: [StoredMessage] = linia2ExtractReactions(messages)
 
         // Both empty: no change.
         guard !oldData.isEmpty || !newData.isEmpty else { return }

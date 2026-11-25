@@ -87,6 +87,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             SharedUtils.identifyAndConfigureBranding()
         }
         SharedUtils.registerUserDefaults()
+        // LINIA2: тёмная тема с фиолетовым акцентом.
+        Linia2Theme.apply(to: window)
         // LINIA2: блокировка приложения PIN-кодом / Face ID.
         Linia2AppLock.shared.start()
 
@@ -99,6 +101,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             } else {
                 UiUtils.routeToChatListVC()
             }
+        } else {
+            // LINIA2: не вошли — «Добро пожаловать».
+            window?.rootViewController = Linia2WelcomeViewController.makeRoot()
         }
 
         registerForVoip()

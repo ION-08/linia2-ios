@@ -445,3 +445,231 @@ edit("Tinodios/Info.plist", faceid_plist)
 edit("Tinodios/ru.lproj/InfoPlist.strings", lambda s: s if "NSFaceIDUsageDescription" in s else
      s.rstrip("\n") + '\n/* Privacy - Face ID Usage Description */\n"NSFaceIDUsageDescription" = "Face ID используется, чтобы разблокировать «%s»";\n' % NAME)
 print("done-2")
+
+# =====================================================================
+# Дизайн «Линия 2.0» (тёмная тема, вкладки, онбординг) — ноябрь 2026
+# =====================================================================
+NEW_FILES2 = ["Linia2Theme.swift", "Linia2TabBar.swift", "Linia2Calls.swift", "Linia2Contacts.swift",
+              "Linia2Settings.swift", "Linia2ChatStyle.swift", "Linia2Reactions.swift"]
+NEW_FILES[:] = NEW_FILES + [f for f in NEW_FILES2 if (R / "Tinodios" / f).exists() and f not in NEW_FILES]
+edit("Tinodios.xcodeproj/project.pbxproj", add_files)
+
+ROOT_NAV = "(UIApplication.shared.delegate as! AppDelegate).window?.rootViewController as? UINavigationController"
+
+
+def uiutils_tabs(s):
+    if "Linia2TabBarController.make()" in s:
+        return s
+    # Экран входа -> «Добро пожаловать»
+    s = must(s, '''            let storyboard = UIStoryboard(name: "Main", bundle: nil)
+            let destinationVC = storyboard.instantiateViewController(withIdentifier: "StartNavigator") as! UINavigationController
+
+            if let window = (UIApplication.shared.delegate as! AppDelegate).window {
+                window.rootViewController = destinationVC
+            }
+            completion?()''', '''            // LINIA2: первый экран — «Добро пожаловать в Линия 2.0».
+            Linia2Root.setRoot(Linia2WelcomeViewController.makeRoot())
+            completion?()''')
+    # Чаты -> вкладки
+    s = must(s, '''            let storyboard = UIStoryboard(name: "Main", bundle: nil)
+            let initialViewController = storyboard.instantiateViewController(withIdentifier: "ChatsNavigator") as! UINavigationController
+            if let serviceName = SharedUtils.serviceName {
+                initialViewController.title = serviceName
+            }
+            if let window = (UIApplication.shared.delegate as! AppDelegate).window {
+                window.rootViewController = initialViewController
+            }
+            UiUtils.setUpPushNotifications()''', '''            // LINIA2: корень — вкладки Чаты | Звонки | Контакты | Настройки.
+            if !(Linia2Root.window?.rootViewController is Linia2TabBarController) {
+                Linia2Root.setRoot(Linia2TabBarController.make())
+            }
+            UiUtils.setUpPushNotifications()''')
+    s = s.replace("guard let rootVC = " + ROOT_NAV + " else {", "guard let rootVC = Linia2Root.chatsNavigator() else {")
+    # Переход к чату: переключиться на вкладку «Чаты».
+    s = must(s, '''            var shouldReplaceRootVC = true
+            var rootVC: UINavigationController
+            if isShowingChatListVC() {
+                rootVC = keyWindow.rootViewController as! UINavigationController''', '''            var shouldReplaceRootVC = true
+            var rootVC: UINavigationController
+            var newRoot: UIViewController? = nil
+            if isShowingChatListVC(), let chatsNav = Linia2Root.chatsNavigator() {
+                rootVC = chatsNav
+                Linia2TabBarController.current?.selectTab(.chats)''')
+    s = must(s, '''                rootVC = storyboard.instantiateViewController(
+                    withIdentifier: "ChatsNavigator") as! UINavigationController
+                if let serviceName = SharedUtils.serviceName {
+                    rootVC.title = serviceName
+                }''', '''                let tabs = Linia2TabBarController.make()
+                rootVC = tabs.chatsNavigator
+                newRoot = tabs''')
+    s = must(s, '''            if shouldReplaceRootVC {
+                keyWindow.rootViewController = rootVC
+            }''', '''            if shouldReplaceRootVC {
+                keyWindow.rootViewController = newRoot ?? rootVC
+            }''')
+    return s
+
+
+edit("Tinodios/UiUtils.swift", uiutils_tabs)
+edit("Tinodios/MessageInteractor.swift", lambda s: s.replace(
+    "guard let window = (UIApplication.shared.delegate as! AppDelegate).window, let navVC = window.rootViewController as? UINavigationController else {",
+    "guard let navVC = Linia2Root.chatsNavigator() else {"))
+
+
+def app_delegate_theme(s):
+    if "Linia2Theme.apply" in s:
+        return s
+    s = must(s, "        // LINIA2: блокировка приложения PIN-кодом / Face ID.\n        Linia2AppLock.shared.start()\n",
+             "        // LINIA2: тёмная тема с фиолетовым акцентом.\n        Linia2Theme.apply(to: window)\n"
+             "        // LINIA2: блокировка приложения PIN-кодом / Face ID.\n        Linia2AppLock.shared.start()\n")
+    s = must(s, '''            } else {
+                UiUtils.routeToChatListVC()
+            }
+        }
+''', '''            } else {
+                UiUtils.routeToChatListVC()
+            }
+        } else {
+            // LINIA2: не вошли — «Добро пожаловать».
+            window?.rootViewController = Linia2WelcomeViewController.makeRoot()
+        }
+''')
+    return s
+
+
+edit("Tinodios/AppDelegate.swift", app_delegate_theme)
+
+
+def info_dark(s):
+    if "UIUserInterfaceStyle" in s:
+        return s
+    return s.replace("\t<key>UIViewControllerBasedStatusBarAppearance</key>",
+                     "\t<key>UIUserInterfaceStyle</key>\n\t<string>Dark</string>\n\t<key>UIViewControllerBasedStatusBarAppearance</key>", 1)
+
+
+edit("Tinodios/Info.plist", info_dark)
+print("done-3")
+
+
+def chatlist_vc(s):
+    if "linia2All" in s:
+        return s
+    s = must(s, "    var archivedChatsFooter: UIView?\n",
+             "    var archivedChatsFooter: UIView?\n"
+             "    // LINIA2: поиск и фильтры «Все / Непрочитанные».\n"
+             "    var linia2All: [DefaultComTopic] = []\n    var linia2FilterIndex = 0\n    var linia2Query = \"\"\n"
+             "    var linia2Header: L2TableHeader?\n    var linia2HeaderWidth: CGFloat = 0\n")
+    s = must(s, "        setup()\n\n", "        setup()\n        linia2Setup()\n\n")
+    s = must(s, "        self.topics = topics\n        self.archivedTopics = archivedTopics\n",
+             "        self.linia2All = topics\n        self.topics = linia2Filtered(topics)\n        self.archivedTopics = archivedTopics\n")
+    s = must(s, "        self.rowIndex = Dictionary(uniqueKeysWithValues: topics.enumerated().map { (index, topic) in (topic.name, index) })\n",
+             "        self.rowIndex = Dictionary(uniqueKeysWithValues: self.topics.enumerated().map { (index, topic) in (topic.name, index) })\n")
+    s = must(s, "    func deleteChat(_ name: String) {\n        assert(Thread.isMainThread)\n",
+             "    func deleteChat(_ name: String) {\n        assert(Thread.isMainThread)\n        linia2All.removeAll { $0.name == name }\n")
+    s = must(s, "    func displayLoginView() {",
+             "    override func viewWillAppear(_ animated: Bool) {\n        super.viewWillAppear(animated)\n"
+             "        navigationController?.setNavigationBarHidden(true, animated: animated)\n    }\n\n"
+             "    override func viewWillDisappear(_ animated: Bool) {\n        super.viewWillDisappear(animated)\n"
+             "        navigationController?.setNavigationBarHidden(false, animated: animated)\n    }\n\n"
+             "    override func viewDidLayoutSubviews() {\n        super.viewDidLayoutSubviews()\n        linia2LayoutHeaderIfNeeded()\n    }\n\n"
+             "    func displayLoginView() {")
+    s = s.replace("button.setTitleColor(UIColor.darkGray, for: .normal)", "button.setTitleColor(L2.accent, for: .normal)")
+    s = must(s, "        if show {\n            let rect = CGRect(x: 0, y: 0, width: view.bounds.width, height: view.bounds.height)",
+             "        if show {\n            tableView.backgroundView = linia2EmptyNote()\n            return\n        }\n        if show {\n            let rect = CGRect(x: 0, y: 0, width: view.bounds.width, height: view.bounds.height)")
+    return s
+
+
+edit("Tinodios/ChatListViewController.swift", chatlist_vc)
+edit("Tinodios/widgets/ChatListViewCell.swift", lambda s: s if "linia2Style" in s else must(
+    s, "        icon.set(pub: topic.pub, id: topic.name, online: (topic.isChannel || topic.isSlfType) ? nil : topic.online, deleted: topic.deleted)\n",
+    "        icon.set(pub: topic.pub, id: topic.name, online: (topic.isChannel || topic.isSlfType) ? nil : topic.online, deleted: topic.deleted)\n"
+    "        icon.linia2StyleIndicator()\n        linia2Style(topic)\n"))
+edit("Tinodios/widgets/AvatarWithOnlineIndicator.swift", lambda s: s.replace(
+    "static let kOnlineColor = UIColor.init(fromHexCode: 0xFF40C040)", "static let kOnlineColor = L2.online"))
+edit("Tinodios/Base.lproj/Main.storyboard", lambda s: s.replace(
+    '<segue destination="qBo-ye-avT" kind="show" id="PRK-dk-KAe"/>',
+    '<segue destination="qBo-ye-avT" kind="show" identifier="Chats2NewChat" id="PRK-dk-KAe"/>'))
+print("done-4")
+
+
+def message_vc(s):
+    if "LINIA2_COLORS" in s:
+        return s
+    s = must(s, "        static let kOutgoingBubbleColorDark = UIColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 1)",
+             "        static let kOutgoingBubbleColorDark = L2.accentStrong  // LINIA2_COLORS: свои — фиолетовые")
+    s = must(s, "        static let kOutgoingTextColorDark = UIColor.lightText", "        static let kOutgoingTextColorDark = UIColor.white")
+    s = must(s, "        static let kIncomingBubbleColorDark = UIColor(red: 40/255, green: 120/255, blue: 60/255, alpha: 1)",
+             "        static let kIncomingBubbleColorDark = L2.surface2")
+    s = must(s, "        static let kIncomingTextColorDark = UIColor.lightText", "        static let kIncomingTextColorDark = UIColor.white")
+    s = must(s, "        static let kDeletedMessageBubbleColorDark = UIColor(fromHexCode: 0xff263238)",
+             "        static let kDeletedMessageBubbleColorDark = L2.surface")
+    s = must(s, "        if traitCollection.userInterfaceStyle == .dark {\n            view.backgroundColor = .black\n",
+             "        if true {\n            view.backgroundColor = L2.background\n")
+    s = must(s, "        let markerTextColor = isFromCurrentSender(message: message) ? UIColor.gray : UIColor.lightText",
+             "        let markerTextColor = isFromCurrentSender(message: message) ? UIColor.white.withAlphaComponent(0.75) : L2.textSecondary")
+    s = s.replace("attributes: [NSAttributedString.Key.font: Constants.kNewDateFont, NSAttributedString.Key.foregroundColor: UIColor.darkGray])",
+                  "attributes: [NSAttributedString.Key.font: Constants.kNewDateFont, NSAttributedString.Key.foregroundColor: L2.textSecondary])")
+    s = s.replace("            NSAttributedString.Key.foregroundColor: UIColor.gray\n            ])",
+                  "            NSAttributedString.Key.foregroundColor: L2.accent\n            ])")
+    s = s.replace("buttonGoToLatest.backgroundColor = .secondarySystemBackground", "buttonGoToLatest.backgroundColor = L2.surface2")
+    return s
+
+
+edit("Tinodios/MessageViewController.swift", message_vc)
+
+
+def message_display(s):
+    if "linia2StyleTitleBar" in s:
+        return s
+    s = must(s, "        self.navigationItem.setRightBarButtonItems(items, animated: false)\n    }\n",
+             "        self.navigationItem.setRightBarButtonItems(items, animated: false)\n"
+             "        linia2StyleTitleBar(pub: pub, online: isSlf ? nil : online)\n    }\n")
+    s = must(s, "        navBarAvatarView.online = online\n", "        navBarAvatarView.online = online\n        navBarAvatarView.linia2StyleIndicator()\n        linia2SetStatus(online)\n")
+    s = must(s, "        navBarAvatarView.presentTypingAnimation(steps: 30)\n", "        navBarAvatarView.presentTypingAnimation(steps: 30)\n        linia2SetTyping()\n")
+    return s
+
+
+edit("Tinodios/MessageViewController+MessageDisplayLogic.swift", message_display)
+
+
+def send_bar(s):
+    if "linia2Style(container" in s:
+        return s
+    s = must(s, "        nibView.backgroundColor = UIColor.lightGray.withAlphaComponent(0.5)\n",
+             "        nibView.backgroundColor = L2.background\n")
+    s = must(s, "        showAudioBar(.hidden)\n    }\n", "        showAudioBar(.hidden)\n        linia2Style(container: self)\n    }\n")
+    s = s.replace('static let kSendButtonImageWave = UIImage(systemName: "waveform.circle.fill"', 'static let kSendButtonImageWave = UIImage(systemName: "mic.circle.fill"')
+    s = s.replace('static let kSendButtonImageWavePressed = UIImage(systemName: "waveform.circle.fill"', 'static let kSendButtonImageWavePressed = UIImage(systemName: "mic.circle.fill"')
+    s = s.replace('static let kSendButtonImageArrow = UIImage(systemName: "arrow.up.circle.fill"', 'static let kSendButtonImageArrow = UIImage(systemName: "paperplane.circle.fill"')
+    return s
+
+
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar)
+print("done-5")
+
+
+def message_vc_reactions(s):
+    if "linia2Reactions" in s:
+        return s
+    s = must(s, "    var messages: [Message] = []\n",
+             "    var messages: [Message] = []\n"
+             "    // LINIA2: реакции — seq сообщения → эмодзи → uid; свои реакции → seq сообщения-реакции.\n"
+             "    var linia2Reactions: [Int: [String: [String]]] = [:]\n    var linia2MyReactions: [Int: [String: Int]] = [:]\n")
+    s = must(s, "        bubbleDecorator(for: message, at: indexPath)(cell.containerView)\n",
+             "        bubbleDecorator(for: message, at: indexPath)(cell.containerView)\n        linia2RenderReactions(cell: cell, message: message)\n")
+    s = must(s, "        attr.cellSpacing = Constants.kVerticalCellSpacing\n",
+             "        attr.cellSpacing = Constants.kVerticalCellSpacing + linia2ReactionSpacing(for: message.seqId)\n")
+    return s
+
+
+edit("Tinodios/MessageViewController.swift", message_vc_reactions)
+edit("Tinodios/MessageViewController+MessageDisplayLogic.swift", lambda s: s if "linia2ExtractReactions" in s else must(
+    s, "        let newData: [StoredMessage] = messages\n", "        let newData: [StoredMessage] = linia2ExtractReactions(messages)\n"))
+edit("Tinodios/MessageViewController+MessageCellDelegate.swift", lambda s: s if "linia2ReactMenu" in s else must(
+    s, '            menuItems.append(MessageMenuItem(title: NSLocalizedString("Reply", comment: "Menu item"), action: #selector(showReplyPreview(sender:)), seqId: cell.seqId))\n',
+    '            menuItems.append(MessageMenuItem(title: "Реакция", action: #selector(linia2ReactMenu(sender:)), seqId: cell.seqId))\n'
+    '            menuItems.append(MessageMenuItem(title: NSLocalizedString("Reply", comment: "Menu item"), action: #selector(showReplyPreview(sender:)), seqId: cell.seqId))\n'))
+print("done-6")
+edit("Tinodios/MessageViewController.swift", lambda s: s if "linia2InstallReactionGestures()" in s else must(
+    s, "    override func viewDidLoad() {\n        super.viewDidLoad()\n\n        if let layout = collectionView?.collectionViewLayout as? MessageViewLayout {",
+    "    override func viewDidLoad() {\n        super.viewDidLoad()\n        defer { linia2InstallReactionGestures() }\n\n        if let layout = collectionView?.collectionViewLayout as? MessageViewLayout {"))

@@ -60,9 +60,9 @@ class SendMessageBar: UIView {
         // Initial input text weight.
         static let kInitialInputFieldHeight: CGFloat = 40
 
-        static let kSendButtonImageWave = UIImage(systemName: "waveform.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))!
-        static let kSendButtonImageWavePressed = UIImage(systemName: "waveform.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsPressed))!
-        static let kSendButtonImageArrow = UIImage(systemName: "arrow.up.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))!
+        static let kSendButtonImageWave = UIImage(systemName: "mic.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))!
+        static let kSendButtonImageWavePressed = UIImage(systemName: "mic.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsPressed))!
+        static let kSendButtonImageArrow = UIImage(systemName: "paperplane.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))!
         static let kSendButtonImageEditCheck = UIImage(systemName: "checkmark.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: Constants.kSendButtonPointsNormal))
         static let kWaveInsetsShort = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 88)
         static let kWaveInsetsLong = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 52)
@@ -290,7 +290,7 @@ class SendMessageBar: UIView {
     private func loadNib() {
         let nib = UINib(nibName: "SendMessageBar", bundle: Bundle(for: type(of: self)))
         let nibView = nib.instantiate(withOwner: self, options: nil).first as! UIView
-        nibView.backgroundColor = UIColor.lightGray.withAlphaComponent(0.5)
+        nibView.backgroundColor = L2.background
         nibView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(nibView)
         NSLayoutConstraint.activate([
@@ -326,6 +326,7 @@ class SendMessageBar: UIView {
         togglePendingPreviewBar(withMessage: nil)
 
         showAudioBar(.hidden)
+        linia2Style(container: self)
     }
 
     // MARK: - Subviews handling

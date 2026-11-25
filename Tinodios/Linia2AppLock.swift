@@ -66,6 +66,7 @@ final class Linia2AppLock {
 
     private let kEnabled = "linia2.applock.enabled"
     private let kBiometrics = "linia2.applock.biometrics"
+    private let kPinLength = "linia2.applock.pinlength"
     private let kLockAfter: TimeInterval = 30   // блокировать после 30 с в фоне
 
     private var lockWindow: UIWindow?
@@ -99,10 +100,29 @@ final class Linia2AppLock {
         if isEnabled { lock() }
     }
 
+    /// Длина PIN-кода (4–6 цифр).
+    var pinLength: Int {
+        let v = UserDefaults.standard.integer(forKey: kPinLength)
+        return (4...6).contains(v) ? v : 4
+    }
+
     func enable(pin: String) -> Bool {
-        guard Linia2PinStore.save(pin: pin) else { return false }
+        guard (4...6).contains(pin.count), Linia2PinStore.save(pin: pin) else { return false }
+        UserDefaults.standard.set(pin.count, forKey: kPinLength)
         UserDefaults.standard.set(true, forKey: kEnabled)
         return true
+    }
+
+    /// Включить разблокировку по Face ID / Touch ID (с подтверждением системы).
+    func enableBiometrics(completion: @escaping (Bool) -> Void) {
+        let ctx = LAContext()
+        ctx.localizedCancelTitle = "Отмена"
+        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Включить разблокировку «Линия 2.0»") { ok, _ in
+            DispatchQueue.main.async {
+                self.useBiometrics = ok
+                completion(ok)
+            }
+        }
     }
 
     func disable() {
@@ -144,7 +164,7 @@ final class Linia2AppLock {
     private func showCover() {
         guard coverWindow == nil else { return }
         let vc = UIViewController()
-        vc.view.backgroundColor = Linia2Style.dark
+        vc.view.backgroundColor = L2.background
         let logo = UIImageView(image: UIImage(named: "logo-ios"))
         logo.translatesAutoresizingMaskIntoConstraints = false
         logo.layer.cornerRadius = 24
@@ -204,19 +224,22 @@ final class Linia2PinViewController: UIViewController {
 
     var onFinish: ((Bool) -> Void)?
     private let mode: Mode
+    private let embedded: Bool
     private var entered = ""
     private var firstPin: String?
     private var failures = 0
     private var cooldownUntil: Date?
-    private let pinLength = 4
+    private var pinLength: Int
 
     private let titleLabel = UILabel()
     private let hintLabel = UILabel()
     private let dots = UIStackView()
-    private var bioButton: UIButton?
+    private let lengthButton = UIButton(type: .system)
 
-    init(mode: Mode) {
+    init(mode: Mode, embedded: Bool = false) {
         self.mode = mode
+        self.embedded = embedded
+        self.pinLength = mode == .setNew ? 4 : Linia2AppLock.shared.pinLength
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
     }
@@ -227,81 +250,81 @@ final class Linia2PinViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = Linia2Style.dark
+        view.backgroundColor = L2.background
 
-        let logo = UIImageView(image: UIImage(named: "logo-ios"))
-        logo.layer.cornerRadius = 18
-        logo.clipsToBounds = true
-        logo.widthAnchor.constraint(equalToConstant: 72).isActive = true
-        logo.heightAnchor.constraint(equalToConstant: 72).isActive = true
+        let logo = L2LogoView(size: 20)
 
-        titleLabel.textColor = .white
-        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.textColor = L2.textPrimary
+        titleLabel.font = L2.rounded(26, .bold)
         titleLabel.textAlignment = .center
-        hintLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        hintLabel.font = .systemFont(ofSize: 15)
+        titleLabel.numberOfLines = 0
+        hintLabel.textColor = L2.textSecondary
+        hintLabel.font = L2.font(15)
         hintLabel.textAlignment = .center
         hintLabel.numberOfLines = 0
 
         dots.axis = .horizontal
-        dots.spacing = 18
-        for _ in 0..<pinLength {
-            let d = UIView()
-            d.layer.cornerRadius = 8
-            d.layer.borderWidth = 2
-            d.layer.borderColor = UIColor.white.cgColor
-            d.widthAnchor.constraint(equalToConstant: 16).isActive = true
-            d.heightAnchor.constraint(equalToConstant: 16).isActive = true
-            dots.addArrangedSubview(d)
-        }
+        dots.spacing = 16
+        dots.alignment = .center
+        rebuildDots()
+
+        lengthButton.setTitleColor(L2.accent, for: .normal)
+        lengthButton.titleLabel?.font = L2.font(15, .medium)
+        lengthButton.addTarget(self, action: #selector(toggleLength), for: .touchUpInside)
+        lengthButton.isHidden = mode != .setNew
 
         let pad = UIStackView()
         pad.axis = .vertical
-        pad.spacing = 14
+        pad.spacing = 16
         let rows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["bio", "0", "del"]]
         for row in rows {
             let h = UIStackView()
             h.axis = .horizontal
-            h.spacing = 24
+            h.spacing = 26
             h.distribution = .fillEqually
             for key in row { h.addArrangedSubview(keyButton(key)) }
             pad.addArrangedSubview(h)
         }
 
-        let top = UIStackView(arrangedSubviews: [logo, titleLabel, hintLabel, dots])
+        let top = UIStackView(arrangedSubviews: [logo, titleLabel, hintLabel, dots, lengthButton])
         top.axis = .vertical
         top.alignment = .center
-        top.spacing = 14
-        top.setCustomSpacing(22, after: hintLabel)
+        top.spacing = 12
+        top.setCustomSpacing(30, after: logo)
+        top.setCustomSpacing(26, after: hintLabel)
+        top.setCustomSpacing(14, after: dots)
 
         let main = UIStackView(arrangedSubviews: [top, pad])
         main.axis = .vertical
         main.alignment = .center
-        main.spacing = 36
+        main.spacing = 34
         main.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(main)
 
         var constraints = [main.centerXAnchor.constraint(equalTo: view.centerXAnchor),
                            main.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
                            main.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
-                           hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320)]
+                           hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+                           dots.heightAnchor.constraint(equalToConstant: 18)]
         if mode == .unlock {
             let forgot = UIButton(type: .system)
             forgot.setTitle("Забыли PIN-код?", for: .normal)
-            forgot.setTitleColor(UIColor.white.withAlphaComponent(0.8), for: .normal)
+            forgot.setTitleColor(L2.textSecondary, for: .normal)
+            forgot.titleLabel?.font = L2.font(15, .medium)
             forgot.addTarget(self, action: #selector(forgotTapped), for: .touchUpInside)
             forgot.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(forgot)
             constraints += [forgot.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                            forgot.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16)]
-        } else {
+                            forgot.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12)]
+        } else if !embedded {
             let cancel = UIButton(type: .system)
             cancel.setTitle("Отмена", for: .normal)
-            cancel.setTitleColor(.white, for: .normal)
+            cancel.setTitleColor(L2.accent, for: .normal)
+            cancel.titleLabel?.font = L2.font(17)
             cancel.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
             cancel.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(cancel)
-            constraints += [cancel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            constraints += [cancel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
                             cancel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)]
         }
         NSLayoutConstraint.activate(constraints)
@@ -315,45 +338,69 @@ final class Linia2PinViewController: UIViewController {
         }
     }
 
+    private func rebuildDots() {
+        dots.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for _ in 0..<pinLength {
+            let d = UIView()
+            d.layer.cornerRadius = 8
+            d.layer.borderWidth = 2
+            d.layer.borderColor = L2.accent.cgColor
+            d.widthAnchor.constraint(equalToConstant: 16).isActive = true
+            d.heightAnchor.constraint(equalToConstant: 16).isActive = true
+            dots.addArrangedSubview(d)
+        }
+        updateDots()
+    }
+
     private func resetTexts() {
         switch mode {
         case .unlock:
             titleLabel.text = "Введите PIN-код"
-            hintLabel.text = "«Линия 2.0» защищена PIN-кодом"
+            hintLabel.text = Linia2AppLock.shared.useBiometrics && Linia2AppLock.shared.biometryName != nil
+                ? "или используйте \(Linia2AppLock.shared.biometryName!)" : "для входа в «Линия 2.0»"
         case .confirmOld:
             titleLabel.text = "Текущий PIN-код"
             hintLabel.text = "Введите текущий PIN-код"
         case .setNew:
             titleLabel.text = firstPin == nil ? "Придумайте PIN-код" : "Повторите PIN-код"
-            hintLabel.text = firstPin == nil ? "4 цифры — для открытия приложения" : "Введите тот же PIN-код ещё раз"
+            hintLabel.text = firstPin == nil ? "\(pinLength) цифр\(pinLength == 4 ? "ы" : "") — для входа в приложение" : "Введите тот же PIN-код ещё раз"
+            lengthButton.setTitle(pinLength == 4 ? "PIN из 6 цифр" : "PIN из 4 цифр", for: .normal)
+            lengthButton.isHidden = firstPin != nil
         }
+    }
+
+    @objc private func toggleLength() {
+        pinLength = pinLength == 4 ? 6 : 4
+        entered = ""
+        rebuildDots()
+        resetTexts()
     }
 
     private func keyButton(_ key: String) -> UIButton {
         let b = UIButton(type: .system)
-        b.tintColor = .white
-        b.setTitleColor(.white, for: .normal)
-        b.widthAnchor.constraint(equalToConstant: 72).isActive = true
-        b.heightAnchor.constraint(equalToConstant: 72).isActive = true
+        b.tintColor = L2.textPrimary
+        b.setTitleColor(L2.textPrimary, for: .normal)
+        b.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 76).isActive = true
         switch key {
         case "del":
-            b.setImage(UIImage(systemName: "delete.left"), for: .normal)
+            b.setImage(L2.symbol("delete.left", 24), for: .normal)
             b.accessibilityLabel = "Стереть"
             b.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
         case "bio":
             if mode == .unlock && Linia2AppLock.shared.useBiometrics, let name = Linia2AppLock.shared.biometryName {
-                b.setImage(UIImage(systemName: name == "Face ID" ? "faceid" : "touchid"), for: .normal)
+                b.setImage(L2.symbol(name == "Face ID" ? "faceid" : "touchid", 30), for: .normal)
+                b.tintColor = L2.accent
                 b.accessibilityLabel = name
                 b.addTarget(self, action: #selector(biometricTapped), for: .touchUpInside)
-                bioButton = b
             } else {
                 b.isEnabled = false
             }
         default:
             b.setTitle(key, for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 30, weight: .regular)
-            b.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-            b.layer.cornerRadius = 36
+            b.titleLabel?.font = L2.rounded(32, .medium)
+            b.backgroundColor = L2.surface
+            b.layer.cornerRadius = 38
             b.addTarget(self, action: #selector(digitTapped(_:)), for: .touchUpInside)
         }
         return b
@@ -361,7 +408,7 @@ final class Linia2PinViewController: UIViewController {
 
     private func updateDots() {
         for (i, d) in dots.arrangedSubviews.enumerated() {
-            d.backgroundColor = i < entered.count ? .white : .clear
+            d.backgroundColor = i < entered.count ? L2.accent : .clear
         }
     }
 
@@ -371,6 +418,7 @@ final class Linia2PinViewController: UIViewController {
             return
         }
         guard entered.count < pinLength, let d = sender.currentTitle else { return }
+        L2.haptic()
         entered += d
         updateDots()
         if entered.count == pinLength {
@@ -392,6 +440,10 @@ final class Linia2PinViewController: UIViewController {
         UINotificationFeedbackGenerator().notificationOccurred(.error)
     }
 
+    private func close() {
+        if !embedded && presentingViewController != nil { dismiss(animated: true) }
+    }
+
     private func complete() {
         let pin = entered
         entered = ""
@@ -400,7 +452,7 @@ final class Linia2PinViewController: UIViewController {
         case .unlock, .confirmOld:
             if Linia2AppLock.shared.verify(pin: pin) {
                 onFinish?(true)
-                if mode == .confirmOld { dismiss(animated: true) }
+                if mode == .confirmOld { close() }
             } else {
                 failures += 1
                 shake()
@@ -416,7 +468,7 @@ final class Linia2PinViewController: UIViewController {
                 if first == pin {
                     let ok = Linia2AppLock.shared.enable(pin: pin)
                     onFinish?(ok)
-                    dismiss(animated: true)
+                    close()
                 } else {
                     firstPin = nil
                     shake()
@@ -450,7 +502,7 @@ final class Linia2PinViewController: UIViewController {
 
     @objc private func cancelTapped() {
         onFinish?(false)
-        dismiss(animated: true)
+        close()
     }
 }
 
@@ -466,8 +518,8 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Блокировка приложения"
-        lockSwitch.onTintColor = Linia2Style.green
-        bioSwitch.onTintColor = Linia2Style.green
+        lockSwitch.onTintColor = L2.accentStrong
+        bioSwitch.onTintColor = L2.accentStrong
         lockSwitch.addTarget(self, action: #selector(lockChanged), for: .valueChanged)
         bioSwitch.addTarget(self, action: #selector(bioChanged), for: .valueChanged)
     }
@@ -509,7 +561,7 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
             cell.accessoryView = bioSwitch
         default:
             cell.textLabel?.text = "Сменить PIN-код"
-            cell.textLabel?.textColor = Linia2Style.green
+            cell.textLabel?.textColor = L2.accent
             cell.selectionStyle = .default
         }
         return cell

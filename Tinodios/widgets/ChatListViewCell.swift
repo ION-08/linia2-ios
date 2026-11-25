@@ -117,5 +117,7 @@ class ChatListViewCell: UITableViewCell {
 
         // Avatar image
         icon.set(pub: topic.pub, id: topic.name, online: (topic.isChannel || topic.isSlfType) ? nil : topic.online, deleted: topic.deleted)
+        icon.linia2StyleIndicator()
+        linia2Style(topic)
     }
 }

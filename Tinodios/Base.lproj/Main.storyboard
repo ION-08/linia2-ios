@@ -1055,7 +1055,7 @@
                         <barButtonItem key="rightBarButtonItem" title="New Chat" id="LVG-dB-flA">
                             <imageReference key="image" image="plus.bubble" catalog="system" symbolScale="large"/>
                             <connections>
-                                <segue destination="qBo-ye-avT" kind="show" id="PRK-dk-KAe"/>
+                                <segue destination="qBo-ye-avT" kind="show" identifier="Chats2NewChat" id="PRK-dk-KAe"/>
                             </connections>
                         </barButtonItem>
                     </navigationItem>
