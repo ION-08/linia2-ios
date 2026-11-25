@@ -40,7 +40,6 @@ class SignupViewController: UITableViewController {
             stack.append(Linia2InviteCodeViewController())
             nav.setViewControllers(stack, animated: false)
         }
-        }
 
         // Get required credential methods.
         self.signUpButton.isEnabled = false

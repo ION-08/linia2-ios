@@ -365,7 +365,7 @@ edit("Tinodios/LoginViewController.swift", login_vc)
 def signup_vc(s):
     old_start = s.find("        // LINIA2: регистрация только по приглашению")
     if old_start >= 0 and "Linia2InviteCodeViewController" not in s:
-        old_end = s.find("        }\n", s.find("            }\n", old_start)) + len("        }\n")
+        old_end = s.find("\n        }\n", s.find("            }\n", old_start)) + len("\n        }\n")
         s = s[:old_start] + (
             "        // LINIA2: регистрация только по коду приглашения — подменяем экран Tinode своим.\n"
             "        DispatchQueue.main.async {\n"
