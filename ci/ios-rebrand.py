@@ -721,90 +721,37 @@ edit("Tinodios/Linia2ChatStyle.swift", chat_style_attach)
 
 # ---- Финальные правки: подложка под полем ввода, iOS 15 ----
 def send_bar_host_bg(s):
-    if "LINIA2_HOST_BG" in s:
+    # LINIA2_HOST_BG v2 (25.11, авария): красим только себя и узкую подложку прямо под полем ввода.
+    # Полноэкранные системные слои клавиатуры НЕ трогаем — в сборке 9 они закрывали весь экран чата.
+    a = s.find("    // LINIA2_HOST_BG:")
+    if a >= 0:
+        b = s.index("    // MARK: - Configuration\n", a)
+        s = s[:a] + s[b:]
+    if "LINIA2_HOST_BG_V2" in s:
         return s
     return must(s, "    // MARK: - Configuration\n",
-                "    // LINIA2_HOST_BG: системная подложка под полем ввода (зона индикатора «домой») — в цвет фона.\n"
+                "    // LINIA2_HOST_BG_V2: фон панели ввода и полосы под ней — как у приложения; только узкие подложки (не во весь экран).\n"
                 "    override func didMoveToWindow() {\n"
                 "        super.didMoveToWindow()\n"
                 "        backgroundColor = L2.background\n"
-                "        var v = superview\n"
-                "        var depth = 0\n"
-                "        while let cur = v, depth < 4 {\n"
-                "            cur.backgroundColor = L2.background\n"
-                "            v = cur.superview\n"
-                "            depth += 1\n"
+                "        guard let host = superview, window != nil else { return }\n"
+                "        let screenH = window?.bounds.height ?? UIScreen.main.bounds.height\n"
+                "        if host.bounds.height > 0 && host.bounds.height < screenH * 0.4 {\n"
+                "            host.backgroundColor = L2.background\n"
                 "        }\n"
                 "    }\n\n"
                 "    // MARK: - Configuration\n")
-
-
-edit("Tinodios/widgets/SendMessageBar.swift", send_bar_host_bg)
 for proj in ("Tinodios", "TinodeSDK", "TinodiosDB"):
     edit(proj + ".xcodeproj/project.pbxproj", lambda s: re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = 1[0-4]\.\d+;", "IPHONEOS_DEPLOYMENT_TARGET = 15.0;", s))
 edit("Podfile", lambda s: s.replace("platform :ios, '14.0'", "platform :ios, '15.0'"))
 print("done-final-A")
 
 
-def app_delegate_reconnect(s):
-    if "LINIA2_FAST_RECONNECT" in s:
-        return s
-    return must(s, "    func applicationDidBecomeActive(_ application: UIApplication) {\n        Linia2Turn.shared.prefetch()\n",
-                "    func applicationDidBecomeActive(_ application: UIApplication) {\n        Linia2Turn.shared.prefetch()\n"
-                "        // LINIA2_FAST_RECONNECT: при возврате в приложение переподключаемся сразу, без паузы backoff —\n"
-                "        // иначе новые сообщения приходят только через несколько секунд.\n"
-                "        let tinode = Cache.tinode\n"
-                "        if !tinode.isConnected && BaseDb.sharedInstance.isReady {\n"
-                "            _ = tinode.reconnectNow(interactively: true, reset: false)\n"
-                "        }\n")
-
-
-edit("Tinodios/AppDelegate.swift", app_delegate_reconnect)
+# (быстрое переподключение при возврате в приложение — ОТКАЧЕНО 25.11: вызывало обрывы соединения)
 
 
 # ---- Блок B: keepalive WebSocket — мёртвое соединение обнаруживается за секунды, а не минуты ----
-def ws_keepalive(s):
-    if "LINIA2_KEEPALIVE" in s:
-        return s
-    s = must(s, "    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {\n        self.state = .open\n",
-             "    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {\n        self.state = .open\n        self.startKeepalive(webSocketTask)\n")
-    s = must(s, "    private func listen()  {\n",
-             "    // LINIA2_KEEPALIVE: ping каждые 15 с; нет ответа за 5 с — соединение считаем потерянным,\n"
-             "    // Connection переподключается сразу, и сообщения не «зависают» на мёртвом сокете.\n"
-             "    private var keepaliveTimer: DispatchSourceTimer?\n"
-             "    private func startKeepalive(_ task: URLSessionWebSocketTask) {\n"
-             "        keepaliveTimer?.cancel()\n"
-             "        let t = DispatchSource.makeTimerSource(queue: webSocketQueue)\n"
-             "        t.schedule(deadline: .now() + 15, repeating: 15)\n"
-             "        t.setEventHandler { [weak self, weak task] in\n"
-             "            guard let self = self, let task = task, task === self.socket, self.state == .open else {\n"
-             "                self?.keepaliveTimer?.cancel()\n"
-             "                return\n"
-             "            }\n"
-             "            var answered = false\n"
-             "            task.sendPing { [weak self] error in\n"
-             "                self?.webSocketQueue.async {\n"
-             "                    answered = true\n"
-             "                    if let error = error, task === self?.socket { self?.errorHandler(error) }\n"
-             "                }\n"
-             "            }\n"
-             "            self.webSocketQueue.asyncAfter(deadline: .now() + 5) { [weak self, weak task] in\n"
-             "                guard let self = self, let task = task, !answered, task === self.socket, self.state == .open else { return }\n"
-             "                self.keepaliveTimer?.cancel()\n"
-             "                task.cancel(with: .goingAway, reason: nil)\n"
-             "                self.errorHandler(NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT)))\n"
-             "            }\n"
-             "        }\n"
-             "        keepaliveTimer = t\n"
-             "        t.resume()\n"
-             "    }\n\n"
-             "    private func listen()  {\n")
-    s = must(s, "    func close() {\n        state = .closing\n",
-             "    func close() {\n        keepaliveTimer?.cancel()\n        keepaliveTimer = nil\n        state = .closing\n")
-    return s
-
-
-edit("TinodeSDK/WebSocket.swift", ws_keepalive)
+# (keepalive WebSocket — ОТКАЧЕН 25.11: вызывал обрывы соединения)
 
 
 # ---- Сборка 10: зашитые английские строки → Linia2Texts.t(...) (русский) ----
@@ -857,22 +804,7 @@ def message_view_bg(s):
 edit("Tinodios/MessageView.swift", message_view_bg)
 
 
-def send_bar_backdrop(s):
-    if "LINIA2_HIDE_BACKDROP" in s:
-        return s
-    return must(s, '''        while let cur = v, depth < 4 {
-            cur.backgroundColor = L2.background
-''', '''        while let cur = v, depth < 4 {
-            cur.backgroundColor = L2.background
-            // LINIA2_HIDE_BACKDROP: системная серая «подложка» клавиатурной зоны — прячем, остаётся наш фон.
-            for sub in cur.subviews where sub !== self && depth < 2 {
-                let name = NSStringFromClass(type(of: sub))
-                if sub is UIVisualEffectView || name.contains("Backdrop") { sub.isHidden = true }
-            }
-''')
-
-
-edit("Tinodios/widgets/SendMessageBar.swift", send_bar_backdrop)
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar_host_bg)
 
 
 # ---- Сборка 10: история не загружалась («пустой чат», хотя на сервере сообщения есть) ----
@@ -904,3 +836,94 @@ def history_fallback(s):
 
 
 edit("Tinodios/MessageInteractor.swift", history_fallback)
+
+
+# ---- Авария 25.11: экран чата всегда с шапкой и «назад», свайп назад; «Повторить», если история не загрузилась ----
+def chat_safety(s):
+    if "LINIA2_CHAT_SAFETY" in s:
+        return s
+    return must(s, '''    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+''', '''    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // LINIA2_CHAT_SAFETY: шапка с «назад», аватаром и именем видна всегда (другие экраны прячут панель).
+        navigationController?.setNavigationBarHidden(false, animated: animated)
+        navigationItem.hidesBackButton = false
+        navigationItem.leftItemsSupplementBackButton = true
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+        linia2ScheduleHistoryCheck()
+''')
+
+
+edit("Tinodios/MessageViewController.swift", chat_safety)
+
+
+# ---- 25.11: нижнее меню видно и внутри чата — поле ввода над меню (пока клавиатура скрыта) ----
+def send_bar_above_tabbar(s):
+    if "LINIA2_ABOVE_TABBAR" in s:
+        return s
+    s = s.replace('''    // LINIA2_HOST_BG_V2: фон панели ввода и полосы под ней — как у приложения; только узкие подложки (не во весь экран).
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        backgroundColor = L2.background
+        guard let host = superview, window != nil else { return }
+        let screenH = window?.bounds.height ?? UIScreen.main.bounds.height
+        if host.bounds.height > 0 && host.bounds.height < screenH * 0.4 {
+            host.backgroundColor = L2.background
+        }
+    }
+''', '''    // LINIA2_ABOVE_TABBAR: пока клавиатура скрыта, под полем ввода — прозрачный отступ высотой с нижнее меню;
+    // меню (в окне приложения) видно сквозь него, нажатия в отступе проходят к меню.
+    private var linia2BottomConstraint: NSLayoutConstraint?
+    private var linia2Reserve: CGFloat = 0
+    static var linia2TabBarReserve: CGFloat = 0   // задаёт Linia2TabBarController (0 — меню не показываем)
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        linia2ApplyReserve(keyboardShown: false)
+    }
+
+    func linia2ApplyReserve(keyboardShown: Bool) {
+        let base = SendMessageBar.linia2TabBarReserve
+        let want = (keyboardShown || base <= 0) ? 0 : base + (window?.safeAreaInsets.bottom ?? 0)
+        backgroundColor = want > 0 ? .clear : L2.background
+        guard want != linia2Reserve else { return }
+        linia2Reserve = want
+        linia2BottomConstraint?.constant = -want
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+        superview?.setNeedsLayout()
+    }
+
+    @objc private func linia2KeyboardFrame(_ n: Notification) {
+        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        let screenH = window?.bounds.height ?? UIScreen.main.bounds.height
+        // Настоящая клавиатура заметно выше самой панели ввода.
+        let shown = n.name != UIResponder.keyboardWillHideNotification && end.minY < screenH - 1 && end.height > bounds.height - linia2Reserve + 120
+        linia2ApplyReserve(keyboardShown: shown)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if linia2Reserve > 0 && point.y > bounds.height - linia2Reserve { return nil }   // отступ — сквозь к меню
+        return super.hitTest(point, with: event)
+    }
+''')
+    s = must(s, '''            nibView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            nibView.rightAnchor.constraint(equalTo: rightAnchor),
+            nibView.leftAnchor.constraint(equalTo: leftAnchor)
+            ])''', '''            nibView.rightAnchor.constraint(equalTo: rightAnchor),
+            nibView.leftAnchor.constraint(equalTo: leftAnchor)
+            ])
+        let bottom = nibView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        bottom.isActive = true
+        linia2BottomConstraint = bottom
+        NotificationCenter.default.addObserver(self, selector: #selector(linia2KeyboardFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(linia2KeyboardFrame(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)''')
+    return s
+
+
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar_above_tabbar)

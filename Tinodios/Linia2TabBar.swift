@@ -62,10 +62,10 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
         updateBarVisibility(animated: false)
     }
 
-    /// Меню видно только на корневых экранах вкладок.
+    /// Меню видно всегда (на всех экранах, в том числе в чате); прячется только под модальными окнами (звонок и т.п.).
     func updateBarVisibility(animated: Bool) {
-        let nav = selectedViewController as? UINavigationController
-        let visible = (nav?.viewControllers.count ?? 1) <= 1 && presentedViewController == nil
+        let visible = presentedViewController == nil
+        SendMessageBar.linia2TabBarReserve = 72 + 6 + 8   // высота меню + отступ от низа + зазор (плюс safe area — в панели ввода)
         let apply = {
             self.bar.alpha = visible ? 1 : 0
             self.bar.transform = visible ? .identity : CGAffineTransform(translationX: 0, y: 30)
@@ -76,14 +76,11 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
         let isRoot = navigationController.viewControllers.first === viewController
-        if let coordinator = navigationController.transitionCoordinator, animated {
-            coordinator.animate(alongsideTransition: { _ in
-                self.bar.alpha = isRoot ? 1 : 0
-                self.bar.transform = isRoot ? .identity : CGAffineTransform(translationX: 0, y: 30)
-            }, completion: { _ in self.updateBarVisibility(animated: false) })
-        } else {
-            updateBarVisibility(animated: animated)
+        // Вложенные экраны оставляют место под меню (корневые резервируют его сами). В чате место держит панель ввода.
+        if !isRoot && !(viewController is MessageViewController) && viewController.additionalSafeAreaInsets.bottom < 1 {
+            viewController.additionalSafeAreaInsets.bottom = 72 + 6 + 4
         }
+        updateBarVisibility(animated: animated)
     }
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {

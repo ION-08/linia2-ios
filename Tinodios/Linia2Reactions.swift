@@ -19,6 +19,7 @@ extension MessageViewController {
 
     /// Убирает сообщения-реакции из ленты и пересчитывает таблицу реакций.
     func linia2ExtractReactions(_ all: [StoredMessage]) -> [StoredMessage] {
+        if !all.isEmpty { view.viewWithTag(Self.kL2RetryTag)?.removeFromSuperview() }   // история пришла — убрать «Повторить»
         var map: [Int: [String: [String]]] = [:]
         var mine: [Int: [String: Int]] = [:]
         var visible: [StoredMessage] = []

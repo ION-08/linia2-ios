@@ -285,22 +285,40 @@ class SendMessageBar: UIView {
         return CGSize.zero
     }
 
-    // LINIA2_HOST_BG: системная подложка под полем ввода (зона индикатора «домой») — в цвет фона.
+    // LINIA2_ABOVE_TABBAR: пока клавиатура скрыта, под полем ввода — прозрачный отступ высотой с нижнее меню;
+    // меню (в окне приложения) видно сквозь него, нажатия в отступе проходят к меню.
+    private var linia2BottomConstraint: NSLayoutConstraint?
+    private var linia2Reserve: CGFloat = 0
+    static var linia2TabBarReserve: CGFloat = 0   // задаёт Linia2TabBarController (0 — меню не показываем)
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        backgroundColor = L2.background
-        var v = superview
-        var depth = 0
-        while let cur = v, depth < 4 {
-            cur.backgroundColor = L2.background
-            // LINIA2_HIDE_BACKDROP: системная серая «подложка» клавиатурной зоны — прячем, остаётся наш фон.
-            for sub in cur.subviews where sub !== self && depth < 2 {
-                let name = NSStringFromClass(type(of: sub))
-                if sub is UIVisualEffectView || name.contains("Backdrop") { sub.isHidden = true }
-            }
-            v = cur.superview
-            depth += 1
-        }
+        linia2ApplyReserve(keyboardShown: false)
+    }
+
+    func linia2ApplyReserve(keyboardShown: Bool) {
+        let base = SendMessageBar.linia2TabBarReserve
+        let want = (keyboardShown || base <= 0) ? 0 : base + (window?.safeAreaInsets.bottom ?? 0)
+        backgroundColor = want > 0 ? .clear : L2.background
+        guard want != linia2Reserve else { return }
+        linia2Reserve = want
+        linia2BottomConstraint?.constant = -want
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+        superview?.setNeedsLayout()
+    }
+
+    @objc private func linia2KeyboardFrame(_ n: Notification) {
+        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        let screenH = window?.bounds.height ?? UIScreen.main.bounds.height
+        // Настоящая клавиатура заметно выше самой панели ввода.
+        let shown = n.name != UIResponder.keyboardWillHideNotification && end.minY < screenH - 1 && end.height > bounds.height - linia2Reserve + 120
+        linia2ApplyReserve(keyboardShown: shown)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if linia2Reserve > 0 && point.y > bounds.height - linia2Reserve { return nil }   // отступ — сквозь к меню
+        return super.hitTest(point, with: event)
     }
 
     // MARK: - Configuration
@@ -313,10 +331,14 @@ class SendMessageBar: UIView {
         addSubview(nibView)
         NSLayoutConstraint.activate([
             nibView.topAnchor.constraint(equalTo: topAnchor),
-            nibView.bottomAnchor.constraint(equalTo: bottomAnchor),
             nibView.rightAnchor.constraint(equalTo: rightAnchor),
             nibView.leftAnchor.constraint(equalTo: leftAnchor)
             ])
+        let bottom = nibView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        bottom.isActive = true
+        linia2BottomConstraint = bottom
+        NotificationCenter.default.addObserver(self, selector: #selector(linia2KeyboardFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(linia2KeyboardFrame(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
         configure()
     }
 

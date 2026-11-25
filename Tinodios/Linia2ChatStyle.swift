@@ -316,3 +316,57 @@ extension SendMessageBar {
         sendButton.imageView?.contentMode = .center
     }
 }
+
+// MARK: - Чат: если история не загрузилась — понятное сообщение и «Повторить» (а не пустой экран)
+
+extension MessageViewController {
+    static let kL2RetryTag = 0x4C3252
+
+    func linia2ScheduleHistoryCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self = self, self.view.window != nil else { return }
+            let expected = (self.topic?.seq ?? 0) > 0
+            if self.messages.isEmpty && expected {
+                self.linia2ShowRetry()
+            }
+        }
+    }
+
+    private func linia2ShowRetry() {
+        guard view.viewWithTag(Self.kL2RetryTag) == nil else { return }
+        let box = UIStackView()
+        box.tag = Self.kL2RetryTag
+        box.axis = .vertical
+        box.alignment = .center
+        box.spacing = 14
+        box.translatesAutoresizingMaskIntoConstraints = false
+        let icon = UIImageView(image: L2.symbol("exclamationmark.bubble", 40, .regular))
+        icon.tintColor = L2.textSecondary
+        let title = UILabel()
+        title.text = "Не удалось загрузить сообщения"
+        title.font = L2.font(17, .semibold)
+        title.textColor = L2.textPrimary
+        let sub = UILabel()
+        sub.text = "Проверьте подключение к интернету и попробуйте ещё раз."
+        sub.font = L2.font(15)
+        sub.textColor = L2.textSecondary
+        sub.numberOfLines = 0
+        sub.textAlignment = .center
+        let retry = L2Button("Повторить", kind: .outline, symbol: "arrow.clockwise")
+        retry.accessibilityIdentifier = "l2.chat.retry"
+        retry.addAction(UIAction { [weak self, weak box] _ in
+            box?.removeFromSuperview()
+            _ = self?.interactor?.attachToTopic(interactively: true)
+            self?.interactor?.loadMessagesFromCache(scrollToMostRecentMessage: true)
+            self?.linia2ScheduleHistoryCheck()
+        }, for: .touchUpInside)
+        [icon, title, sub, retry].forEach { box.addArrangedSubview($0) }
+        view.addSubview(box)
+        NSLayoutConstraint.activate([
+            box.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
+            box.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 32),
+            box.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
+            retry.widthAnchor.constraint(equalToConstant: 200),
+        ])
+    }
+}

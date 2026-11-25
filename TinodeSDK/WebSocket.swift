@@ -60,7 +60,6 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         self.state = .open
-        self.startKeepalive(webSocketTask)
         self.delegate?.onConnected(connection: self)
     }
 
@@ -88,8 +87,6 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
     }
 
     func close() {
-        keepaliveTimer?.cancel()
-        keepaliveTimer = nil
         state = .closing
         socket.cancel(with: .goingAway, reason: nil)
     }
@@ -104,36 +101,6 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
         socket.send(URLSessionWebSocketTask.Message.data(data)) { error in
             self.errorHandler(error)
         }
-    }
-
-    // LINIA2_KEEPALIVE: ping каждые 15 с; нет ответа за 5 с — соединение считаем потерянным,
-    // Connection переподключается сразу, и сообщения не «зависают» на мёртвом сокете.
-    private var keepaliveTimer: DispatchSourceTimer?
-    private func startKeepalive(_ task: URLSessionWebSocketTask) {
-        keepaliveTimer?.cancel()
-        let t = DispatchSource.makeTimerSource(queue: webSocketQueue)
-        t.schedule(deadline: .now() + 15, repeating: 15)
-        t.setEventHandler { [weak self, weak task] in
-            guard let self = self, let task = task, task === self.socket, self.state == .open else {
-                self?.keepaliveTimer?.cancel()
-                return
-            }
-            var answered = false
-            task.sendPing { [weak self] error in
-                self?.webSocketQueue.async {
-                    answered = true
-                    if let error = error, task === self?.socket { self?.errorHandler(error) }
-                }
-            }
-            self.webSocketQueue.asyncAfter(deadline: .now() + 5) { [weak self, weak task] in
-                guard let self = self, let task = task, !answered, task === self.socket, self.state == .open else { return }
-                self.keepaliveTimer?.cancel()
-                task.cancel(with: .goingAway, reason: nil)
-                self.errorHandler(NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT)))
-            }
-        }
-        keepaliveTimer = t
-        t.resume()
     }
 
     private func listen()  {

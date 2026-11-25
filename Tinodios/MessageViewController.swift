@@ -440,8 +440,18 @@ class MessageViewController: UIViewController {
         self.setInterfaceColors()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // LINIA2_CHAT_SAFETY: шапка с «назад», аватаром и именем видна всегда (другие экраны прячут панель).
+        navigationController?.setNavigationBarHidden(false, animated: animated)
+        navigationItem.hidesBackButton = false
+        navigationItem.leftItemsSupplementBackButton = true
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+        linia2ScheduleHistoryCheck()
 
         collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: sendMessageBar.frame.height, right: 0)
 

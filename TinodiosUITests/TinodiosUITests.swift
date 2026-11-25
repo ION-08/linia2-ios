@@ -206,6 +206,44 @@ final class TinodiosUITests: XCTestCase {
         }
     }
 
+    /// Существующий чат с историей (её заранее создаёт workflow): видна история → отправка → назад через «назад» и через меню.
+    private func openExistingChat() {
+        tab("l2.tab.chats").tap(); sleep(2)
+        let cell = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'История' OR label CONTAINS[c] 'Собеседник'")).firstMatch
+        guard cell.waitForExistence(timeout: 15) else { screenshot("ШАГ ПРОПУЩЕН-нет чата с историей"); return }
+        screenshot("chats-with-history")
+        cell.tap(); sleep(4)
+        screenshot("existing-chat-history")
+        let history = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'История 1'")).firstMatch
+        XCTAssertTrue(history.waitForExistence(timeout: 10), "в существующем чате не видна история")
+        XCTAssertTrue(app.navigationBars.buttons.element(boundBy: 0).exists, "в чате нет кнопки «назад»")
+        XCTAssertTrue(tab("l2.tab.chats").exists, "в чате не видно нижнего меню")
+        let input = app.textViews.firstMatch
+        if input.waitForExistence(timeout: 5) {
+            input.tap(); sleep(1)
+            screenshot("existing-chat-keyboard")
+            let text = "Ответ из теста"
+            app.typeText(text)
+            let send = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Отправ' OR identifier CONTAINS[c] 'send'")).firstMatch
+            if send.exists { send.tap() } else { app.typeText("\n") }
+            sleep(3)
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch.waitForExistence(timeout: 10),
+                          "отправленное сообщение не появилось в чате")
+            app.swipeDown(); sleep(1)
+            screenshot("existing-chat-sent")
+        }
+        // Назад кнопкой «назад».
+        back(); sleep(2)
+        screenshot("after-back-button")
+        XCTAssertTrue(app.state == .runningForeground, "приложение упало в чате")
+        // Снова в чат и назад через нижнее меню.
+        if cell.waitForExistence(timeout: 5) {
+            cell.tap(); sleep(3)
+            tab("l2.tab.chats").tap(); sleep(2)
+            screenshot("after-back-tabbar")
+        }
+    }
+
     /// Новый чат с пользователем по логину: экран чата, клавиатура, отправка, меню сообщения.
     private func openChatAndSend(with peer: String) {
         tab("l2.tab.chats").tap(); sleep(1)
@@ -325,6 +363,7 @@ final class TinodiosUITests: XCTestCase {
         screenshot("login-filled")
         app.typeText("\n")             // «Войти» с клавиатуры
         try createPinAndReachChats("login")
+        openExistingChat()
         openChatAndSend(with: regLogin)
         // 3. Все вкладки, «Новый чат», «Добавить контакт», каждый пункт настроек (если не пройдены после регистрации).
         if !registered { visitAllTabsAndSettings() }
