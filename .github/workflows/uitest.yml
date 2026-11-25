@@ -68,6 +68,12 @@ jobs:
           echo "UDID=$UDID" >> "$GITHUB_ENV"
           xcrun simctl list devices | grep "$UDID"
           xcrun simctl boot "$UDID" || true
+          # Без обучающих подсказок клавиатуры и автоисправлений — они перекрывают поля в тесте.
+          for k in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do
+            xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences $k -bool true || true
+          done
+          xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false || true
+          xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences KeyboardPrediction -bool false || true
 
       - name: XCUITest
         id: test

@@ -55,6 +55,14 @@ final class TinodiosUITests: XCTestCase {
         }
     }
 
+    /// Подсказка клавиатуры при первом запуске («Speed up your typing… Continue»).
+    private func dismissKeyboardTips() {
+        for title in ["Continue", "Продолжить"] {
+            let b = app.buttons[title].firstMatch
+            if b.waitForExistence(timeout: 1) { b.tap() }
+        }
+    }
+
     private func type(_ text: String, into e: XCUIElement) {
         e.tap()
         e.typeText(text)
@@ -163,13 +171,17 @@ final class TinodiosUITests: XCTestCase {
         cells.tap()
         app.typeText(code)
         wait(app.textFields["l2.reg.name"], "экран регистрации", timeout: 25)
+        dismissKeyboardTips()
         screenshot("register")
-        type("Тест CI", into: app.textFields["l2.reg.name"])
-        type(regLogin, into: app.textFields["l2.reg.login"])
-        type(regPassword, into: app.secureTextFields["l2.reg.password"])
-        type(regPassword, into: app.secureTextFields["l2.reg.password2"])
+        // Как пользователь: ввод и «Далее» на клавиатуре; последнее «Готово» отправляет форму.
+        app.textFields["l2.reg.name"].tap()
+        dismissKeyboardTips()
+        app.typeText("Test CI\n")
+        app.typeText(regLogin + "\n")
+        app.typeText(regPassword + "\n")
+        app.typeText(regPassword)
         screenshot("register-filled")
-        app.buttons["l2.reg.submit"].tap()
+        app.typeText("\n")
         createPinAndReachChats("reg")
 
         // 2. Все вкладки, «Новый чат», «Добавить контакт», каждый пункт настроек.
@@ -185,9 +197,11 @@ final class TinodiosUITests: XCTestCase {
         if let v = lf.value as? String, !v.isEmpty, v != "Логин" {
             lf.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: v.count + 2))
         }
-        lf.typeText(login)
-        type(password, into: app.secureTextFields["l2.login.password"])
-        app.buttons["l2.login.submit"].tap()
+        dismissKeyboardTips()
+        lf.typeText(login + "\n")
+        app.typeText(password)
+        screenshot("login-filled")
+        app.typeText("\n")
         createPinAndReachChats("login")
 
         // 4. Повторный запуск — экран PIN, затем Чаты.

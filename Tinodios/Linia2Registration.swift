@@ -120,6 +120,8 @@ class Linia2FormViewController: UIViewController {
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(fieldBeganEditing(_:)),
+                                               name: UITextField.textDidBeginEditingNotification, object: nil)
         let tap = UITapGestureRecognizer(target: view, action: #selector(UIView.endEditing(_:)))
         tap.cancelsTouchesInView = false
         view.addGestureRecognizer(tap)
@@ -141,6 +143,26 @@ class Linia2FormViewController: UIViewController {
         let overlap = n.name == UIResponder.keyboardWillHideNotification ? 0 : max(0, view.bounds.maxY - view.convert(frame, from: nil).minY)
         scroll.contentInset.bottom = overlap
         scroll.verticalScrollIndicatorInsets.bottom = overlap
+        if overlap > 0 { DispatchQueue.main.async { self.revealFirstResponder() } }
+    }
+
+    @objc private func fieldBeganEditing(_ n: Notification) {
+        DispatchQueue.main.async { self.revealFirstResponder() }
+    }
+
+    /// Прокрутить так, чтобы были видны активное поле и то, что под ним (ошибка, кнопка).
+    func revealFirstResponder() {
+        guard let r = Self.findFirstResponder(in: stack) else { return }
+        var rect = r.convert(r.bounds, to: scroll)
+        rect.origin.y -= 24
+        rect.size.height += 24 + 150
+        scroll.scrollRectToVisible(rect, animated: true)
+    }
+
+    private static func findFirstResponder(in v: UIView) -> UIView? {
+        if v.isFirstResponder { return v }
+        for sub in v.subviews { if let r = findFirstResponder(in: sub) { return r } }
+        return nil
     }
 
     func setBusy(_ busy: Bool, button: UIButton, title: String) {
@@ -502,6 +524,7 @@ final class Linia2InviteCodeViewController: Linia2FormViewController {
             self.errorText.text = msg
             self.errorText.isHidden = false
             self.cells.isInvalid = true
+            self.revealFirstResponder()
             self.cells.shake()
             self.cells.clear()
             _ = self.cells.becomeFirstResponder()
