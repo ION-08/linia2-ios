@@ -145,11 +145,20 @@ extension MessageViewController {
         let remove = linia2MyReactions[seq]?[emoji] != nil
         var head: [String: JSONValue] = ["reply": .string(String(seq)), (remove ? Self.kL2UnreactHeader : Self.kL2ReactHeader): .string(emoji)]
         for (k, v) in Linia2Burn.extraHead(topic: topic.name) ?? [:] { head[k] = v }   // режим самоуничтожения
-        topic.publish(content: Drafty(content: emoji), withExtraHeaders: head).thenCatch { err in
-            Cache.log.error("Linia2: реакция не отправлена: %@", err.localizedDescription)
-            DispatchQueue.main.async { UiUtils.showToast(message: remove ? "Не удалось снять реакцию" : "Не удалось отправить реакцию") }
-            return nil
-        }
+        // Сервер не присылает своё сообщение обратно (noecho), поэтому ленту перечитываем сами:
+        // сразу (черновик реакции уже в кэше) и после подтверждения (seq — «моя» реакция).
+        // Раньше пилюля появлялась/исчезала только после повторного открытия чата.
+        topic.publish(content: Drafty(content: emoji), withExtraHeaders: head).then(
+            onSuccess: { [weak self] _ in
+                DispatchQueue.main.async { self?.interactor?.loadMessagesFromCache(scrollToMostRecentMessage: false) }
+                return nil
+            },
+            onFailure: { err in
+                Cache.log.error("Linia2: реакция не отправлена: %@", err.localizedDescription)
+                DispatchQueue.main.async { UiUtils.showToast(message: remove ? "Не удалось снять реакцию" : "Не удалось отправить реакцию") }
+                return nil
+            })
+        interactor?.loadMessagesFromCache(scrollToMostRecentMessage: false)
     }
 }
 
