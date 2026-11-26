@@ -704,6 +704,7 @@ extension MessageViewController: UICollectionViewDataSource {
                 sectionHeader.selected = 0
                 sectionHeader.isHidden = false
             }
+            sectionHeader.alpha = linia2Search == nil ? 1 : 0   // Дизайн: под строкой поиска плашку не показываем
 
             return sectionHeader
         }

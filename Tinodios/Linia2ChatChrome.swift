@@ -339,14 +339,26 @@ final class Linia2ChatSearch: NSObject, UITextFieldDelegate {
             bar.heightAnchor.constraint(equalToConstant: 44),
         ])
         bar.alpha = 0
-        UIView.animate(withDuration: 0.2) { self.bar.alpha = 1 }
+        UIView.animate(withDuration: 0.2) {
+            self.bar.alpha = 1
+            self.setPinnedHidden(true)
+        }
         field.becomeFirstResponder()
     }
 
     func dismiss() {
         field.resignFirstResponder()
-        UIView.animate(withDuration: 0.2, animations: { self.bar.alpha = 0 }, completion: { _ in self.bar.removeFromSuperview() })
+        UIView.animate(withDuration: 0.2, animations: {
+            self.bar.alpha = 0
+            self.setPinnedHidden(false)
+        }, completion: { _ in self.bar.removeFromSuperview() })
         vc?.linia2Search = nil
+    }
+
+    /// Дизайн: строка поиска встаёт на место плашки «Закреплённое» — плашку на время поиска прячем (не накладываются).
+    private func setPinnedHidden(_ hidden: Bool) {
+        guard let cv = vc?.collectionView else { return }
+        for v in cv.visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader) { v.alpha = hidden ? 0 : 1 }
     }
 
     @objc private func changed() {
