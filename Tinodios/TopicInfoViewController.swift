@@ -58,6 +58,7 @@ class TopicInfoViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         setup()
+        linia2DesignLayout()
         reloadData()
         // LINIA2: «⋯» — пожаловаться / заблокировать (Linia2Report.swift).
         linia2InstallModerationMenu()
@@ -474,5 +475,41 @@ extension TopicInfoViewController: EditMembersDelegate {
 
     func editMembersWillChangeState(_: UIView, uid: String, added: Bool, initiallySelected: Bool) -> Bool {
         return !tinode.isMe(uid: uid) && (added || topic.isAdmin || !initiallySelected)
+    }
+}
+
+// MARK: - Дизайн: заголовок, строка «Последняя активность», шрифты
+
+extension TopicInfoViewController {
+    /// Заголовок «Информация» без крупного «Настройки»; «Последняя активность» слева, значение справа
+    /// (раньше строка центрировалась и подпись обрезалась у левого края); моноширинный Courier — системным шрифтом.
+    fileprivate func linia2DesignLayout() {
+        navigationItem.title = L2T("l2.chatinfo.title", "Информация")
+        navigationItem.largeTitleDisplayMode = .never
+        for l in [topicIDLabel, aliasLabel] {
+            l?.font = UIFont.monospacedSystemFont(ofSize: 15, weight: .regular)
+            l?.textColor = L2.textSecondary
+        }
+        guard let value = lastSeenTimestampLabel, let stack = value.superview as? UIStackView,
+              let cell = stack.superview else { return }
+        value.font = L2.font(17)
+        value.textColor = L2.textSecondary
+        value.textAlignment = .right
+        value.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for case let l as UILabel in stack.arrangedSubviews where l !== value {
+            l.font = L2.font(17)
+            l.textAlignment = .left
+            l.adjustsFontSizeToFitWidth = true
+            l.minimumScaleFactor = 0.8
+        }
+        stack.distribution = .fill
+        stack.spacing = 12
+        for c in cell.constraints where (c.firstItem === stack || c.secondItem === stack) && (c.firstAttribute == .centerX || c.secondAttribute == .centerX) {
+            c.isActive = false
+        }
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -20),
+        ])
     }
 }
