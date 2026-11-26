@@ -263,6 +263,13 @@ final class Linia2Config {
         return v.doubleValue
     }
 
+    /// Список чисел из раздела (например, burnMode.options).
+    func numbers(_ sectionName: String, _ key: String) -> [Double]? {
+        guard let a = section(sectionName)[key] as? [Any] else { return nil }
+        let n = a.compactMap { ($0 as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? nil : $0.doubleValue } }
+        return n.isEmpty ? nil : n
+    }
+
     /// Встроенная функция включена? По умолчанию — да.
     func feature(_ name: String) -> Bool {
         (section("features")[name] as? Bool) ?? true

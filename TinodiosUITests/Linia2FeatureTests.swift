@@ -232,7 +232,7 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
     // MARK: - Самоуничтожение: включить → отправить → прочитали → исчезло
 
     private func isOn(_ burn: XCUIElement) -> Bool {
-        burn.label == "Самоуничтожение включено" || (burn.value as? String) == "включено"
+        burn.label == "Исчезающие сообщения включены" || (burn.value as? String) == "включено"
     }
 
     func testF3_BurnModeReadThenGone() throws {
@@ -246,12 +246,15 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         }
         burn.tap()
         let alert = app.alerts.firstMatch
-        wait(alert, "окно самоуничтожения", timeout: 5)
-        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS 'удаляться у обоих сразу после прочтения'")).firstMatch.exists, "нет пояснения в окне")
+        wait(alert, "окно исчезающих сообщений", timeout: 5)
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS 'после прочтения'")).firstMatch.exists, "нет пояснения в окне")
         screenshot("burn-alert")
-        alert.buttons["Включить"].tap()
-        wait(any("l2.chat.burnLabel"), "подпись «Самоуничтожение включено»", timeout: 15)
-        wait(labelContains("Вы включили самоуничтожение"), "строка «Вы включили самоуничтожение» в чате", timeout: 15)
+        wait(alert.buttons["Для обоих"], "«Для обоих»").tap()
+        let secs = app.sheets.buttons.matching(NSPredicate(format: "label BEGINSWITH '20 с'")).firstMatch
+        wait(secs, "срок «20 с»", timeout: 5).tap()
+        let label = wait(any("l2.chat.burnLabel"), "подпись «Исчезающие сообщения: 20 с после прочтения»", timeout: 15)
+        XCTAssertTrue(label.label.contains("20 с после прочтения"), "подпись у поля ввода: \(label.label)")
+        wait(labelContains("Вы включили исчезающие сообщения"), "строка «Вы включили исчезающие сообщения» в чате", timeout: 15)
         XCTAssertTrue(isOn(app.buttons["l2.chat.burn"].firstMatch), "значок ⏱ не стал красным (включено)")
         let text = "Сгорит " + Self.stamp
         send(text)
@@ -269,7 +272,9 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         // Исчезает у обоих.
         let gone = NSPredicate(format: "exists == false")
         expectation(for: gone, evaluatedWith: labelContains(text))
-        waitForExpectations(timeout: 60)   // burnMode.readSeconds (10 с) + 2 с + доставка
+        sleep(6)
+        screenshot("burn-countdown")       // на сообщении отсчёт ⏱0:1x
+        waitForExpectations(timeout: 60)   // 20 с после прочтения + доставка
         screenshot("burn-gone")
         b.fetchLatest(topic)
         XCTAssertFalse(b.datas.contains { ($0["content"] as? String) == text }, "у собеседника сообщение осталось")
@@ -277,7 +282,7 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         // Выключить.
         app.buttons["l2.chat.burn"].firstMatch.tap()
         wait(app.alerts.buttons["Выключить"].firstMatch, "«Выключить»").tap()
-        wait(labelContains("Вы выключили самоуничтожение"), "строка «Вы выключили самоуничтожение»", timeout: 15)
-        XCTAssertFalse(any("l2.chat.burnLabel").isHittable, "подпись «Самоуничтожение включено» осталась")
+        wait(labelContains("Вы выключили исчезающие сообщения"), "строка «Вы выключили исчезающие сообщения»", timeout: 15)
+        XCTAssertFalse(any("l2.chat.burnLabel").isHittable, "подпись об исчезающих сообщениях осталась")
     }
 }

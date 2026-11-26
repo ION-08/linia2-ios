@@ -227,6 +227,7 @@ class MessageViewController: UIViewController {
     var linia2BurnLabel: UILabel?
     var linia2BurnLabelBottom: NSLayoutConstraint?
     var linia2LastScreenshotNote: Date?
+    var linia2BurnTimer: Timer?
 
     // Highlight this cell when scroll finishes (after the user tapped on a quote or a pinned message).
     var highlightCellAtPathAfterScroll: IndexPath?
@@ -801,6 +802,10 @@ extension MessageViewController: UICollectionViewDataSource {
         if let ts = message.ts, !linia2IsServiceMessage(message) {
             // LINIA2: 🔥 — сообщение в режиме самоуничтожения.
             cell.timestampLabel.text = (Linia2Burn.isBurnMessage(message) ? "🔥" : "") + RelativeDateFormatter.shared.timeOnly(from: ts)
+            if let t = topic, let dl = Linia2Burn.deadlines[Linia2Burn.k(t.name, message.seqId)], dl.timeIntervalSinceNow > 0 {
+                let left = Int(ceil(dl.timeIntervalSinceNow))
+                cell.timestampLabel.text = String(format: "⏱%d:%02d", left / 60, left % 60)   // отсчёт до исчезновения
+            }
             cell.timestampLabel.textColor = markerTextColor
         }
         cell.editedMarker.text = editedMarkerText(forMessage: message)

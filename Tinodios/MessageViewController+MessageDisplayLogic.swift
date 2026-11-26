@@ -107,8 +107,8 @@ extension MessageViewController: MessageDisplayLogic {
         assert(Thread.isMainThread)
         guard collectionView != nil else { return }
         let oldData = self.messages
-        linia2ProcessBurn(messages)   // LINIA2: самоуничтожение (Linia2Burn.swift)
-        let newData: [StoredMessage] = linia2ExtractReactions(messages)
+        // LINIA2: исчезающие сообщения (Linia2Burn.swift) — исчезнувшие скрываются сразу.
+        let newData: [StoredMessage] = linia2ExtractReactions(linia2ProcessBurn(messages))
 
         // Both empty: no change.
         guard !oldData.isEmpty || !newData.isEmpty else { return }
