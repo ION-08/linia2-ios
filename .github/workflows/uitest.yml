@@ -185,7 +185,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests \
             -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests \
-            -skip-testing:TinodiosUITests/Linia2DesignShots \
+            -skip-testing:TinodiosUITests/Linia2DesignShots -skip-testing:TinodiosUITests/Linia2LaunchTests \
             -parallel-testing-enabled NO \
             -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
@@ -193,6 +193,36 @@ jobs:
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|crash|\*\* TEST' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
+
+      # Запуск при новых сообщениях (вылет сборки 1005): холодный старт, нажатие на уведомление, фон короткий/длинный.
+      # Тест кладёт payload в $L2_PUSH_DIR/<имя>.apns, фоновый цикл ниже делает `simctl push` и отвечает <имя>.apns.sent.
+      - name: Запуск приложения из уведомления (Linia2LaunchTests)
+        id: launch
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+          [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          PUSHDIR="$HOME/Library/Caches/l2push"; rm -rf "$PUSHDIR"; mkdir -p "$PUSHDIR" "$RUNNER_TEMP/out/launch"
+          ( while [ ! -f "$PUSHDIR/stop" ]; do
+              for f in "$PUSHDIR"/*.apns; do
+                [ -e "$f" ] || continue
+                if xcrun simctl push "$UDID" info.codix.liniya2 "$f" > "$f.log" 2>&1; then
+                  cp "$f" "$RUNNER_TEMP/out/launch/"; mv "$f" "$f.sent"; echo "push: $(basename "$f")"
+                else mv "$f" "$f.err"; cat "$f.log"; fi
+              done; sleep 0.5
+            done ) &
+          export TEST_RUNNER_L2_PUSH_DIR="$PUSHDIR"
+          export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
+          export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
+          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -only-testing:TinodiosUITests/Linia2LaunchTests -resultBundlePath "$RUNNER_TEMP/launch.xcresult" \
+            2>&1 | tee "$RUNNER_TEMP/out/launch/launch.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|push:|\*\* TEST' || true
+          touch "$PUSHDIR/stop"
+          P=$(grep -c "Test Case .* passed" "$RUNNER_TEMP/out/launch/launch.log" || true)
+          SK=$(grep -c "Test Case .* skipped" "$RUNNER_TEMP/out/launch/launch.log" || true)
+          echo "### Запуск из уведомления: пройдено $P из 4, пропущено $SK $(grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/launch/launch.log" && [ "$SK" = 0 ] && echo ✅ || echo ❌)" >> "$GITHUB_STEP_SUMMARY"
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/launch/launch.log" && [ "$SK" = 0 ]
 
       - name: Итог звонка iOS ↔ веб
         id: webpeer
@@ -259,18 +289,18 @@ jobs:
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/failures" "$RUNNER_TEMP/out/crashes"
-          for r in unit ui calls peer; do
+          for r in unit ui launch calls peer; do
             X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
             xcrun xcresulttool get test-results tests --path "$X" > "$RUNNER_TEMP/out/$r-tests.json" 2>/dev/null || true
             xcrun xcresulttool export attachments --path "$X" --output-path "$RUNNER_TEMP/out/failures/$r" --only-failures >/dev/null 2>&1 || true
           done
           [ -d "$RUNNER_TEMP/ui.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" >/dev/null 2>&1 || true
-          for r in calls peer; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
+          for r in launch calls peer; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
           cp "$RUNNER_TEMP"/unit.log "$RUNNER_TEMP"/test.log "$RUNNER_TEMP/out/" 2>/dev/null || true
           python3 ci/test-report.py "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/out/report.md" >> "$GITHUB_STEP_SUMMARY"
           if grep -qE '\*\* TEST (SUCCEEDED|FAILED) \*\*' "$RUNNER_TEMP/test.log" 2>/dev/null; then C=true; else C=false; fi
-          if ls "$RUNNER_TEMP/out/crashes"/*.ips >/dev/null 2>&1 || grep -qE 'Restarting after unexpected exit|Lost connection to the test runner|terminated due to signal|crashed in ' "$RUNNER_TEMP/test.log" 2>/dev/null; then K=true; else K=false; fi
+          if ls "$RUNNER_TEMP/out/crashes"/*.ips >/dev/null 2>&1 || grep -qE 'Restarting after unexpected exit|Lost connection to the test runner|terminated due to signal|crashed in ' "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/out/launch/launch.log" 2>/dev/null; then K=true; else K=false; fi
           echo "compiled=$C" >> "$GITHUB_OUTPUT"; echo "crashed=$K" >> "$GITHUB_OUTPUT"
           echo "Вылеты приложения: $K" >> "$GITHUB_STEP_SUMMARY"
 

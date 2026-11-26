@@ -992,11 +992,12 @@ open class Drafty: Codable, CustomStringConvertible, Equatable {
                 var data: [String : JSONValue]?
                 if span.type != nil && !span.type!.isEmpty {
                     tp = span.type
-                } else {
-                    let e = ent![span.key]
+                } else if let ent = ent, span.key >= 0, span.key < ent.count {
+                    let e = ent[span.key]
                     tp = e.tp
                     data = e.data
                 }
+                // LINIA2: ссылка на сущность без ent (кривой Drafty от бота/сервера) — раньше ent! и вылет.
 
                 // Is type still undefined? Hide the invalid element!
                 if tp == nil || tp!.isEmpty {

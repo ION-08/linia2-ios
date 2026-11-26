@@ -203,33 +203,36 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             return
         }
         if state == .background || (state == .inactive && !self.appIsStarting) {
+            // LINIA2: выборка — НЕ на главном потоке. Раньше fetchData (подключение, вход, подписка — синхронно,
+            // без таймаута) выполнялся прямо здесь, на главном: несколько push подряд (бот «Безопасность»)
+            // держали главный поток секундами, а при «повисшем» ответе — навсегда; открытие приложения
+            // (нажатие на уведомление) в этот момент — и система убивала приложение по сторожевому таймеру.
+            // Холодный старт по нажатию тоже попадал сюда (appIsStarting ещё false) — блокировал запуск.
             let what = userInfo["what"] as? String
-            if what == nil || what == "msg" {
-                // New message.
-                guard let seq = Int(userInfo["seq"] as? String ?? ""), seq > 0 else {
-                    completionHandler(.failed)
-                    return
-                }
-                var keepConnection = false
-                if userInfo["webrtc"] != nil {
-                    // Video call. Fetch related messages.
-                    keepConnection = true
-                }
-                // Fetch data in the background.
-                completionHandler(SharedUtils.fetchData(using: Cache.tinode, for: topicName, seq: seq, keepConnection: keepConnection))
-            } else if what == "sub" {
-                // New subscription.
-                completionHandler(SharedUtils.fetchDesc(using: Cache.tinode, for: topicName))
-            } else if what == "read" {
-                // Read notification.
-                if let seq = Int(userInfo["seq"] as? String ?? ""), seq > 0 {
-                    completionHandler(SharedUtils.updateRead(using: Cache.tinode, for: topicName, seq: seq))
+            let seq = Int(userInfo["seq"] as? String ?? "") ?? 0
+            let isCall = userInfo["webrtc"] != nil
+            let done: (UIBackgroundFetchResult) -> Void = { r in DispatchQueue.main.async { completionHandler(r) } }
+            let queuedAt = Date()
+            AppDelegate.pushFetchQueue.async {
+                // Система даёт ~30 с на push: долго ждали в очереди за другими — не начинать (сообщения придут при открытии).
+                guard Date().timeIntervalSince(queuedAt) < 20 else { done(.noData); return }
+                let tinode = Cache.tinode
+                if what == nil || what == "msg" {
+                    // New message.
+                    guard seq > 0 else { done(.failed); return }
+                    // Video call: keep connection to fetch related messages.
+                    // Приложение открывается (inactive) — не покидать топик через 1 с: его может держать открытый чат.
+                    done(SharedUtils.fetchData(using: tinode, for: topicName, seq: seq, keepConnection: isCall || state == .inactive))
+                } else if what == "sub" {
+                    // New subscription.
+                    done(SharedUtils.fetchDesc(using: tinode, for: topicName))
+                } else if what == "read" {
+                    // Read notification.
+                    done(seq > 0 ? SharedUtils.updateRead(using: tinode, for: topicName, seq: seq) : .failed)
                 } else {
-                    completionHandler(.failed)   // обработчик обязан быть вызван всегда
+                    Cache.log.error("Invalid 'what' value ['%@'] in push notification for topic '%@'", what ?? "", topicName)
+                    done(.failed)
                 }
-            } else {
-                Cache.log.error("Invalid 'what' value ['%@'] in push notification for topic '%@'", what!, topicName)
-                completionHandler(.failed)
             }
         } else if state == .inactive && self.appIsStarting {
             // User tapped notification.
@@ -239,6 +242,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             completionHandler(.noData)
         }
     }
+
+    /// LINIA2: фоновые выборки по push — по одной, вне главного потока.
+    static let pushFetchQueue = DispatchQueue(label: "info.codix.liniya2.push-fetch", qos: .utility)
 
     // LINIA2: liniya2://call/<token> — ссылка на звонок (кнопка «Открыть в приложении» на странице гостя).
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
@@ -302,7 +308,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
             // We are already in the correct topic. Do not present the notification.
             completionHandler([])
         } else {
-            DispatchQueue.global(qos: .background).async {
+            AppDelegate.pushFetchQueue.async {
                 SharedUtils.fetchData(using: Cache.tinode, for: topicName, seq: seq, keepConnection: false)
             }
             // If the push notification is either silent or a video call related, do not present the alert.

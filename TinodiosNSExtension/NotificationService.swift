@@ -41,18 +41,23 @@ class NotificationService: UNNotificationServiceExtension {
 
         if let bestAttemptContent = bestAttemptContent {
             let payload = bestAttemptContent.userInfo
-            guard let topicName = payload["topic"] as? String, !topicName.isEmpty, let from = payload["xfrom"] as? String, !from.isEmpty else { return }
+            // LINIA2: обработчик вызывается на любом пути (раньше «return» без него — уведомление ждало 30 с).
+            guard let topicName = payload["topic"] as? String, !topicName.isEmpty, let from = payload["xfrom"] as? String, !from.isEmpty else {
+                contentHandler(bestAttemptContent)
+                return
+            }
 
             let action = payload["what"] as? String ?? "msg"
 
             guard ["msg", "sub"].contains(action) else {
                 // Not handling it here.
+                contentHandler(bestAttemptContent)
                 return
             }
 
-            defer { self.contentHandler!(bestAttemptContent) }
+            defer { contentHandler(bestAttemptContent) }
 
-            let store = BaseDb.sharedInstance.sqlStore!
+            guard let store = BaseDb.sharedInstance.sqlStore else { return }
             let topicType = Tinode.topicTypeByName(name: topicName)
             let senderName: String
             switch topicType {
@@ -101,7 +106,7 @@ class NotificationService: UNNotificationServiceExtension {
                 bestAttemptContent.body = senderName
             }
         } else {
-            self.contentHandler!(request.content)
+            contentHandler(request.content)
         }
     }
 

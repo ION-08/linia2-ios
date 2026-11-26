@@ -227,7 +227,18 @@ public class SharedUtils {
         }
     }
 
+    // LINIA2: подключение и вход — по одному за раз (запуск приложения, push в фоне, нажатие на уведомление
+    // раньше подключались одновременно: второй WebSocket поверх первого, «пустой» ответ → выход из аккаунта).
+    private static let connectLock = NSLock()
+    /// Сколько ждать подключения и входа (фоновая выборка push даёт ~30 с на всё).
+    public static var connectTimeout: TimeInterval = 15
+
+    /// Синхронное подключение и вход. false — только при однозначном отказе сервера (токен не принят);
+    /// нет сети, таймаут, «уже подключаемся» — true (сессия сохраняется, переподключится само).
     public static func connectAndLoginSync(using tinode: Tinode, inBackground bkg: Bool) -> Bool {
+        if Thread.isMainThread {
+            BaseDb.log.error("Connect&Login Sync - called on the main thread")
+        }
         guard let userName = SharedUtils.getSavedLoginUserName(), !userName.isEmpty else {
             BaseDb.log.error("Connect&Login Sync - missing user name")
             return false
@@ -242,21 +253,26 @@ public class SharedUtils {
             BaseDb.log.error("Connect&Login Sync - auth token expired")
             return false
         }
+        connectLock.lock()
+        defer { connectLock.unlock() }
+        if tinode.isConnectionAuthenticated {
+            return true
+        }
         BaseDb.log.info("Connect&Login Sync - will attempt to login (user name: %@)", userName)
         var success = false
         do {
             tinode.setAutoLoginWithToken(token: token)
             // Tinode.connect() will automatically log in.
-            let msg = try tinode.connectDefault(inBackground: bkg)?.getResult()
+            let msg = try tinode.connectDefault(inBackground: bkg)?.getResult(timeout: connectTimeout)
             if let ctrl = msg?.ctrl {
                 // Assuming success by default.
                 success = true
                 switch ctrl.code {
                 case 0..<300:
-                    let myUid = ctrl.getStringParam(for: "user")
-                    BaseDb.log.info("Connect&Login Sync - login successful for: %@", myUid!)
-                    if tinode.authToken != token {
-                        SharedUtils.saveAuthToken(for: userName, token: tinode.authToken, expires: tinode.authTokenExpires)
+                    let myUid = ctrl.getStringParam(for: "user") ?? tinode.myUid ?? "?"
+                    BaseDb.log.info("Connect&Login Sync - login successful for: %@", myUid)
+                    if let t = tinode.authToken, t != token {
+                        SharedUtils.saveAuthToken(for: userName, token: t, expires: tinode.authTokenExpires)
                     }
                 case 401:
                     BaseDb.log.info("Connect&Login Sync - attempt to subscribe to 'me' before login.")
@@ -267,19 +283,31 @@ public class SharedUtils {
                 default:
                     success = false
                 }
+            } else {
+                // Уже было соединение (вход идёт в другом месте) — подождать входа, но не считать это отказом.
+                let end = Date().addingTimeInterval(5)
+                while !tinode.isConnectionAuthenticated && tinode.isConnected && Date() < end {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+                success = true
             }
         } catch WebSocketError.network(let err) {
             // No network connection.
             BaseDb.log.debug("Connect&Login Sync [network] - could not connect to Tinode: %@", err)
             success = true
+        } catch TinodeError.serverResponseError(let code, let text, _) {
+            // Однозначный ответ сервера на вход: токен не принят — выход; прочее (5xx, 409…) — не выход.
+            BaseDb.log.error("Connect&Login Sync - login rejected: %d %@", code, text)
+            success = !(code == 401 || code == 403)
         } catch {
             let err = error as NSError
             if err.code == NSURLErrorCannotConnectToHost {
                 BaseDb.log.debug("Connect&Login Sync [network] - could not connect to Tinode: %@", err)
-                success = true
             } else {
                 BaseDb.log.error("Connect&Login Sync - failed to automatically login to Tinode: %@", error.localizedDescription)
             }
+            // Таймаут, обрыв, «вход уже идёт» и т.п. — не повод выходить из аккаунта.
+            success = true
         }
         return success
     }
@@ -339,7 +367,9 @@ public class SharedUtils {
     // (and saves the description locally).
     @discardableResult
     public static func fetchDesc(using tinode: Tinode, for topicName: String) -> UIBackgroundFetchResult {
-        guard tinode.isConnectionAuthenticated || SharedUtils.connectAndLoginSync(using: tinode, inBackground: true) else {
+        // LINIA2: connectAndLoginSync теперь «true» и при таймауте/нет сети (чтобы не выходить из аккаунта) — проверяем вход.
+        guard tinode.isConnectionAuthenticated || SharedUtils.connectAndLoginSync(using: tinode, inBackground: true),
+              tinode.isConnectionAuthenticated else {
             return .failed
         }
         // If we have topic data, we are done.
@@ -347,7 +377,7 @@ public class SharedUtils {
             return .noData
         }
         do {
-            if let msg = try tinode.getMeta(topic: topicName, query: MsgGetMeta.desc()).getResult(),
+            if let msg = try tinode.getMeta(topic: topicName, query: MsgGetMeta.desc()).getResult(timeout: 10),
                 (msg.ctrl?.code ?? 500) < 300 {
                 return .newData
             }
@@ -361,7 +391,9 @@ public class SharedUtils {
     // if the last received message was prior to |seq|.
     @discardableResult
     public static func fetchData(using tinode: Tinode, for topicName: String, seq: Int, keepConnection: Bool) -> UIBackgroundFetchResult {
-        guard tinode.isConnectionAuthenticated || SharedUtils.connectAndLoginSync(using: tinode, inBackground: true) else {
+        // LINIA2: connectAndLoginSync теперь «true» и при таймауте/нет сети (чтобы не выходить из аккаунта) — проверяем вход.
+        guard tinode.isConnectionAuthenticated || SharedUtils.connectAndLoginSync(using: tinode, inBackground: true),
+              tinode.isConnectionAuthenticated else {
             return .failed
         }
         var topic: DefaultComTopic
@@ -387,7 +419,8 @@ public class SharedUtils {
         if (topic.recv ?? 0) >= seq {
             return .noData
         }
-        if let msg = try? topic.subscribe(set: nil, get: builder.withLaterData(limit: 10).withDel().build()).getResult(), (msg.ctrl?.code ?? 500) < 300 {
+        // LINIA2: ожидание ответа ограничено (раньше — вечно: «повисший» ответ блокировал поток).
+        if let msg = try? topic.subscribe(set: nil, get: builder.withLaterData(limit: 10).withDel().build()).getResult(timeout: 10), (msg.ctrl?.code ?? 500) < 300 {
             if !keepConnection {
                 // Data messages are sent asynchronously right after ctrl message.
                 // Give them 1 second to arrive - so we reply back with {note recv}.
