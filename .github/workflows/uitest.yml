@@ -1,8 +1,8 @@
-# Автопроверка «Линия 2.0»: сборка для iOS Simulator и прохождение сценариев XCUITest
-# (стартовый экран → код → регистрация → PIN → Чаты; все вкладки; каждый пункт Настроек;
-#  «Добавить контакт», «Новый чат»; выход → «Войти»; перезапуск с PIN).
-# Скриншоты каждого экрана и crash-отчёты — в артефактах. Тестовые пользователи удаляются всегда.
-# Секрет репозитория: CI_TOKEN (служебный доступ к /invite/api/ci/* на сервере).
+# Автопроверка «Линия 2.0» перед TestFlight (iPhone, iOS 18 или 17 в симуляторе):
+#   1) юнит-тесты TinodeSDKTests;  2) XCUITest — 29 сценариев + запуск во всех конфигурациях.
+# Нестабильные тесты перезапускаются до 2 раз (видно в отчёте). Упал хоть один — TestFlight не запускается.
+# Отчёт — в Summary прогона; скриншоты всех экранов и падений, crash-отчёты — в артефакте test-results-N.
+# Секреты: CI_TOKEN (служебный доступ к /invite/api/ci/*), L2_REVIEW_LOGIN / L2_REVIEW_PASSWORD (аккаунт проверки Apple).
 name: UI tests
 
 # Автоматически на каждый push в main (репозиторий публичный — минуты бесплатные).
@@ -27,7 +27,7 @@ concurrency:
 jobs:
   uitest:
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 180
     outputs:
       compiled: ${{ steps.report.outputs.compiled }}
       crashed: ${{ steps.report.outputs.crashed }}
@@ -103,35 +103,25 @@ jobs:
           EOF
           node "$RUNNER_TEMP/seed.mjs" || echo "::warning::не удалось подготовить историю"
 
-      - name: Симулятор
+      - name: Симулятор (iPhone, iOS 18 или 17)
         run: |
-          UDID=$(xcrun simctl list devices available -j | python3 -c '
-          import json,sys,re
-          d=json.load(sys.stdin)["devices"]
-          best=None
-          for rt,devs in d.items():
-              if "iOS" not in rt: continue
-              ver=tuple(int(x) for x in re.findall(r"\d+", rt.split("iOS")[-1])[:2])
-              for x in devs:
-                  if x["name"].startswith("iPhone") and "Pro" in x["name"] and "Max" not in x["name"]:
-                      k=(ver, x["name"])
-                      if best is None or k>best[0]: best=(k,x["udid"])
-          print(best[1] if best else "")')
-          if [ "${{ matrix.device }}" = "se" ]; then
-            # iPhone SE: берём готовый, иначе создаём на самой новой среде iOS.
-            UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone SE[^(]*([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}' || true)
-            if [ -z "$UDID" ]; then
-              RT=$(xcrun simctl list runtimes available | grep -o 'com.apple.CoreSimulator.SimRuntime.iOS-[0-9-]*' | sort -V | tail -1)
-              for DT in iPhone-SE-3rd-generation iPhone-SE--2nd-generation-; do
-                UDID=$(xcrun simctl create "L2 iPhone SE" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
-              done
-            fi
-            [ -n "$UDID" ] || { echo "::warning::iPhone SE недоступен — используется iPhone 16e"; UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone 16e ([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}'); }
+          pick() { xcrun simctl list runtimes available | grep -o "com.apple.CoreSimulator.SimRuntime.iOS-$1-[0-9-]*" | sort -V | tail -1; }
+          RT=$(pick 18); [ -n "$RT" ] || RT=$(pick 17)
+          if [ -z "$RT" ]; then
+            echo "Среды iOS 18/17 нет на раннере — скачиваю iOS 18"
+            xcodebuild -downloadPlatform iOS -buildVersion 18.6 >/dev/null 2>&1 || xcodebuild -downloadPlatform iOS -buildVersion 18.5 >/dev/null 2>&1 || true
+            RT=$(pick 18); [ -n "$RT" ] || RT=$(pick 17)
           fi
-          [ -n "$UDID" ] || UDID=$(xcrun simctl list devices available | grep -m1 -o 'iPhone[^(]*([0-9A-F-]*)' | grep -o '[0-9A-F-]\{36\}')
+          [ -n "$RT" ] || { echo "::error::Нет симулятора iOS 18/17 — тесты не запущены, загрузки в TestFlight не будет"; xcrun simctl list runtimes; exit 1; }
+          UDID=""
+          for DT in iPhone-16-Pro iPhone-16 iPhone-15-Pro iPhone-15; do
+            UDID=$(xcrun simctl create "L2 $DT" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
+          done
+          [ -n "$UDID" ] || { echo "::error::не удалось создать iPhone на $RT"; exit 1; }
           echo "UDID=$UDID" >> "$GITHUB_ENV"
-          xcrun simctl list devices | grep "$UDID"
+          echo "Симулятор: $(xcrun simctl list devices | grep "$UDID" | sed 's/^ *//') на ${RT##*.}" | tee -a "$GITHUB_STEP_SUMMARY"
           xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
           # Без обучающих подсказок клавиатуры и автоисправлений — они перекрывают поля в тесте.
           for k in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do
             xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences $k -bool true || true
@@ -139,44 +129,64 @@ jobs:
           xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false || true
           xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences KeyboardPrediction -bool false || true
 
-      - name: XCUITest
-        id: test
+      - name: Юнит-тесты
+        id: unit
         run: |
           set -o pipefail
-          export TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
+          xcodebuild test \
+            -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Debug \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -only-testing:TinodeSDKTests \
+            -retry-tests-on-failure -test-iterations 3 \
+            -resultBundlePath "$RUNNER_TEMP/unit.xcresult" \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee "$RUNNER_TEMP/unit.log" | grep -E 'error:|Test Case .* (passed|failed)|\*\* TEST' || true
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/unit.log"
+
+      - name: XCUITest
+        id: test
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          export TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN"
           export TEST_RUNNER_L2_CODE="$L2_CODE" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" \
-                 TEST_RUNNER_L2_REG_LOGIN="$L2_REG_LOGIN" TEST_RUNNER_L2_REG_PASSWORD="$L2_REG_PASSWORD"
+                 TEST_RUNNER_L2_REG_LOGIN="$L2_REG_LOGIN" TEST_RUNNER_L2_REG_PASSWORD="$L2_REG_PASSWORD" \
+                 TEST_RUNNER_L2_REVIEW_LOGIN="${{ secrets.L2_REVIEW_LOGIN }}" TEST_RUNNER_L2_REVIEW_PASSWORD="${{ secrets.L2_REVIEW_PASSWORD }}"
+          # Нестабильные тесты перезапускаются до 2 раз; каждый перезапуск виден в отчёте.
           xcodebuild test \
             -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
             -destination "platform=iOS Simulator,id=$UDID" \
-            -only-testing:TinodiosUITests/TinodiosUITests/testFullFlow \
+            -only-testing:TinodiosUITests \
+            -parallel-testing-enabled NO \
+            -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-            2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|Test Case|failed|passed|crash|\*\* TEST' || true
+            2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|crash|\*\* TEST' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
 
-      - name: Скриншоты и отчёты
+      - name: Отчёт, скриншоты падений
         id: report
         if: always()
         run: |
-          mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/crashes"
-          if [ -d "$RUNNER_TEMP/ui.xcresult" ]; then
-            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" || true
-            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ui.xcresult" > "$RUNNER_TEMP/out/summary.json" 2>/dev/null || true
-            xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/ui.xcresult" > "$RUNNER_TEMP/out/tests.json" 2>/dev/null || true
-          fi
+          mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/failures" "$RUNNER_TEMP/out/crashes"
+          for r in unit ui; do
+            X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
+            xcrun xcresulttool get test-results tests --path "$X" > "$RUNNER_TEMP/out/$r-tests.json" 2>/dev/null || true
+            xcrun xcresulttool export attachments --path "$X" --output-path "$RUNNER_TEMP/out/failures/$r" --only-failures >/dev/null 2>&1 || true
+          done
+          [ -d "$RUNNER_TEMP/ui.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" >/dev/null 2>&1 || true
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
-          cp "$RUNNER_TEMP/test.log" "$RUNNER_TEMP/out/" 2>/dev/null || true
-          ls -la "$RUNNER_TEMP/out/shots" | head -80; ls "$RUNNER_TEMP/out/crashes"
-          if grep -qE '\*\* TEST (SUCCEEDED|FAILED) \*\*' "$RUNNER_TEMP/test.log" 2>/dev/null && ! grep -qE '\.swift:[0-9]+:[0-9]+: error:|Linker command failed|BUILD FAILED' "$RUNNER_TEMP/test.log" 2>/dev/null; then C=true; else C=false; fi
+          cp "$RUNNER_TEMP"/unit.log "$RUNNER_TEMP"/test.log "$RUNNER_TEMP/out/" 2>/dev/null || true
+          python3 ci/test-report.py "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          if grep -qE '\*\* TEST (SUCCEEDED|FAILED) \*\*' "$RUNNER_TEMP/test.log" 2>/dev/null; then C=true; else C=false; fi
           if ls "$RUNNER_TEMP/out/crashes"/*.ips >/dev/null 2>&1 || grep -qE 'Restarting after unexpected exit|Lost connection to the test runner|terminated due to signal|crashed in ' "$RUNNER_TEMP/test.log" 2>/dev/null; then K=true; else K=false; fi
           echo "compiled=$C" >> "$GITHUB_OUTPUT"; echo "crashed=$K" >> "$GITHUB_OUTPUT"
-          echo "Собрано: $C, вылеты: $K" >> "$GITHUB_STEP_SUMMARY"
+          echo "Вылеты приложения: $K" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ui-test-results-${{ matrix.device }}
+          name: test-results-${{ github.run_number }}
           path: ${{ runner.temp }}/out
           if-no-files-found: ignore
 

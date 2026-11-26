@@ -29,6 +29,16 @@
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
          <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0A56CCE122759078006E2952"
+               BuildableName = "TinodeSDKTests.xctest"
+               BlueprintName = "TinodeSDKTests"
+               ReferencedContainer = "container:TinodeSDK.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
             skipped = "NO"
             parallelizable = "YES">
             <BuildableReference

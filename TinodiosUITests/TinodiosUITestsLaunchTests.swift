@@ -18,11 +18,12 @@ final class TinodiosUITestsLaunchTests: XCTestCase {
     }
 
     func testLaunch() throws {
+        // Линия 2.0: запуск в каждой конфигурации (светлая/тёмная, ориентации) — без вылета.
         let app = XCUIApplication()
+        app.launchArguments = ["-l2-uitest"]
         app.launch()
-
-        // Insert steps here to perform after app launch but before taking a screenshot,
-        // such as logging into a test account or navigating somewhere in the app
+        sleep(3)
+        XCTAssertEqual(app.state, .runningForeground, "приложение не запустилось или упало при запуске")
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Launch Screen"

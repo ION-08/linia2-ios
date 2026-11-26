@@ -2,10 +2,15 @@
 //  TinodiosUITests.swift
 //  Линия 2.0: автопроверка перед загрузкой в TestFlight (iOS Simulator, XCUITest).
 //
+//  Тесты идут по порядку номеров (XCTest запускает их по алфавиту) и при перезапуске
+//  (xcodebuild -retry-tests-on-failure) сами приводят приложение в нужное состояние.
+//
 //  Данные приходят из окружения (xcodebuild TEST_RUNNER_*):
-//    L2_CODE, L2_REG_LOGIN, L2_REG_PASSWORD — регистрация по коду;
-//    L2_LOGIN, L2_PASSWORD — вход готовым тестовым пользователем.
-//  Скриншот каждого экрана сохраняется во вложениях xcresult.
+//    L2_CODE, L2_REG_LOGIN, L2_REG_PASSWORD — регистрация по коду (этот аккаунт тест потом удаляет);
+//    L2_LOGIN, L2_PASSWORD — тестовый пользователь с готовой перепиской с «Собеседник CI»;
+//    L2_PEER_LOGIN, L2_PEER_NAME — собеседник;
+//    L2_REVIEW_LOGIN, L2_REVIEW_PASSWORD — аккаунт для проверки Apple (только вход и просмотр).
+//  Скриншоты экранов и скриншот при каждом падении — во вложениях xcresult.
 //
 
 import XCTest
@@ -13,14 +18,22 @@ import XCTest
 final class TinodiosUITests: XCTestCase {
     private var app: XCUIApplication!
     private var shot = 0
+    private var launched = false
     private let env = ProcessInfo.processInfo.environment
     private let pin = ["1", "3", "5", "7"]
+
+    /// Кто сейчас вошёл в приложение (между тестами одного прогона).
+    private static var session: String?
+    /// Регистрация в тесте 03 прошла — дальше работаем этим аккаунтом.
+    private static var registered = false
+    private static var regAttempts = 0
+    private static let sentText = "Ответ из теста " + String(Int(Date().timeIntervalSince1970) % 100000)
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchArguments = ["-l2-uitest"]
-        // Системные запросы (контакты, уведомления, микрофон) — закрываем.
+        XCUIDevice.shared.orientation = .portrait
         addUIInterruptionMonitor(withDescription: "Системные запросы") { alert in
             for title in ["Allow", "Разрешить", "OK", "Don’t Allow", "Don't Allow", "Не разрешать", "Allow While Using App"] {
                 if alert.buttons[title].exists { alert.buttons[title].tap(); return true }
@@ -29,12 +42,27 @@ final class TinodiosUITests: XCTestCase {
         }
     }
 
+    override func tearDownWithError() throws {
+        // Скриншот при падении + проверка, что приложение не вылетело.
+        if let run = testRun, run.failureCount > 0 || run.unexpectedExceptionCount > 0 {
+            let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            a.name = "ПАДЕНИЕ-\(name)"
+            a.lifetime = .keepAlways
+            add(a)
+        }
+        if launched && app.state == .notRunning {
+            Self.session = nil
+            XCTFail("Приложение закрылось во время теста (вылет)")
+        }
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     // MARK: - Помощники
 
     private func screenshot(_ name: String) {
         shot += 1
         let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        a.name = String(format: "%02d-%@", shot, name)
+        a.name = String(format: "%@-%02d-%@", String(self.name.split(separator: " ").last ?? "t").replacingOccurrences(of: "]", with: ""), shot, name)
         a.lifetime = .keepAlways
         add(a)
     }
@@ -46,6 +74,35 @@ final class TinodiosUITests: XCTestCase {
             XCTFail("Не появился элемент: \(what)")
         }
         return e
+    }
+
+    private func requireEnv(_ k: String) -> String {
+        guard let v = env[k], !v.isEmpty else {
+            XCTFail("Нет переменной окружения \(k) (секрет GitHub не задан)")
+            return ""
+        }
+        return v
+    }
+
+    private func any(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
+
+    /// Кнопка подтверждения — в алерте или в листе действий.
+    private func dialogButton(_ title: String) -> XCUIElement {
+        if app.alerts.buttons[title].firstMatch.exists { return app.alerts.buttons[title].firstMatch }
+        if app.sheets.buttons[title].firstMatch.exists { return app.sheets.buttons[title].firstMatch }
+        let a = app.alerts.buttons[title].firstMatch
+        if a.waitForExistence(timeout: 4) { return a }
+        return app.sheets.buttons[title].firstMatch
+    }
+
+    private func labelContains(_ text: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch
+    }
+
+    private func launch() {
+        app.launch()
+        launched = true
+        dismissSpringboardAlerts()
     }
 
     private func dismissSpringboardAlerts() {
@@ -64,45 +121,18 @@ final class TinodiosUITests: XCTestCase {
         }
     }
 
-    /// Нажать элемент; если его закрывает клавиатура — прокрутить экран.
-    private func tapVisible(_ e: XCUIElement) {
-        wait(e, "элемент \(e.identifier)")
+    private func tapVisible(_ e: XCUIElement, _ what: String) {
+        wait(e, what)
         var tries = 0
         while !e.isHittable && tries < 4 { app.swipeUp(); tries += 1 }
         e.tap()
     }
 
-    /// Ввод без провала теста: false, если поле не удалось нажать.
-    private func softFill(_ e: XCUIElement, _ text: String) -> Bool {
-        guard e.waitForExistence(timeout: 10) else { return false }
-        var tries = 0
-        while !e.isHittable && tries < 3 { app.swipeUp(); tries += 1 }
-        guard e.isHittable else { return false }
-        e.tap()
-        dismissKeyboardTips()
-        e.typeText(text)
-        return true
+    private func enterPin(_ digits: [String]? = nil) {
+        for d in digits ?? pin { app.buttons[d].firstMatch.tap() }
     }
 
-    /// Ввести текст в поле, предварительно нажав на него.
-    private func fill(_ e: XCUIElement, _ text: String) {
-        tapVisible(e)
-        dismissKeyboardTips()
-        e.typeText(text)
-    }
-
-    private func type(_ text: String, into e: XCUIElement) {
-        e.tap()
-        e.typeText(text)
-    }
-
-    private func enterPin() {
-        for d in pin { app.buttons[d].firstMatch.tap() }
-    }
-
-    /// Ввод цифр нажатиями клавиш цифровой клавиатуры (надёжнее typeText для своего поля ввода кода).
     private func typeDigits(_ digits: String) {
-        // Тестовое поле приложения (только под -l2-uitest) — надёжный ввод кода.
         let ti = app.textFields["l2.code.testinput"].firstMatch
         if ti.waitForExistence(timeout: 2) {
             if !ti.isHittable { app.swipeUp() }
@@ -117,265 +147,519 @@ final class TinodiosUITests: XCTestCase {
         }
     }
 
-    private func tab(_ id: String) -> XCUIElement { app.otherElements[id].firstMatch.exists ? app.otherElements[id].firstMatch : app.descendants(matching: .any)[id].firstMatch }
+    private func tab(_ id: String) -> XCUIElement {
+        app.otherElements[id].firstMatch.exists ? app.otherElements[id].firstMatch : any(id)
+    }
+
+    private var tabBarVisible: Bool { tab("l2.tab.chats").exists && tab("l2.tab.chats").isHittable }
 
     private func back() {
         let b = app.navigationBars.buttons.element(boundBy: 0)
         if b.exists { b.tap() }
+        sleep(1)
     }
 
-    private func requireEnv(_ k: String) throws -> String {
-        guard let v = env[k], !v.isEmpty else { throw XCTSkip("нет переменной \(k)") }
-        return v
+    private enum Screen { case welcome, pinEnter, pinCreate, main, unknown }
+
+    private func currentScreen(timeout: TimeInterval = 25) -> Screen {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            if app.buttons["l2.welcome.login"].exists { return .welcome }
+            if app.staticTexts["Введите PIN-код"].exists { return .pinEnter }
+            if app.staticTexts["Придумайте PIN-код"].exists { return .pinCreate }
+            if tab("l2.tab.chats").exists { return .main }
+            usleep(300_000)
+        } while Date() < end
+        return .unknown
     }
 
-    /// Создание PIN после входа/регистрации; Face ID в симуляторе нет — сразу «Чаты».
-    private func createPinAndReachChats(_ prefix: String) throws {
-        wait(app.staticTexts["Придумайте PIN-код"], "экран создания PIN")
-        screenshot(prefix + "-pin-1")
+    /// Создание PIN после входа/регистрации; Face ID в симуляторе нет — «Не сейчас».
+    private func createPinAndReachChats() {
+        wait(app.staticTexts["Придумайте PIN-код"], "экран создания PIN", timeout: 30)
+        screenshot("pin-create")
         enterPin()
-        XCTAssertTrue(app.state == .runningForeground, "приложение упало на экране PIN")
-        if !app.staticTexts["Повторите PIN-код"].waitForExistence(timeout: 8) {
-            // Нажатия на клавиши PIN в симуляторе не доходят до кнопок — это ограничение теста, не вылет.
-            screenshot("ШАГ ПРОПУЩЕН-PIN")
-            throw XCTSkip("Шаг PIN пропущен: тест не смог нажать клавиши PIN в симуляторе. Вылетов до этого места нет.")
-        }
+        wait(app.staticTexts["Повторите PIN-код"], "экран повтора PIN", timeout: 10)
         enterPin()
         let skip = app.buttons["Не сейчас"]
-        if skip.waitForExistence(timeout: 3) { screenshot(prefix + "-faceid"); skip.tap() }
+        if skip.waitForExistence(timeout: 3) { screenshot("faceid"); skip.tap() }
         wait(tab("l2.tab.chats"), "вкладки после входа", timeout: 30)
-        sleep(2)
-        screenshot(prefix + "-chats")
+        sleep(1)
     }
 
-    private func visitAllTabsAndSettings() {
-        for (id, name) in [("l2.tab.calls", "calls"), ("l2.tab.contacts", "contacts"), ("l2.tab.settings", "settings"), ("l2.tab.chats", "chats")] {
-            wait(tab(id), "вкладка \(name)").tap()
-            sleep(1)
-            screenshot("tab-" + name)
-            dismissSpringboardAlerts()
-        }
-        // Чаты: поиск с открытой клавиатурой.
-        let chatSearch = app.textFields.firstMatch
-        if chatSearch.waitForExistence(timeout: 3) {
-            chatSearch.tap(); sleep(1); screenshot("kb-chats-search")
-            app.typeText("\n"); sleep(1)
-        }
-        // Чаты → «Новый чат» (с клавиатурой).
-        let compose = app.buttons["Новый чат"].firstMatch
-        if wait(compose, "кнопка «Новый чат»").exists {
-            compose.tap(); sleep(2); screenshot("new-chat")
-            let f = app.textFields.firstMatch
-            if f.waitForExistence(timeout: 3) { f.tap(); app.typeText("ci"); sleep(2); screenshot("kb-new-chat") }
-            back(); sleep(1)
-        }
-        // Контакты → «Добавить контакт» (с клавиатурой).
-        tab("l2.tab.contacts").tap(); sleep(1)
-        let add = app.buttons["Добавить контакт"].firstMatch
-        if wait(add, "кнопка «Добавить контакт»").exists {
-            add.tap(); sleep(2); screenshot("add-contact")
-            let f = app.textFields.firstMatch
-            if f.waitForExistence(timeout: 3) { f.tap(); sleep(1); screenshot("kb-add-contact") }
-            back(); sleep(1)
-        }
-        // Профиль (с клавиатурой на каждом поле).
-        tab("l2.tab.settings").tap(); sleep(1)
-        let profile = app.descendants(matching: .any)["l2.settings.profile"].firstMatch
-        if profile.waitForExistence(timeout: 3) {
-            profile.tap(); sleep(2); screenshot("profile")
-            for id in ["l2.profile.name", "l2.profile.alias", "l2.profile.about"] {
-                let f = app.descendants(matching: .any)[id].firstMatch
-                if f.waitForExistence(timeout: 2) && f.isHittable { f.tap(); sleep(1); screenshot("kb-" + id) }
-            }
-            back(); sleep(1)
-        }
-        // Настройки — каждый пункт.
-        tab("l2.tab.settings").tap(); sleep(1)
-        for item in ["Уведомления", "Конфиденциальность", "Внешний вид", "О приложении"] {
-            let cell = app.staticTexts[item].firstMatch
-            wait(cell, "пункт «\(item)»").tap()
-            sleep(2)
-            screenshot("settings-" + item)
-            if item == "Конфиденциальность" {
-                for sub in ["Блокировка приложения (PIN-код, Face ID)", "Безопасность аккаунта"] {
-                    let s = app.staticTexts[sub].firstMatch
-                    if s.waitForExistence(timeout: 3) { s.tap(); sleep(2); screenshot("privacy-" + sub); back(); sleep(1) }
-                }
-            }
-            back(); sleep(1)
-        }
-    }
-
-    /// Существующий чат с историей (её заранее создаёт workflow): видна история → отправка → назад через «назад» и через меню.
-    private func openExistingChat() {
-        tab("l2.tab.chats").tap(); sleep(2)
-        let cell = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'История' OR label CONTAINS[c] 'Собеседник'")).firstMatch
-        guard cell.waitForExistence(timeout: 15) else { screenshot("ШАГ ПРОПУЩЕН-нет чата с историей"); return }
-        screenshot("chats-with-history")
-        cell.tap(); sleep(4)
-        screenshot("existing-chat-history")
-        let history = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'История 1'")).firstMatch
-        XCTAssertTrue(history.waitForExistence(timeout: 10), "в существующем чате не видна история")
-        XCTAssertTrue(app.navigationBars.buttons.element(boundBy: 0).exists, "в чате нет кнопки «назад»")
-        XCTAssertTrue(tab("l2.tab.chats").exists, "в чате не видно нижнего меню")
-        let input = app.textViews.firstMatch
-        if input.waitForExistence(timeout: 5) {
-            input.tap(); sleep(1)
-            screenshot("existing-chat-keyboard")
-            let text = "Ответ из теста"
-            app.typeText(text)
-            let send = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Отправ' OR identifier CONTAINS[c] 'send'")).firstMatch
-            if send.exists { send.tap() } else { app.typeText("\n") }
-            sleep(3)
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch.waitForExistence(timeout: 10),
-                          "отправленное сообщение не появилось в чате")
-            app.swipeDown(); sleep(1)
-            screenshot("existing-chat-sent")
-        }
-        // Назад кнопкой «назад».
-        back(); sleep(2)
-        screenshot("after-back-button")
-        XCTAssertTrue(app.state == .runningForeground, "приложение упало в чате")
-        // Снова в чат и назад через нижнее меню.
-        if cell.waitForExistence(timeout: 5) {
-            cell.tap(); sleep(3)
-            tab("l2.tab.chats").tap(); sleep(2)
-            screenshot("after-back-tabbar")
-        }
-    }
-
-    /// Новый чат с пользователем по логину: экран чата, клавиатура, отправка, меню сообщения.
-    private func openChatAndSend(with peer: String) {
-        tab("l2.tab.chats").tap(); sleep(1)
-        let compose = app.buttons["Новый чат"].firstMatch
-        guard compose.waitForExistence(timeout: 5) else { return }
-        compose.tap(); sleep(2)
-        let f = app.textFields.firstMatch
-        guard f.waitForExistence(timeout: 3) else { back(); return }
-        f.tap(); app.typeText(peer); sleep(4)
-        let hit = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", peer)).firstMatch
-        guard hit.waitForExistence(timeout: 8) else { screenshot("ШАГ ПРОПУЩЕН-чат"); back(); return }
-        hit.tap(); sleep(3)
-        screenshot("chat-empty")
-        let input = app.textViews.firstMatch
-        if input.waitForExistence(timeout: 5) {
-            input.tap(); sleep(1)
-            screenshot("kb-chat")
-            app.typeText("Привет! Проверка связи")
-            let send = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Отправ' OR identifier CONTAINS[c] 'send'")).firstMatch
-            if send.exists { send.tap() } else { app.typeText("\n") }
-            sleep(3)
-            screenshot("chat-sent")
-            app.tap()
-            let bubble = app.staticTexts["Привет! Проверка связи"].firstMatch
-            if bubble.waitForExistence(timeout: 3) { bubble.press(forDuration: 1.2); sleep(1); screenshot("chat-menu"); app.tap(); sleep(1) }
-        }
-        XCTAssertTrue(app.state == .runningForeground, "приложение упало в чате")
-        for _ in 0..<3 where !tab("l2.tab.chats").isHittable { back(); sleep(1) }
-    }
-
-    private func logout() {
+    private func logoutFromMain() {
         tab("l2.tab.settings").tap(); sleep(1)
         let out = app.staticTexts["Выйти"].firstMatch
-        if !out.exists { app.swipeUp() }
+        if !out.isHittable { app.swipeUp() }
         wait(out, "«Выйти»").tap()
-        let confirm = app.alerts.buttons["Выйти"].firstMatch
-        wait(confirm, "подтверждение выхода").tap()
+        wait(dialogButton("Выйти"), "подтверждение выхода").tap()
         wait(app.buttons["l2.welcome.login"], "стартовый экран после выхода", timeout: 20)
-        screenshot("after-logout")
+        Self.session = nil
     }
 
-    // MARK: - Сценарии
-
-    func testFullFlow() throws {
-        let code = try requireEnv("L2_CODE")
-        let regLogin = try requireEnv("L2_REG_LOGIN")
-        let regPassword = try requireEnv("L2_REG_PASSWORD")
-        let login = try requireEnv("L2_LOGIN")
-        let password = try requireEnv("L2_PASSWORD")
-
-        app.launch()
-        dismissSpringboardAlerts()
-
-        // 1. Стартовый экран → код приглашения → регистрация → PIN → Чаты.
-        wait(app.buttons["l2.welcome.code"], "стартовый экран")
-        screenshot("welcome")
-        app.buttons["l2.welcome.code"].tap()
-        let cells = wait(app.descendants(matching: .any)["l2.code.cells"].firstMatch, "ячейки кода")
-        screenshot("code-empty")
-        // Сначала неверный код — должна быть понятная ошибка, без вылета.
-        cells.tap()
-        sleep(1)
-        typeDigits("000000")
-        sleep(3)
-        screenshot("code-wrong")
-        XCTAssertTrue(app.state == .runningForeground, "приложение упало на неверном коде")
-        cells.tap()
-        sleep(1)
-        typeDigits(code)
-        let regScreen = app.textFields["l2.reg.name"].waitForExistence(timeout: 25)
-        if regScreen { dismissKeyboardTips(); screenshot("register") } else { screenshot("ШАГ ПРОПУЩЕН-код не принят") }
-        // Как пользователь: ввод и «Далее» на клавиатуре; последнее «Готово» отправляет форму.
-        // Шаг регистрации «мягкий»: если тест не сможет ввести пароль (особенности симулятора) —
-        // шаг помечается пропущенным, проверка вылетов продолжается дальше со входом.
-        var registered = false
-        if regScreen, softFill(app.textFields["l2.reg.name"], "Test CI"),
-           softFill(app.textFields["l2.reg.login"], regLogin),
-           softFill(app.secureTextFields["l2.reg.password"], regPassword) {
-            // «Повтор пароля» — клавишей «Далее», как пользователь; затем «Готово» отправляет форму.
-            app.typeText("\n")
-            app.typeText(regPassword)
-            screenshot("register-filled")
-            app.typeText("\n")
-            registered = app.staticTexts["Придумайте PIN-код"].waitForExistence(timeout: 25)
+    private func ensureLoggedOut() {
+        launch()
+        switch currentScreen() {
+        case .welcome: return
+        case .pinEnter: enterPin(); wait(tab("l2.tab.chats"), "Чаты после PIN"); logoutFromMain()
+        case .main: logoutFromMain()
+        case .pinCreate, .unknown:
+            // Незавершённый вход — перезапуск с чистого листа не нужен: возвращаемся назад.
+            for _ in 0..<3 where !app.buttons["l2.welcome.login"].exists { back() }
         }
-        XCTAssertTrue(app.state == .runningForeground, "приложение упало на регистрации")
-        if registered {
-            try createPinAndReachChats("reg")
-            visitAllTabsAndSettings()
-            logout()
-        } else {
-            screenshot("ШАГ ПРОПУЩЕН-регистрация")
-            let note = XCTAttachment(string: "Шаг регистрации пропущен: тест не смог ввести пароль в симуляторе. Вылета нет.")
-            note.name = "Пропущенный шаг"
-            note.lifetime = .keepAlways
-            add(note)
-            // Назад на стартовый экран.
-            for _ in 0..<3 where !app.buttons["l2.welcome.login"].exists {
-                app.navigationBars.buttons.element(boundBy: 0).tap()
-                sleep(1)
-            }
-        }
+        wait(app.buttons["l2.welcome.login"], "стартовый экран")
+    }
 
-        // 2. «Войти» → вход тестовым пользователем → PIN → Чаты.
+    private func loginWith(_ login: String, _ password: String) {
         wait(app.buttons["l2.welcome.login"], "стартовый экран").tap()
-        wait(app.textFields["l2.login.login"], "экран входа")
-        screenshot("login")
-        let lf = app.textFields["l2.login.login"]
+        let lf = wait(app.textFields["l2.login.login"], "поле логина")
         lf.tap()
         if let v = lf.value as? String, !v.isEmpty, v != "Логин" {
             lf.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: v.count + 2))
         }
         dismissKeyboardTips()
-        lf.typeText(login + "\n")      // «Далее» → поле пароля
+        lf.typeText(login + "\n")      // «Далее» → пароль
         app.typeText(password)
         screenshot("login-filled")
         app.typeText("\n")             // «Войти» с клавиатуры
-        try createPinAndReachChats("login")
-        openExistingChat()
-        openChatAndSend(with: regLogin)
-        // 3. Все вкладки, «Новый чат», «Добавить контакт», каждый пункт настроек (если не пройдены после регистрации).
-        if !registered { visitAllTabsAndSettings() }
+        createPinAndReachChats()
+        Self.session = login
+    }
 
-        // 4. Повторный запуск — экран PIN, затем Чаты.
+    /// Приложение запущено, вошли нужным пользователем, открыта вкладка «Чаты».
+    private func ensureLoggedIn(_ login: String, _ password: String) {
+        launch()
+        var s = currentScreen()
+        if s == .pinEnter { enterPin(); wait(tab("l2.tab.chats"), "Чаты после PIN"); s = .main }
+        if s == .main && Self.session == login { tab("l2.tab.chats").tap(); sleep(1); return }
+        if s == .main { logoutFromMain() }
+        if s == .pinCreate || s == .unknown { for _ in 0..<3 where !app.buttons["l2.welcome.login"].exists { back() } }
+        loginWith(login, password)
+    }
+
+    /// Любой рабочий аккаунт: зарегистрированный в тесте 03, иначе тестовый пользователь CI.
+    private func ensureSomeUser() {
+        if Self.registered {
+            ensureLoggedIn(requireEnv("L2_REG_LOGIN"), requireEnv("L2_REG_PASSWORD"))
+        } else {
+            ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        }
+    }
+
+    private var peerName: String { env["L2_PEER_NAME"] ?? "Собеседник CI" }
+
+    private func peerChatCell() -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@ OR label CONTAINS[c] 'История'", peerName)).firstMatch
+    }
+
+    private func chatInput() -> XCUIElement {
+        let byId = app.textViews["l2.chat.input"].firstMatch
+        return byId.exists ? byId : app.textViews.firstMatch
+    }
+
+    /// Тестовый пользователь CI → чат с собеседником (история создана workflow).
+    private func openPeerChat() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.chats").tap(); sleep(1)
+        let cell = wait(peerChatCell(), "чат с собеседником", timeout: 20)
+        cell.tap()
+        wait(chatInput(), "поле ввода в чате", timeout: 15)
+        sleep(2)
+    }
+
+    private func sendMessage(_ text: String) {
+        let input = chatInput()
+        input.tap()
+        dismissKeyboardTips()
+        input.typeText(text)
+        let send = app.buttons["l2.chat.send"].firstMatch
+        if send.exists && send.isHittable { send.tap() } else { app.typeText("\n") }
+    }
+
+    private func assertOnChatList(_ how: String) {
+        XCTAssertTrue(app.buttons["Новый чат"].firstMatch.waitForExistence(timeout: 8), "после «\(how)» не открылся список чатов")
+        XCTAssertTrue(tabBarVisible, "после «\(how)» не видно нижнего меню")
+    }
+
+    // MARK: - 1. Вход и регистрация
+
+    func test01_WelcomeScreen() {
+        ensureLoggedOut()
+        XCTAssertTrue(app.buttons["l2.welcome.code"].exists, "нет кнопки «У меня есть код»")
+        XCTAssertTrue(app.buttons["l2.welcome.login"].isHittable, "кнопка «Войти» недоступна")
+        screenshot("welcome")
+    }
+
+    func test02_InviteCodeSixDigits() {
+        ensureLoggedOut()
+        app.buttons["l2.welcome.code"].tap()
+        let cells = wait(any("l2.code.cells"), "ячейки кода")
+        screenshot("code-empty")
+        cells.tap(); sleep(1)
+        typeDigits("0000001")          // седьмая цифра не должна поместиться
+        sleep(3)
+        screenshot("code-wrong")
+        XCTAssertEqual(app.state, .runningForeground, "приложение упало на неверном коде")
+        XCTAssertFalse(app.textFields["l2.reg.name"].exists, "неверный код принят")
+        back()
+        wait(app.buttons["l2.welcome.login"], "стартовый экран после «назад»")
+    }
+
+    func test03_RegistrationByCode() {
+        let code = requireEnv("L2_CODE"), login = requireEnv("L2_REG_LOGIN"), password = requireEnv("L2_REG_PASSWORD")
+        if Self.registered { ensureLoggedIn(login, password); return }   // перезапуск после успешной регистрации
+        Self.regAttempts += 1
+        if Self.regAttempts > 1 {
+            // Перезапуск после сбоя: код одноразовый. Если аккаунт уже создан — проверяем вход им.
+            ensureLoggedIn(login, password)
+            Self.registered = true
+            return
+        }
+        ensureLoggedOut()
+        app.buttons["l2.welcome.code"].tap()
+        let cells = wait(any("l2.code.cells"), "ячейки кода")
+        cells.tap(); sleep(1)
+        typeDigits(code)
+        wait(app.textFields["l2.reg.name"], "форма регистрации (код не принят?)", timeout: 25)
+        dismissKeyboardTips()
+        screenshot("register")
+        for (id, text) in [("l2.reg.name", "Test CI"), ("l2.reg.login", login)] {
+            tapVisible(app.textFields[id], id)
+            dismissKeyboardTips()
+            app.textFields[id].typeText(text)
+        }
+        tapVisible(app.secureTextFields["l2.reg.password"], "пароль")
+        app.secureTextFields["l2.reg.password"].typeText(password)
+        app.typeText("\n")
+        app.typeText(password)
+        screenshot("register-filled")
+        app.typeText("\n")
+        createPinAndReachChats()
+        Self.session = login
+        Self.registered = true
+        screenshot("chats-after-register")
+    }
+
+    func test04_PinOnRelaunch() {
+        ensureSomeUser()
         app.terminate()
-        app.launch()
+        launch()
         wait(app.staticTexts["Введите PIN-код"], "экран PIN при запуске")
-        screenshot("relaunch-pin")
+        screenshot("pin-enter")
+        enterPin(["0", "0", "0", "0"])
+        sleep(2)
+        XCTAssertFalse(tab("l2.tab.chats").exists, "неверный PIN пропустил в приложение")
+        screenshot("pin-wrong")
         enterPin()
-        wait(tab("l2.tab.chats"), "Чаты после PIN")
+        wait(tab("l2.tab.chats"), "Чаты после верного PIN")
+    }
+
+    // MARK: - 2. Вкладки и меню
+
+    func test05_TabChats() {
+        ensureSomeUser()
+        tab("l2.tab.chats").tap(); sleep(1)
+        wait(app.buttons["Новый чат"].firstMatch, "кнопка «Новый чат»")
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню")
+        screenshot("chats")
+    }
+
+    func test06_TabCalls() {
+        ensureSomeUser()
+        tab("l2.tab.calls").tap(); sleep(2)
+        XCTAssertTrue(labelContains("Звонки").exists, "не открылась вкладка «Звонки»")
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню")
+        screenshot("calls")
+    }
+
+    func test07_TabContacts() {
+        ensureSomeUser()
+        tab("l2.tab.contacts").tap(); sleep(2)
+        wait(app.buttons["Добавить контакт"].firstMatch, "кнопка «Добавить контакт»")
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню")
+        screenshot("contacts")
+    }
+
+    func test08_TabSettings() {
+        ensureSomeUser()
+        tab("l2.tab.settings").tap(); sleep(2)
+        wait(app.staticTexts["Внешний вид"].firstMatch, "пункт «Внешний вид»")
+        XCTAssertTrue(any("l2.settings.profile").exists, "нет карточки профиля")
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню")
+        screenshot("settings")
+    }
+
+    func test09_TabBarOnInnerScreens() {
+        ensureSomeUser()
+        tab("l2.tab.settings").tap(); sleep(1)
+        wait(app.staticTexts["О приложении"].firstMatch, "«О приложении»").tap(); sleep(2)
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню на экране «О приложении»")
+        screenshot("about-with-tabbar")
+        back()
+        tab("l2.tab.contacts").tap(); sleep(1)
+        wait(app.buttons["Добавить контакт"].firstMatch, "«Добавить контакт»").tap(); sleep(2)
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню на экране «Добавить контакт»")
+        back()
+    }
+
+    // MARK: - 3. Настройки
+
+    func test10_SettingsEachItem() {
+        ensureSomeUser()
+        for item in ["Уведомления", "Конфиденциальность", "Внешний вид", "О приложении"] {
+            tab("l2.tab.settings").tap(); sleep(1)
+            wait(app.staticTexts[item].firstMatch, "пункт «\(item)»").tap()
+            sleep(2)
+            XCTAssertEqual(app.state, .runningForeground, "вылет в «\(item)»")
+            screenshot("settings-" + item)
+            if item == "Конфиденциальность" {
+                for sub in ["Блокировка приложения (PIN-код, Face ID)", "Безопасность аккаунта"] {
+                    let s = app.staticTexts[sub].firstMatch
+                    if s.waitForExistence(timeout: 3) { s.tap(); sleep(2); screenshot("privacy-" + sub); back() }
+                }
+            }
+            back()
+        }
+        // Профиль: поля и клавиатура.
+        tab("l2.tab.settings").tap(); sleep(1)
+        any("l2.settings.profile").tap(); sleep(2)
+        wait(any("l2.profile.name"), "поле имени в профиле")
+        screenshot("profile")
+        back()
+    }
+
+    private func openAppearance() {
+        tab("l2.tab.settings").tap(); sleep(1)
+        wait(app.staticTexts["Внешний вид"].firstMatch, "«Внешний вид»").tap(); sleep(2)
+    }
+
+    func test11_ThemeChange() {
+        ensureSomeUser()
+        openAppearance()
+        let light = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Тема: Светлая'")).firstMatch
+        wait(light, "кнопка темы «Светлая»").tap(); sleep(2)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Тема: Светлая, выбрана'")).firstMatch.waitForExistence(timeout: 5),
+                      "светлая тема не выбралась")
+        screenshot("theme-light")
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Тема: Тёмная'")).firstMatch.tap(); sleep(2)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Тема: Тёмная, выбрана'")).firstMatch.waitForExistence(timeout: 5),
+                      "тёмная тема не вернулась")
+        screenshot("theme-dark")
+        back()
+    }
+
+    func test12_AccentChange() {
+        ensureSomeUser()
+        openAppearance()
+        wait(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Фиолетовый'")).firstMatch, "цвет «Фиолетовый»").tap(); sleep(2)
+        XCTAssertTrue(app.buttons["Фиолетовый, выбран"].waitForExistence(timeout: 5), "цвет не выбрался")
+        screenshot("accent-violet")
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Мятный'")).firstMatch.tap(); sleep(2)
+        XCTAssertTrue(app.buttons["Мятный, выбран"].waitForExistence(timeout: 5), "мятный не вернулся")
+        back()
+    }
+
+    // MARK: - 4. Поиск и контакты
+
+    func test13_SearchChats() {
+        ensureSomeUser()
+        tab("l2.tab.chats").tap(); sleep(1)
+        let search = wait(app.searchFields.firstMatch.exists ? app.searchFields.firstMatch : app.textFields.firstMatch, "поле поиска")
+        search.tap()
+        dismissKeyboardTips()
+        search.typeText("История")
+        sleep(2)
+        screenshot("search")
+        XCTAssertEqual(app.state, .runningForeground, "вылет при поиске")
+        let cancel = app.buttons["Отмена"].firstMatch
+        if cancel.exists { cancel.tap() } else { app.typeText("\n") }
+    }
+
+    func test14_AddContactFindsUser() {
+        ensureSomeUser()
+        tab("l2.tab.contacts").tap(); sleep(1)
+        wait(app.buttons["Добавить контакт"].firstMatch, "«Добавить контакт»").tap(); sleep(2)
+        let f = wait(app.searchFields.firstMatch.exists ? app.searchFields.firstMatch : app.textFields.firstMatch, "поле поиска контакта")
+        f.tap()
+        dismissKeyboardTips()
+        f.typeText(requireEnv("L2_PEER_LOGIN"))
+        XCTAssertTrue(labelContains(peerName).waitForExistence(timeout: 15), "поиск не нашёл пользователя по логину")
+        screenshot("add-contact-found")
+        back()
+    }
+
+    func test15_DeleteAccount() {
+        guard Self.registered else {
+            XCTFail("Удалять нечего: регистрация в тесте 03 не прошла")
+            return
+        }
+        ensureLoggedIn(requireEnv("L2_REG_LOGIN"), requireEnv("L2_REG_PASSWORD"))
+        tab("l2.tab.settings").tap(); sleep(1)
+        any("l2.settings.profile").tap(); sleep(2)
+        let del = any("l2.profile.delete")
+        tapVisible(del, "кнопка «Удалить аккаунт»")
+        wait(app.alerts["Удалить аккаунт навсегда?"], "подтверждение удаления")
+        screenshot("delete-confirm")
+        dialogButton("Удалить").tap()
+        wait(app.buttons["l2.welcome.login"], "стартовый экран после удаления", timeout: 30)
+        Self.session = nil
+        Self.registered = false
+        screenshot("deleted")
+    }
+
+    // MARK: - 5. Вход/выход аккаунтом проверки Apple
+
+    func test16_LoginReviewAccount() {
+        ensureLoggedIn(requireEnv("L2_REVIEW_LOGIN"), requireEnv("L2_REVIEW_PASSWORD"))
+        wait(app.buttons["Новый чат"].firstMatch, "список чатов")
+        XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 15), "у аккаунта проверки Apple не видно переписки")
+        screenshot("review-chats")
+    }
+
+    func test17_Logout() {
+        ensureLoggedIn(requireEnv("L2_REVIEW_LOGIN"), requireEnv("L2_REVIEW_PASSWORD"))
+        logoutFromMain()
+        screenshot("after-logout")
+        XCTAssertTrue(app.buttons["l2.welcome.code"].exists, "после выхода нет стартового экрана")
+    }
+
+    // MARK: - 6. Чат
+
+    func test18_OpenChatShowsHistory() {
+        openPeerChat()
+        XCTAssertTrue(labelContains("История 1").waitForExistence(timeout: 10), "в чате не видна история")
+        XCTAssertTrue(app.navigationBars.buttons.element(boundBy: 0).exists, "в чате нет кнопки «назад»")
+        XCTAssertTrue(labelContains(peerName).exists, "в шапке чата нет имени собеседника")
+        screenshot("chat-history")
+    }
+
+    func test19_TabBarVisibleInChat() {
+        openPeerChat()
+        XCTAssertTrue(tabBarVisible, "в чате не видно нижнего меню")
+        let input = chatInput(), bar = tab("l2.tab.chats")
+        XCTAssertLessThanOrEqual(input.frame.maxY, bar.frame.minY + 2, "поле ввода заходит на нижнее меню")
+        screenshot("chat-tabbar")
+    }
+
+    func test20_SendMessageAppears() {
+        openPeerChat()
+        sendMessage(Self.sentText)
+        XCTAssertTrue(labelContains(Self.sentText).waitForExistence(timeout: 15), "отправленное сообщение не появилось")
+        screenshot("chat-sent")
+    }
+
+    func test21_BackButton() {
+        openPeerChat()
+        back()
+        assertOnChatList("назад")
+    }
+
+    func test22_BackViaTabBar() {
+        openPeerChat()
+        tab("l2.tab.chats").tap(); sleep(2)
+        assertOnChatList("меню «Чаты»")
+    }
+
+    func test23_SwipeBack() {
+        openPeerChat()
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.45))
+        start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.45)))
+        sleep(2)
+        assertOnChatList("свайп назад")
+    }
+
+    func test24_AttachmentMenuRussian() {
+        openPeerChat()
+        let attach = app.buttons["l2.chat.attach"].firstMatch
+        wait(attach, "кнопка вложения").tap()
         sleep(1)
-        screenshot("relaunch-chats")
-        tab("l2.tab.settings").tap(); sleep(1); screenshot("relaunch-settings")
+        for t in ["Фото или видео", "Файл", "Отмена"] {
+            XCTAssertTrue(app.buttons[t].firstMatch.waitForExistence(timeout: 5), "в меню вложений нет «\(t)»")
+        }
+        XCTAssertTrue(labelContains("Вложение").exists, "нет заголовка «Вложение»")
+        XCTAssertFalse(app.buttons["Image / Video"].exists || app.buttons["Cancel"].exists, "в меню вложений английский текст")
+        screenshot("attach-menu")
+        app.buttons["Отмена"].firstMatch.tap()
+    }
+
+    func test25_KeyboardDoesNotCoverInput() {
+        openPeerChat()
+        let input = chatInput()
+        input.tap()
+        dismissKeyboardTips()
+        let kb = app.keyboards.firstMatch
+        wait(kb, "клавиатура", timeout: 8)
+        sleep(1)
+        XCTAssertLessThanOrEqual(input.frame.maxY, kb.frame.minY + 2, "клавиатура перекрывает поле ввода")
+        XCTAssertTrue(input.isHittable, "поле ввода недоступно при открытой клавиатуре")
+        screenshot("chat-keyboard")
+    }
+
+    func test26_RotationNoCrash() {
+        openPeerChat()
+        for o in [UIDeviceOrientation.landscapeLeft, .portrait, .landscapeRight, .portrait] {
+            XCUIDevice.shared.orientation = o
+            sleep(2)
+            XCTAssertEqual(app.state, .runningForeground, "вылет при повороте")
+            XCTAssertTrue(chatInput().exists, "после поворота пропало поле ввода")
+        }
+        screenshot("rotated")
+        back()
+        XCUIDevice.shared.orientation = .landscapeLeft; sleep(2)
+        XCTAssertEqual(app.state, .runningForeground, "вылет при повороте списка чатов")
+        XCUIDevice.shared.orientation = .portrait; sleep(1)
+    }
+
+    // MARK: - 7. Жалоба и блокировка
+
+    func test27_ReportMessage() {
+        openPeerChat()
+        let msg = wait(labelContains("История 2"), "сообщение собеседника")
+        msg.press(forDuration: 1.2)
+        sleep(1)
+        screenshot("message-menu")
+        let report = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Пожаловаться'")).firstMatch
+        wait(report, "пункт «Пожаловаться»").tap()
+        wait(app.buttons["Спам"].firstMatch, "причины жалобы").tap()
+        wait(app.alerts.buttons["Отправить"].firstMatch, "отправка жалобы").tap()
+        sleep(2)
+        XCTAssertEqual(app.state, .runningForeground, "вылет при жалобе")
+        screenshot("report-sent")
+    }
+
+    func test28_BlockAndUnblockUser() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.contacts").tap(); sleep(2)
+        wait(labelContains(peerName), "собеседник в контактах").tap(); sleep(2)
+        let block = any("l2.contact.block")
+        tapVisible(block, "кнопка «Заблокировать»")
+        wait(dialogButton("Заблокировать"), "подтверждение блокировки").tap(); sleep(2)
+        screenshot("blocked")
+        // Разблокировать обратно, чтобы переписка продолжала работать.
+        tapVisible(any("l2.contact.block"), "кнопка «Разблокировать»")
+        wait(dialogButton("Разблокировать"), "подтверждение разблокировки").tap(); sleep(2)
+        XCTAssertEqual(app.state, .runningForeground, "вылет при блокировке")
+        screenshot("unblocked")
+    }
+
+    // MARK: - 8. Обход всех экранов без вылетов
+
+    func test29_AllScreensNoCrash() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        for id in ["l2.tab.chats", "l2.tab.calls", "l2.tab.contacts", "l2.tab.settings"] {
+            tab(id).tap(); sleep(1)
+            XCUIDevice.shared.orientation = .landscapeLeft; sleep(1)
+            XCUIDevice.shared.orientation = .portrait; sleep(1)
+            XCTAssertEqual(app.state, .runningForeground, "вылет на вкладке \(id)")
+        }
+        tab("l2.tab.chats").tap(); sleep(1)
+        app.buttons["Новый чат"].firstMatch.tap(); sleep(2)
+        XCTAssertEqual(app.state, .runningForeground, "вылет на «Новый чат»")
+        back()
+        app.terminate()
+        launch()
+        wait(app.staticTexts["Введите PIN-код"], "PIN после перезапуска")
+        enterPin()
+        wait(tab("l2.tab.chats"), "Чаты после перезапуска")
+        screenshot("relaunch-ok")
     }
 }

@@ -927,3 +927,17 @@ def send_bar_above_tabbar(s):
 
 
 edit("Tinodios/widgets/SendMessageBar.swift", send_bar_above_tabbar)
+
+
+# Идентификаторы для автотестов в панели ввода чата.
+def send_bar_uitest_ids(s):
+    if "LINIA2_UITEST_IDS" in s:
+        return s
+    return must(s, "    private func configure() {\n        horizontalSliderView.alpha = 0.9\n",
+                "    private func configure() {\n        // LINIA2_UITEST_IDS: идентификаторы для автотестов.\n"
+                "        attachButton.accessibilityIdentifier = \"l2.chat.attach\"\n        attachButton.accessibilityLabel = \"Вложение\"\n"
+                "        sendButton.accessibilityIdentifier = \"l2.chat.send\"\n        sendButton.accessibilityLabel = \"Отправить\"\n"
+                "        inputField.accessibilityIdentifier = \"l2.chat.input\"\n        horizontalSliderView.alpha = 0.9\n")
+
+
+edit("Tinodios/widgets/SendMessageBar.swift", send_bar_uitest_ids)

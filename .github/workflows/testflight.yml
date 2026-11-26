@@ -7,7 +7,7 @@
 #   GOOGLE_SERVICE_INFO_PLIST_BASE64 — (необязательно) GoogleService-Info.plist для push через Firebase
 name: TestFlight
 
-# Автоматически: после успешного «UI tests» на push в main (проверка в симуляторе → сборка).
+# Автоматически: после успешного «UI tests» на push в main (юнит-тесты + XCUITest → сборка → TestFlight).
 # Вручную: workflow_dispatch (тогда UI-тест запускается внутри этого workflow).
 on:
   workflow_run:
@@ -19,10 +19,6 @@ on:
       version:
         description: "Версия (CFBundleShortVersionString); пусто — из файла VERSION"
         required: false
-      skip_uitest:
-        description: "Не запускать UI-тест (лимит прогонов исчерпан, вылетов нет)"
-        type: boolean
-        default: false
 
 concurrency:
   group: testflight
@@ -30,15 +26,17 @@ concurrency:
 
 jobs:
   uitest:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_uitest }}
+    # Ручной запуск: те же тесты (юнит + XCUITest) внутри этого workflow.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     uses: ./.github/workflows/uitest.yml
     secrets: inherit
 
   build:
     needs: uitest
     # Сборка: тест прошёл / пропущен, либо тест упал без вылетов приложения (сбой шага симулятора).
-    # Автоматически — только если UI-тест на push прошёл полностью.
-    if: ${{ always() && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') || (github.event_name == 'workflow_dispatch' && (needs.uitest.result == 'success' || needs.uitest.result == 'skipped' || (needs.uitest.result == 'failure' && needs.uitest.outputs.compiled == 'true' && needs.uitest.outputs.crashed == 'false')))) }}
+    # Загрузка только если ВСЕ тесты (юнит + XCUITest) прошли: автоматически — после «UI tests» на push,
+    # вручную — после тестов внутри этого workflow. Упал хоть один тест — сборки и загрузки нет.
+    if: ${{ always() && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') || (github.event_name == 'workflow_dispatch' && needs.uitest.result == 'success')) }}
     runs-on: macos-26
     timeout-minutes: 90
     env:

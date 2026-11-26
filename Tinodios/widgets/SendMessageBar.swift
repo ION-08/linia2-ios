@@ -343,6 +343,12 @@ class SendMessageBar: UIView {
     }
 
     private func configure() {
+        // LINIA2_UITEST_IDS: идентификаторы для автотестов.
+        attachButton.accessibilityIdentifier = "l2.chat.attach"
+        attachButton.accessibilityLabel = "Вложение"
+        sendButton.accessibilityIdentifier = "l2.chat.send"
+        sendButton.accessibilityLabel = "Отправить"
+        inputField.accessibilityIdentifier = "l2.chat.input"
         horizontalSliderView.alpha = 0.9
         verticalSliderView.alpha = 0.9
 
