@@ -11,6 +11,12 @@ enum PromisedReplyError: Error {
     case illegalStateError(String)
 }
 
+/// LINIA2: ожидание ответа дольше заданного времени (getResult(timeout:)).
+public struct PromisedReplyTimeout: LocalizedError {
+    public let seconds: TimeInterval
+    public var errorDescription: String? { "no reply in \(Int(seconds)) s" }
+}
+
 // Inspired by https://github.com/uber/swift-concurrency/blob/master/Sources/Concurrency/CountDownLatch.swift
 private class CountDownLatch {
     private let condition = NSCondition()
@@ -41,6 +47,20 @@ private class CountDownLatch {
             // We may be woken up by a broadcast in countDown.
             condition.wait()
         }
+    }
+    /// LINIA2: ожидание не дольше `timeout`; true — дождались.
+    public func await(timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer {
+            condition.unlock()
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while conditionCount > 0 {
+            if !condition.wait(until: deadline) {
+                return conditionCount <= 0
+            }
+        }
+        return true
     }
 }
 
@@ -268,6 +288,13 @@ public class PromisedReply<Value> {
         case .waiting:
             throw PromisedReplyError.illegalStateError("Called getResult on unresolved promise")
         }
+    }
+    /// LINIA2: как getResult(), но не блокирует поток навсегда (сервер не ответил / соединение «повисло»).
+    public func getResult(timeout: TimeInterval) throws -> Value? {
+        if let latch = countDownLatch, !latch.await(timeout: timeout) {
+            throw PromisedReplyTimeout(seconds: timeout)
+        }
+        return try getResult()
     }
     @discardableResult
     public func waitResult() throws -> Bool {

@@ -97,7 +97,14 @@ final class Linia2AppLock {
         nc.addObserver(self, selector: #selector(willResignActive), name: UIApplication.willResignActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(didBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
-        if isEnabled { lock() }
+        nc.addObserver(self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+        // LINIA2: запуск в фоне (push с content-available) — окно PIN не создаём сейчас (и Keychain при
+        // заблокированном телефоне недоступен: isEnabled = false). Блокировка — при первом выходе на экран.
+        if UIApplication.shared.applicationState == .background {
+            backgroundedAt = .distantPast
+        } else if isEnabled {
+            lock()
+        }
     }
 
     /// Длина PIN-кода (4–6 цифр).
@@ -142,6 +149,14 @@ final class Linia2AppLock {
 
     @objc private func didEnterBackground() {
         if backgroundedAt == nil { backgroundedAt = Date() }
+    }
+
+    @objc private func willEnterForeground() {
+        // Раньше, чем didBecomeActive, — содержимое не мелькает до экрана PIN.
+        guard isEnabled, !locked else { return }
+        if let t = backgroundedAt, Date().timeIntervalSince(t) >= kLockAfter {
+            lock()
+        }
     }
 
     @objc private func didBecomeActive() {

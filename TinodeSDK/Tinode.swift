@@ -1116,6 +1116,8 @@ public class Tinode {
                                 },
                                 onFailure: { err in
                                     Tinode.log.error("Login error: %@", err.localizedDescription)
+                                    // LINIA2: ожидающие connect() узнают об ошибке входа (раньше ждали вечно).
+                                    try? self?.rejectAllPromises(err: err)
                                     return PromisedReply<ServerMessage>(error: err)
                                 })
                     }
@@ -1140,6 +1142,8 @@ public class Tinode {
             Log.default.info("Tinode disconnected: server originated [%@]; code [%d]; reason [%@]",
                              serverOriginatedString, code.rawValue, reason)
             tinode.handleDisconnect(isServerOriginated: isServerOriginated, code: code, reason: reason)
+            // LINIA2: соединение закрылось до входа — ожидающие connect() не должны ждать вечно.
+            try? rejectAllPromises(err: TinodeError.notConnected("disconnected: \(reason)"))
         }
         func onError(error: Error) {
             tinode.handleDisconnect(isServerOriginated: true, code: .invalid, reason: error.localizedDescription)
@@ -1193,6 +1197,15 @@ public class Tinode {
         self.hostName = hostName
         guard let endpointURL = self.channelsURL(useWebsocketProtocol: true) else {
             throw TinodeError.invalidState("Could not form server url.")
+        }
+        // LINIA2: соединение уже устанавливается (другой поток вызвал connect раньше: запуск приложения,
+        // push в фоне, нажатие на уведомление) — ждём его, а не открываем второй WebSocket поверх первого
+        // (раньше второй URLSessionWebSocketTask подменял первый на лету — гонка и «повисшие» ожидания).
+        if let conn = connection, let listener = connectionListener, conn.isWaitingToConnect {
+            Tinode.log.debug("Tinode is already connecting")
+            let connectedPromise = PromisedReply<ServerMessage>()
+            listener.addPromise(promise: connectedPromise)
+            return connectedPromise
         }
         resetMsgId()
         if connection == nil {

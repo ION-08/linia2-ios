@@ -182,8 +182,8 @@ class UiUtils {
         let application = UIApplication.shared
         guard let appDelegate = application.delegate as? AppDelegate else { return }
         Linia2Firebase.configureIfNeeded()   // обычно уже вызван в didFinishLaunching
-        guard Linia2Firebase.configured else { return }
         guard !appDelegate.pushNotificationsConfigured else {
+            guard Linia2Firebase.configured else { return }
             Messaging.messaging().token { (token, error) in
                 if let error = error {
                     Cache.log.debug("Error fetching FCM registration token: %@", error.localizedDescription)
@@ -195,10 +195,16 @@ class UiUtils {
             return
         }
 
-        Messaging.messaging().delegate = appDelegate
-        // LINIA2: подписка на тему изменений удалённых настроек (админка шлёт тихий push после «Применить»).
-        Messaging.messaging().subscribe(toTopic: "linia2-config") { err in
-            if let err = err { Cache.log.error("Linia2: подписка на linia2-config: %@", err.localizedDescription) }
+        // LINIA2: без Firebase (сборка CI с заглушкой) разрешение на уведомления не спрашивалось — и `simctl push`
+        // в UI-тестах запуска (Linia2LaunchTests) не показывался. Под флагом -l2-push-auth спрашиваем и без Firebase
+        // (флаг только у этих тестов: другим тестам системное окно не мешает). FCM — только с настоящим Firebase.
+        guard Linia2Firebase.configured || ProcessInfo.processInfo.arguments.contains("-l2-push-auth") else { return }
+        if Linia2Firebase.configured {
+            Messaging.messaging().delegate = appDelegate
+            // LINIA2: подписка на тему изменений удалённых настроек (админка шлёт тихий push после «Применить»).
+            Messaging.messaging().subscribe(toTopic: "linia2-config") { err in
+                if let err = err { Cache.log.error("Linia2: подписка на linia2-config: %@", err.localizedDescription) }
+            }
         }
         UNUserNotificationCenter.current().delegate = appDelegate
 

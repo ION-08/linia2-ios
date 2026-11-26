@@ -78,6 +78,9 @@ public class BaseDb {
 
         do {
             self.db = try SQLite.Connection(self.pathToDatabase)
+            // LINIA2: базу одновременно открывает расширение уведомлений (каждый push) — без ожидания
+            // занятая база сразу давала SQLITE_BUSY, а try! ниже (создание таблиц) — вылет при запуске.
+            self.db?.busyTimeout = 3
         } catch {
             BaseDb.log.error("BaseDb - init failed: %@", error.localizedDescription)
         }
@@ -96,7 +99,14 @@ public class BaseDb {
 
         var account: StoredAccount? = nil
         var deviceToken: String? = nil
-        if self.db!.userVersion != BaseDb.kSchemaVersion {
+        // LINIA2: версия схемы не прочиталась (база занята другим процессом) — это не «схема изменилась»:
+        // раньше в этом случае база удалялась целиком (и падала на try! при удалении таблиц).
+        var version: Int32? = self.db!.userVersion
+        for _ in 0..<3 where version == nil {
+            Thread.sleep(forTimeInterval: 0.2)
+            version = self.db!.userVersion
+        }
+        if let v = version, v != BaseDb.kSchemaVersion {
             BaseDb.log.info("BaseDb - schema has changed from %d to %d", (self.db?.userVersion ?? -1), BaseDb.kSchemaVersion)
 
             // Retain active account accross DB upgrades to keep user logged in.
