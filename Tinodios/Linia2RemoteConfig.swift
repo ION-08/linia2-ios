@@ -115,12 +115,14 @@ final class Linia2Config {
                     (try? JSONSerialization.data(withJSONObject: self.data, options: [.sortedKeys]))
                 guard changed else { return }
                 self.data = obj
-                self.applyHosts()
+                // applyHosts() читает section() через queue.sync — внутри этой же очереди это взаимная блокировка
+                // (iOS аварийно завершает приложение при каждом изменении конфига). Вызываем вне очереди, на главном потоке.
                 if let cu = self.cacheURL {
                     try? FileManager.default.createDirectory(at: cu.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try? d.write(to: cu, options: .atomic)
                 }
                 DispatchQueue.main.async {
+                    self.applyHosts()
                     self.scheduleTimer()
                     NotificationCenter.default.post(name: Self.changedNotification, object: nil)
                     Linia2UpdateGate.checkAndShow()
