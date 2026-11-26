@@ -267,7 +267,7 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
 
     static func voiceDrafty(seconds: Int) -> [String: Any] {
         let bars = Data((0..<48).map { UInt8(20 + ($0 * 37) % 80) })
-        return ["txt": " ", "fmt": [["at": -1, "len": 0, "key": 0]],
+        return ["txt": " ", "fmt": [["at": 0, "len": 1, "key": 0]],
                 "ent": [["tp": "AU", "data": ["mime": "audio/wav", "name": "voice.wav", "duration": seconds * 1000,
                                                "val": silentWav(seconds: seconds).base64EncodedString(),
                                                "preview": bars.base64EncodedString()]]]]

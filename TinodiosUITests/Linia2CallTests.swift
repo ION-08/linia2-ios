@@ -77,7 +77,7 @@ class Linia2CallTestBase: XCTestCase {
         for t in ["Allow", "Разрешить", "OK", "Allow While Using App"] where sb.buttons[t].exists { sb.buttons[t].tap() }
     }
 
-    private func enterPin() { for d in pin { app.buttons[d].firstMatch.tap() } }
+    func enterPin() { for d in pin { app.buttons[d].firstMatch.tap() } }
 
     private func back() {
         let b = app.navigationBars.buttons.element(boundBy: 0)
@@ -120,7 +120,7 @@ class Linia2CallTestBase: XCTestCase {
     /// Кто вошёл — запоминаем сами (в пределах симулятора тест-раннер один).
     private func currentLogin() -> String? { UserDefaults.standard.string(forKey: "l2.calltests.login") }
 
-    private func logout() {
+    func logout() {
         tab("l2.tab.settings").tap(); sleep(1)
         let out = app.staticTexts["Выйти"].firstMatch
         if !out.isHittable { app.swipeUp() }

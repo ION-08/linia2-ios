@@ -108,6 +108,12 @@ enum Linia2Appearance {
 
     static var theme: Theme {
         get {
+            // Дизайн-контроль (UI-тест): тема из аргумента запуска «-l2-theme dark|light».
+            switch UserDefaults.standard.string(forKey: "l2-theme") {
+            case "dark"?: return .dark
+            case "light"?: return .light
+            default: break
+            }
             if UserDefaults.standard.object(forKey: kTheme) == nil {
                 // Пользователь не выбирал — тема по умолчанию из удалённых настроек.
                 switch Linia2Config.shared.defaultTheme { case "light": return .light; case "system": return .system; default: return .dark }

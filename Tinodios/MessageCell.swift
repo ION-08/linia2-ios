@@ -8,6 +8,16 @@ import MobileVLCKit
 import UIKit
 import TinodeSDK
 
+extension UIFont {
+    /// LINIA2: шрифт стиля с Dynamic Type, но не крупнее `limit` — для времени, галочек и подписей
+    /// фиксированной высоты (при крупном шрифте не обрезаются и не наезжают на текст).
+    static func l2Capped(_ style: UIFont.TextStyle, limit: UIContentSizeCategory = .extraLarge) -> UIFont {
+        let cur = UIApplication.shared.preferredContentSizeCategory
+        let cat = cur > limit ? limit : cur
+        return UIFont.preferredFont(forTextStyle: style, compatibleWith: UITraitCollection(preferredContentSizeCategory: cat))
+    }
+}
+
 /// A protocol used to detect events in the chat message.
 protocol MessageCellDelegate: AnyObject {
     /// Long tap anywhere in massage cell.
@@ -122,14 +132,14 @@ class MessageCell: UICollectionViewCell {
     /// Message timestamp.
     var timestampLabel: PaddedLabel = {
         let label = PaddedLabel()
-        label.font = UIFont.preferredFont(forTextStyle: .caption2)
+        label.font = UIFont.l2Capped(.caption2)
         return label
     }()
 
     /// Edited marker.
     var editedMarker: PaddedLabel = {
         let label = PaddedLabel()
-        label.font = UIFont.preferredFont(forTextStyle: .caption2).withTraits(traits: .traitItalic)
+        label.font = UIFont.l2Capped(.caption2).withTraits(traits: .traitItalic)
         label.textAlignment = .right
         label.adjustsFontSizeToFitWidth = true
         return label

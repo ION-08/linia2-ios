@@ -85,8 +85,8 @@ class MessageViewController: UIViewController {
 
         static let kContentFont = UIFont.preferredFont(forTextStyle: .body)
 
-        static let kSenderNameFont = UIFont.preferredFont(forTextStyle: .caption2)
-        static let kTimestampFont = UIFont.preferredFont(forTextStyle: .caption2)
+        static let kSenderNameFont = UIFont.l2Capped(.caption2)
+        static let kTimestampFont = UIFont.l2Capped(.caption2)
         static let kSenderNameLabelHeight: CGFloat = 16
         static let kNewDateFont = UIFont.boldSystemFont(ofSize: 10)
         static let kNewDateLabelHeight: CGFloat = 24
