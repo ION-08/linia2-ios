@@ -58,7 +58,8 @@ function png(w, h, r0, g0, b0) {
     raw[y * (w * 3 + 1)] = 0;
     for (let x = 0; x < w; x++) {
       const o = y * (w * 3 + 1) + 1 + x * 3;
-      raw[o] = (r0 + x * 120 / w) & 255; raw[o + 1] = (g0 + y * 120 / h) & 255; raw[o + 2] = (b0 + (x + y) * 60 / (w + h)) & 255;
+      // Без переполнения канала: «& 255» давал фиолетовую полосу внизу постера кружка.
+      raw[o] = Math.min(255, r0 + x * 120 / w); raw[o + 1] = Math.min(255, g0 + y * 120 / h); raw[o + 2] = Math.min(255, b0 + (x + y) * 60 / (w + h));
     }
   }
   const chunk = (type, data) => {
