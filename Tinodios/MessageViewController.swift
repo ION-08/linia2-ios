@@ -114,8 +114,9 @@ class MessageViewController: UIViewController {
         static let kOutgoingContainerPadding = UIEdgeInsets(top: 0, left: Constants.kFarSideHorizontalSpacing, bottom: 0, right: 0)
 
         // Insets around content inside the message bubble.
-        static let kIncomingMessageContentInset = UIEdgeInsets(top: 4, left: 18, bottom: 13, right: 14)
-        static let kOutgoingMessageContentInset = UIEdgeInsets(top: 4, left: 14, bottom: 13, right: 18)
+        // Дизайн: пузырь без «хвостика» — поля по 12 pt с обеих сторон, как в Telegram (было 18/14 — текст «уезжал» вправо).
+        static let kIncomingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
+        static let kOutgoingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
         static let kDeletedMessageContentInset = UIEdgeInsets(top: 4, left: 14, bottom: 0, right: 14)
 
         // Carve out for timestamp and delivery marker in the bottom-right corner.
@@ -703,6 +704,7 @@ extension MessageViewController: UICollectionViewDataSource {
                 sectionHeader.selected = 0
                 sectionHeader.isHidden = false
             }
+            sectionHeader.alpha = linia2Search == nil ? 1 : 0   // Дизайн: под строкой поиска плашку не показываем
 
             return sectionHeader
         }
@@ -981,7 +983,8 @@ extension MessageViewController: MessageViewLayoutDelegate {
         if attr.representedElementCategory == .supplementaryView {
             // Request for pinned area attributes (section header).
             let height: CGFloat = self.pinnedMessageSeqs.isEmpty ? 0 : Constants.kPinnedMessagesViewHeight
-            attr.frame = CGRect(origin: CGPoint(), size: CGSize(width: collectionView.frame.width - collectionView.layoutMargins.left - collectionView.layoutMargins.right, height: height))
+            // Дизайн: плашка с равными полями слева и справа (раньше прижималась к левому краю экрана).
+            attr.frame = CGRect(origin: CGPoint(x: collectionView.layoutMargins.left, y: 0), size: CGSize(width: collectionView.frame.width - collectionView.layoutMargins.left - collectionView.layoutMargins.right, height: height))
             attr.zIndex = 1
             return
         } else if attr.representedElementCategory == .decorationView {

@@ -172,6 +172,9 @@ final class Linia2AppLock {
     private func makeWindow(level: UIWindow.Level, root: UIViewController) -> UIWindow {
         let w = UIWindow(frame: UIScreen.main.bounds)
         w.windowLevel = level
+        // Дизайн: окно PIN-кода — в выбранной теме приложения (раньше в тёмной теме PIN был светлым).
+        w.overrideUserInterfaceStyle = Linia2Appearance.interfaceStyle
+        w.tintColor = L2.accent
         w.rootViewController = root
         return w
     }
@@ -261,7 +264,7 @@ final class Linia2PinViewController: UIViewController {
 
     required init?(coder: NSCoder) { return nil }
 
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    override var preferredStatusBarStyle: UIStatusBarStyle { .default }   // Дизайн: по теме (в светлой «белые часы» были невидимы)
 
     override func viewDidLoad() {
         super.viewDidLoad()

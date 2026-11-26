@@ -9,7 +9,7 @@
 //
 //  Удалённые настройки (app-config.json; нет поля — значение по умолчанию):
 //   features.chatFloatingHeader, features.chatSearch, features.chatPattern, features.chatFloatingInput,
-//   features.savedMessages — по умолчанию true;
+//   features.savedMessages — по умолчанию true; features.chatBackTitle — «‹ Назад» с подписью (по умолчанию false: круглая «‹»);
 //   chatHeader.buttons — кнопки справа по порядку, из "call", "video", "burn", "search", "more"
 //     (по умолчанию ["call","video","burn","search"]; "more" — «⋮» только если сервер явно указал;
 //      📞/📹/⏱ показываются, только если доступны в этом чате);
@@ -155,7 +155,11 @@ extension MessageViewController {
         let g = L2GlassView(insets: UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4))
         let b = UIButton(type: .system)
         b.setImage(L2.symbol("chevron.left", 16, .semibold), for: .normal)
-        b.setTitle(" " + L2T("l2.chat.back", "Назад"), for: .normal)
+        // Дизайн: подпись «Назад» отнимала место у имени («Диз…» даже на Pro Max, на SE — «‹ …»).
+        // Кнопка — круглая «‹» 38×38, как в iOS 26 / Telegram; подпись «Назад» остаётся для VoiceOver и тестов.
+        // Вернуть текст на широких экранах: features.chatBackTitle = true в app-config.
+        let compact = !Linia2Config.shared.feature("chatBackTitle", default: false)
+        if !compact { b.setTitle(" " + L2T("l2.chat.back", "Назад"), for: .normal) }
         b.titleLabel?.font = L2.font(16, .medium)
         b.tintColor = L2.accent
         b.setTitleColor(L2.accent, for: .normal)
@@ -168,8 +172,13 @@ extension MessageViewController {
         pad.translatesAutoresizingMaskIntoConstraints = false
         pad.widthAnchor.constraint(equalToConstant: 4).isActive = true
         g.content.addArrangedSubview(b)
-        g.content.addArrangedSubview(pad)
+        if compact {
+            b.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        } else {
+            g.content.addArrangedSubview(pad)
+        }
         g.heightAnchor.constraint(equalToConstant: 38).isActive = true
+        if compact { g.widthAnchor.constraint(equalToConstant: 38).isActive = true }
         return g
     }
 
@@ -331,14 +340,26 @@ final class Linia2ChatSearch: NSObject, UITextFieldDelegate {
             bar.heightAnchor.constraint(equalToConstant: 44),
         ])
         bar.alpha = 0
-        UIView.animate(withDuration: 0.2) { self.bar.alpha = 1 }
+        UIView.animate(withDuration: 0.2) {
+            self.bar.alpha = 1
+            self.setPinnedHidden(true)
+        }
         field.becomeFirstResponder()
     }
 
     func dismiss() {
         field.resignFirstResponder()
-        UIView.animate(withDuration: 0.2, animations: { self.bar.alpha = 0 }, completion: { _ in self.bar.removeFromSuperview() })
+        UIView.animate(withDuration: 0.2, animations: {
+            self.bar.alpha = 0
+            self.setPinnedHidden(false)
+        }, completion: { _ in self.bar.removeFromSuperview() })
         vc?.linia2Search = nil
+    }
+
+    /// Дизайн: строка поиска встаёт на место плашки «Закреплённое» — плашку на время поиска прячем (не накладываются).
+    private func setPinnedHidden(_ hidden: Bool) {
+        guard let cv = vc?.collectionView else { return }
+        for v in cv.visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader) { v.alpha = hidden ? 0 : 1 }
     }
 
     @objc private func changed() {

@@ -117,7 +117,7 @@ class MessageViewLayout: UICollectionViewFlowLayout {
         guard let collectionView = collectionView else { return attr }
         guard attr.indexPath.section == 0 else { return attr }
 
-        attr.frame = CGRect(origin: CGPoint(x: 0, y: max(0, collectionView.contentOffset.y)), size: attr.size)
+        attr.frame = CGRect(origin: CGPoint(x: attr.frame.origin.x, y: max(0, collectionView.contentOffset.y)), size: attr.size)
         return attr
     }
 }

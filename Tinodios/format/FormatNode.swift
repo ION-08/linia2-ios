@@ -598,62 +598,38 @@ class FormatNode: CustomStringConvertible {
 
     private func createVideoCallAttachmentString(isOutgoing: Bool, callState: String, callDuration: Int,
                                                  defaultAttrs attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        let attributed = NSMutableAttributedString(string: "\u{2009}")
+        // Дизайн (как Telegram): запись о звонке — одна компактная строка «↗ Исходящий звонок · 0:42»
+        // (раньше — крупная трубка и две строки, пузырь вдвое выше обычного).
+        let attributed = NSMutableAttributedString()
         attributed.beginEditing()
-
-        // Large phone icon.
-        let icon = NSTextAttachment()
-        icon.image = UIImage(systemName: "phone")?.withRenderingMode(.alwaysTemplate)
-        var aspectRatio: CGFloat = 1
-        if let size = icon.image?.size {
-            aspectRatio = size.width / size.height
-        }
         let baseFont = attributes[.font] as! UIFont
-        icon.bounds = CGRect(origin: CGPoint(x: 0, y: baseFont.capHeight - Constants.kCallIconSize), size: CGSize(width: Constants.kCallIconSize * aspectRatio, height: Constants.kCallIconSize))
-
-        attributed.append(NSAttributedString(attachment: icon))
-        attributed.addAttributes(attributes, range: NSRange(location: 0, length: attributed.length))
-        attributed.append(NSAttributedString(string: " "))
-
-        attributed.append(NSAttributedString(string:
-            // Regular call.
-            isOutgoing ? NSLocalizedString("Outgoing call", comment: "Label for outgoing video/audio calls") : NSLocalizedString("Incoming call", comment: "Label for incoming video/audio calls"), attributes: attributes))
-
-        // Linebreak.
-        attributed.append(NSAttributedString(string: "\u{2009}\n", attributes: [NSAttributedString.Key.font: baseFont]))
-
-        // Second line: call status and duration.
-        let arrow = NSMutableAttributedString()
-        arrow.beginEditing()
+        let font = baseFont.withSize(baseFont.pointSize * 0.94)
+        var attrs = attributes
+        attrs[.font] = font
 
         let success = ![MsgServerData.WebRTC.kBusy.rawValue, MsgServerData.WebRTC.kDisconnected.rawValue, MsgServerData.WebRTC.kMissed.rawValue, MsgServerData.WebRTC.kDeclined.rawValue].contains(callState)
         let arrowIcon = NSTextAttachment()
         arrowIcon.image = AbstractFormatter.callStatusIcon(incoming: !isOutgoing, success: success)
-        aspectRatio = 1
-        if let size = arrowIcon.image?.size {
+        var aspectRatio: CGFloat = 1
+        if let size = arrowIcon.image?.size, size.height > 0 {
             aspectRatio = size.width / size.height
         }
-        arrowIcon.bounds = CGRect(origin: CGPoint(x: 0, y: -2), size: CGSize(width: baseFont.lineHeight * 0.7 * aspectRatio, height: baseFont.lineHeight * 0.7))
-        arrow.append(NSAttributedString(attachment: arrowIcon))
+        let side = font.capHeight * 1.15
+        arrowIcon.bounds = CGRect(origin: CGPoint(x: 0, y: (font.capHeight - side) / 2), size: CGSize(width: side * aspectRatio, height: side))
+        let arrow = NSMutableAttributedString(attachment: arrowIcon)
         arrow.addAttribute(.foregroundColor, value: success ? Constants.kSuccessfulCallArrowColor : Constants.kFailedCallArrowColor, range: NSRange(location: 0, length: arrow.length))
-
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.firstLineHeadIndent = Constants.kCallIconSize + baseFont.capHeight * 0.25
-        paragraph.lineSpacing = 0
-        paragraph.lineHeightMultiple = 0.5
-        arrow.addAttributes([NSAttributedString.Key.paragraphStyle: paragraph], range: NSRange(location: 0, length: arrow.length))
-
-        arrow.append(NSAttributedString(string: " "))
-        if callDuration > 0 {
-            arrow.append(NSAttributedString(string: AbstractFormatter.millisToTime(millis: callDuration), attributes: attributes))
-        } else {
-            arrow.append(NSAttributedString(string: AbstractFormatter.callStatusText(incoming: !isOutgoing, event: callState), attributes: attributes))
-        }
-
-        arrow.addAttribute(.font, value: baseFont.withSize(baseFont.pointSize * 0.9), range: NSRange(location: 0, length: arrow.length))
-
-        arrow.endEditing()
         attributed.append(arrow)
+        attributed.append(NSAttributedString(string: " ", attributes: attrs))
+
+        attributed.append(NSAttributedString(string:
+            isOutgoing ? NSLocalizedString("Outgoing call", comment: "Label for outgoing video/audio calls") : NSLocalizedString("Incoming call", comment: "Label for incoming video/audio calls"), attributes: attrs))
+
+        var detailAttrs = attrs
+        if let c = attrs[.foregroundColor] as? UIColor { detailAttrs[.foregroundColor] = c.withAlphaComponent(0.75) }
+        let detail = callDuration > 0 ?
+            AbstractFormatter.millisToTime(millis: callDuration) :
+            AbstractFormatter.callStatusText(incoming: !isOutgoing, event: callState)
+        attributed.append(NSAttributedString(string: " · " + detail, attributes: detailAttrs))
 
         /*
         if isConferenceCall && callState == MsgServerData.WebRTC.kStarted.rawValue {

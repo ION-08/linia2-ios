@@ -110,7 +110,7 @@ class Linia2FormViewController: UIViewController {
     let stack = UIStackView()
     private var centerConstraint: NSLayoutConstraint!
 
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    override var preferredStatusBarStyle: UIStatusBarStyle { .default }   // Дизайн: по теме (в светлой «белые часы» были невидимы)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -765,7 +765,7 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
 // MARK: - г) Создание PIN-кода (в онбординге) и предложение Face ID
 
 final class Linia2PinOnboardingViewController: UIViewController {
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    override var preferredStatusBarStyle: UIStatusBarStyle { .default }   // Дизайн: по теме (в светлой «белые часы» были невидимы)
 
     override func viewDidLoad() {
         super.viewDidLoad()

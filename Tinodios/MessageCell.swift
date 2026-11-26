@@ -298,12 +298,29 @@ class MessageCell: UICollectionViewCell {
 
     /// Highlights the cell by gradually changing its background color to a darker one and back.
     func highlightAnimated(withDuration duration: TimeInterval) {
-        let halfDuration = 0.5 * duration
-        UIView.animate(withDuration: halfDuration) {
-            self.containerView.backgroundColor = self.containerView.backgroundColor?.darker()
-        }
-        UIView.animate(withDuration: halfDuration) {
-            self.containerView.backgroundColor = self.containerView.backgroundColor?.lighter()
+        // Дизайн: раньше darker() и lighter() запускались одновременно и пузырь становился белым
+        // с белым текстом (поиск, переход к цитате). Теперь — лёгкая акцентная подсветка и возврат к исходному цвету.
+        let original = containerView.backgroundColor
+        let flash = (original ?? L2.bubbleIn).linia2Blend(L2.accent, 0.35)
+        UIView.animate(withDuration: 0.2, animations: {
+            self.containerView.backgroundColor = flash
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.6, delay: max(0, duration - 0.8), options: [.allowUserInteraction], animations: {
+                self.containerView.backgroundColor = original
+            })
+        })
+    }
+}
+
+private extension UIColor {
+    /// Смесь двух цветов (t — доля второго), с учётом текущей темы.
+    func linia2Blend(_ other: UIColor, _ t: CGFloat) -> UIColor {
+        UIColor { tc in
+            var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+            var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+            self.resolvedColor(with: tc).getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+            other.resolvedColor(with: tc).getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+            return UIColor(red: r1 + (r2 - r1) * t, green: g1 + (g2 - g1) * t, blue: b1 + (b2 - b1) * t, alpha: max(a1, a2))
         }
     }
 }

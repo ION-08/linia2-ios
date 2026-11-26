@@ -61,6 +61,12 @@ class PinnedMessagesView: UICollectionReusableView {
     private func linia2Setup(_ nibView: UIView) {
         backgroundColor = L2.surface
         nibView.backgroundColor = L2.surface
+        // Дизайн: в тёмной теме фон точек и ленты из xib (secondarySystemBackground) давал чёрный прямоугольник
+        // с синей точкой; точки — только при нескольких закреплённых, цвет — акцент.
+        dotSelectorView.backgroundColor = .clear
+        dotSelectorView.selectedColor = L2.accent.cgColor
+        dotSelectorView.normalColor = L2.textSecondary.withAlphaComponent(0.5).cgColor
+        pagerView.backgroundColor = .clear
         for c in nibView.constraints where (c.firstItem as? UIView) === pagerView && c.firstAttribute == .top { c.constant = 18 }
         l2Counter.font = L2.font(12, .semibold)
         l2Counter.textColor = L2.accent
@@ -78,13 +84,19 @@ class PinnedMessagesView: UICollectionReusableView {
             cancel.accessibilityIdentifier = "l2.pinned.unpin"
             cancel.accessibilityLabel = "Открепить"
             cancel.tintColor = L2.textSecondary
+            // Дизайн: значок «×» фиксированного размера — при крупном шрифте он раздувался до 44 pt.
+            cancel.setImage(UIImage(systemName: "xmark.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), for: .normal)
+            let w = cancel.widthAnchor.constraint(equalToConstant: 32)
+            w.priority = .required
+            w.isActive = true
         }
     }
 
     /// Плашка под плавающей шапкой: скруглённая полупрозрачная (blur), слева акцентная полоска — как в Telegram.
     private func linia2Float(_ nibView: UIView) {
         backgroundColor = .clear
-        nibView.backgroundColor = L2.surface.withAlphaComponent(0.45)
+        // Почти непрозрачная: сообщения под плашкой не просвечивают и не мешают читать.
+        nibView.backgroundColor = L2.surface.withAlphaComponent(0.92)
         nibView.layer.cornerRadius = 14
         nibView.clipsToBounds = true
         let glass = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
@@ -127,7 +139,19 @@ class PinnedMessagesView: UICollectionReusableView {
     public var topicName: String?
 
     private func assignPinText(toView tv: UITextView, text: NSAttributedString) {
-        tv.attributedText = text
+        // Дизайн: превью без своего цвета рисовалось тёмным по тёмному — нечитаемо. Основной цвет темы, 15 pt.
+        let m = NSMutableAttributedString(attributedString: text)
+        let full = NSRange(location: 0, length: m.length)
+        m.enumerateAttribute(.foregroundColor, in: full) { v, r, _ in
+            if v == nil { m.addAttribute(.foregroundColor, value: L2.textPrimary, range: r) }
+        }
+        m.enumerateAttribute(.font, in: full) { v, r, _ in
+            let f = (v as? UIFont) ?? L2.font(15)
+            m.addAttribute(.font, value: f.withSize(min(f.pointSize, 15)), range: r)
+        }
+        tv.attributedText = m
+        tv.textContainer.maximumNumberOfLines = 1
+        tv.textContainer.lineBreakMode = .byTruncatingTail
         tv.sizeToFit()
         // Center text vertically.
         let topInset = max(0, (PinnedMessagesView.kPinnedCollectionHeight - tv.contentSize.height)/2)
@@ -137,6 +161,7 @@ class PinnedMessagesView: UICollectionReusableView {
     public var pins: [Int] = [] {
         didSet {
             dotSelectorView.dotCount = pins.count
+            dotSelectorView.alpha = pins.count > 1 ? 1 : 0
             if selectedPage >= pins.count { selectedPage = 0 }
             linia2UpdateCounter()
             var pages: [UIView] = []

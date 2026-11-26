@@ -289,6 +289,11 @@ final class Linia2Config {
         (section("features")[name] as? Bool) ?? true
     }
 
+    /// Функция с заданным значением по умолчанию (для выключенных по умолчанию).
+    func feature(_ name: String, default value: Bool) -> Bool {
+        (section("features")[name] as? Bool) ?? value
+    }
+
     struct Banner { let text: String; let color: UInt32?; let url: URL? }
     var banner: Banner? {
         let b = section("banner")
