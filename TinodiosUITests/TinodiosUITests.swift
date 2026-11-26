@@ -348,7 +348,9 @@ final class TinodiosUITests: XCTestCase {
         screenshot("pin-enter")
         enterPin(["0", "0", "0", "0"])
         sleep(2)
-        XCTAssertFalse(tab("l2.tab.chats").exists, "неверный PIN пропустил в приложение")
+        // Вкладки есть в иерархии и под экраном PIN — проверяем, что экран PIN остался.
+        XCTAssertTrue(app.staticTexts["Введите PIN-код"].exists || app.staticTexts["Неверный PIN-код"].exists
+                      || !tab("l2.tab.chats").isHittable, "неверный PIN пропустил в приложение")
         screenshot("pin-wrong")
         enterPin()
         wait(tab("l2.tab.chats"), "Чаты после верного PIN")

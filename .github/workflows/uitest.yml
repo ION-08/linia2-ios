@@ -113,7 +113,9 @@ jobs:
           }
           const A = client(process.env.L2_LOGIN, process.env.L2_PASSWORD), B = client(process.env.L2_PEER_LOGIN, process.env.L2_PEER_PASSWORD);
           console.log('вход', await A.login(), await B.login());
-          await B.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник CI' } } } }).catch(() => {});
+          // Имя меняется только после подписки на me (без неё Tinode отвечает 304 и имя остаётся «Тест CI»).
+          await B.req({ sub: { topic: 'me' } }).catch(() => {});
+          console.log('имя', (await B.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник CI' } } } }).catch(e => ({ code: String(e) }))).code);
           const sb = await B.req({ sub: { topic: A.uid } }); const topic = sb.topic || A.uid;
           for (let i = 1; i <= 3; i++) { const p = await B.req({ pub: { topic, content: 'История ' + i } }); console.log('pub', p.code); }
           const sa = await A.req({ sub: { topic: B.uid } }); await A.req({ pub: { topic: sa.topic || B.uid, content: 'История ответ' } });
@@ -122,7 +124,8 @@ jobs:
           if (process.env.L2_C_LOGIN) {
             const C = client(process.env.L2_C_LOGIN, process.env.L2_C_PASSWORD);
             console.log('вход C', await C.login());
-            await C.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник iOS' } } } }).catch(() => {});
+            await C.req({ sub: { topic: 'me' } }).catch(() => {});
+            console.log('имя C', (await C.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник iOS' } } } }).catch(e => ({ code: String(e) }))).code);
             const sc = await C.req({ sub: { topic: A.uid } }); await C.req({ pub: { topic: sc.topic || A.uid, content: 'Позвони мне' } });
             const sa2 = await A.req({ sub: { topic: C.uid } }); await A.req({ pub: { topic: sa2.topic || C.uid, content: 'Сейчас позвоню' } });
           }

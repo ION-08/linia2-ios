@@ -329,7 +329,7 @@ final class Linia2LoginViewController: Linia2FormViewController, UITextFieldDele
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        loginField.textContentType = .username
+        loginField.textContentType = ProcessInfo.processInfo.arguments.contains("-l2-uitest") ? nil : .username
         loginField.autocapitalizationType = .none
         loginField.autocorrectionType = .no
         loginField.keyboardType = .asciiCapable
@@ -624,7 +624,8 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
         let uiTest = ProcessInfo.processInfo.arguments.contains("-l2-uitest")
         for f in [passwordField, password2Field] {
             f.addSecureToggle()
-            f.textContentType = uiTest ? nil : .newPassword
+            // .oneTimeCode — единственный тип, при котором симулятор не подставляет «Automatic Strong Password».
+            f.textContentType = uiTest ? .oneTimeCode : .newPassword
         }
         let hint = UILabel()
         hint.text = "Логин — латиница, цифры, точка, _ или -. По нему вас найдут собеседники."
