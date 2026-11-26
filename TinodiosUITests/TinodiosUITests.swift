@@ -876,6 +876,33 @@ final class TinodiosUITests: XCTestCase {
         assertDefaultTabs()   // конфиг новой схемы этой версией не применяется
     }
 
+    // MARK: - 7г. Звонок iOS → веб (веб-собеседник ci/web-tests/call-peer.mjs принимает в браузере)
+
+    func test00_CallToWebPeer() throws {
+        guard env["L2_WEB_PEER"] == "1" else { throw XCTSkip("веб-собеседник не запущен (L2_WEB_PEER != 1)") }
+        openPeerChat()
+        let call = app.buttons["l2.chat.call"].firstMatch.exists ? app.buttons["l2.chat.call"].firstMatch : app.navigationBars.buttons["Позвонить"].firstMatch
+        wait(call, "кнопка звонка в шапке чата").tap()
+        let audio = app.buttons["Только звук"].firstMatch
+        if audio.waitForExistence(timeout: 5) { audio.tap() }
+        dismissSpringboardAlerts()   // разрешение на микрофон
+        let state = any("l2.call.state")
+        wait(state, "экран звонка", timeout: 20)
+        screenshot("call-dialing")
+        let connected = NSPredicate(format: "label BEGINSWITH 'Идёт звонок'")
+        expectation(for: connected, evaluatedWith: state)
+        waitForExpectations(timeout: 90)
+        sleep(5)
+        screenshot("call-connected")
+        XCTAssertTrue(any("l2.call.hangup").exists, "нет кнопки «Положить трубку»")
+        XCTAssertTrue(any("l2.call.mic").exists, "нет кнопки микрофона")
+        any("l2.call.mic").tap(); sleep(1); any("l2.call.mic").tap()
+        any("l2.call.hangup").tap()
+        sleep(3)
+        XCTAssertEqual(app.state, .runningForeground, "вылет после звонка")
+        screenshot("call-ended")
+    }
+
     // MARK: - 8. Обход всех экранов без вылетов
 
     func test29_AllScreensNoCrash() {

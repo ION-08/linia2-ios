@@ -1,9 +1,8 @@
 # Выпуск «Линия 2.0» в TestFlight — полностью автоматически.
 # Обычный push в main → только тесты (uitest.yml, e2e.yml), без загрузки.
 # Push в main, где в сообщении коммита есть [release] (или в репозитории лежит файл RELEASE_READY):
-#   круг 1: юнит + XCUITest → большой e2e (iPhone + iPhone + Веб)
-#   круг 2: то же ещё раз (подряд, по очереди — тестовый сервер общий)
-#   оба круга зелёные → сборка и загрузка в TestFlight (testflight.yml). Что-то упало — загрузки нет.
+#   юнит + XCUITest (с звонком iOS ↔ веб) → браузерный тест гостевой ссылки → сборка и загрузка в TestFlight.
+#   Что-то упало — загрузки нет.
 # [dry-run] в сообщении вместе с [release] — вся цепочка, но остановка перед загрузкой.
 name: Release
 
@@ -33,33 +32,21 @@ jobs:
           echo "release=$R" >> "$GITHUB_OUTPUT"; echo "dry_run=$D" >> "$GITHUB_OUTPUT"
           echo "Выпуск: $R, пробный (без загрузки): $D" | tee -a "$GITHUB_STEP_SUMMARY"
 
-  tests-1:
+  # Выпуск 26.11 (решение владельца): юнит + UI (включая звонок iOS ↔ веб) → браузерный тест гостевой ссылки → TestFlight.
+  # Большой e2e (2 круга) вернётся в цепочку, когда будет готов.
+  tests:
     needs: gate
     if: ${{ needs.gate.outputs.release == 'true' }}
     uses: ./.github/workflows/uitest.yml
     secrets: inherit
 
-  e2e-1:
-    needs: [gate, tests-1]
-    uses: ./.github/workflows/e2e.yml
-    with:
-      dry_run: ${{ needs.gate.outputs.dry_run == 'true' }}
-    secrets: inherit
-
-  tests-2:
-    needs: e2e-1
-    uses: ./.github/workflows/uitest.yml
-    secrets: inherit
-
-  e2e-2:
-    needs: [gate, tests-2]
-    uses: ./.github/workflows/e2e.yml
-    with:
-      dry_run: ${{ needs.gate.outputs.dry_run == 'true' }}
+  web:
+    needs: [gate, tests]
+    uses: ./.github/workflows/web-tests.yml
     secrets: inherit
 
   testflight:
-    needs: [gate, e2e-2]
+    needs: [gate, tests, web]
     uses: ./.github/workflows/testflight.yml
     with:
       dry_run: ${{ needs.gate.outputs.dry_run == 'true' }}

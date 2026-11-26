@@ -1,0 +1,47 @@
+# Браузерные тесты веб-версии «Линия 2.0» против сервера (Playwright, Chromium с поддельными камерой/микрофоном).
+# Сейчас: гостевая ссылка на звонок (ci/web-tests/guest-call.mjs). Вызывается из release.yml; вручную/на push — тоже.
+name: Web tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["ci/web-tests/**", ".github/workflows/web-tests.yml"]
+  workflow_call:
+
+concurrency:
+  group: webtests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    if: ${{ github.workflow != 'Web tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Playwright
+        run: |
+          mkdir -p "$RUNNER_TEMP/web" && cd "$RUNNER_TEMP/web" && npm init -y >/dev/null
+          npm i playwright@1.49.1 >/dev/null 2>&1 && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cp "$GITHUB_WORKSPACE"/ci/web-tests/*.mjs .
+      - name: Гостевая ссылка на звонок
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+          OUT_DIR: ${{ runner.temp }}/out/guest
+        run: |
+          mkdir -p "$OUT_DIR"
+          [ -f "$RUNNER_TEMP/web/guest-call.mjs" ] || { echo "::error::нет ci/web-tests/guest-call.mjs"; exit 1; }
+          cd "$RUNNER_TEMP/web"
+          set +e; node guest-call.mjs > "$OUT_DIR/result.json" 2> "$OUT_DIR/log.txt"; RC=$?; set -e
+          echo "### Гостевая ссылка на звонок: $( [ $RC = 0 ] && echo '✅ прошла' || echo "❌ упала (код $RC)")" >> "$GITHUB_STEP_SUMMARY"
+          tail -c 4000 "$OUT_DIR/result.json" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
+          exit $RC
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-tests-${{ github.run_number }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
