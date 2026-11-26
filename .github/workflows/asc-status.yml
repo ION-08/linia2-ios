@@ -47,8 +47,11 @@ jobs:
           if (!b) { sum(`❌ Сборка ${e.BUILD} не появилась в App Store Connect`); process.exit(1); }
           sum(`Сборка ${e.BUILD}: обработка ${b.attributes.processingState}, шифрование: ${b.attributes.usesNonExemptEncryption}`);
           if (b.attributes.processingState !== 'VALID') process.exit(1);
-          const bd = (await api(`/v1/builds/${b.id}/buildBetaDetail`)).j?.data;
-          if (bd) sum(`TestFlight: внутреннее тестирование ${bd.attributes.internalBuildState}, внешнее ${bd.attributes.externalBuildState}`);
+          if (b.attributes.usesNonExemptEncryption == null) {
+            // «Missing Compliance»: приложение не использует собственного шифрования (ITSAppUsesNonExemptEncryption=false)
+            const pr = await api(`/v1/builds/${b.id}`, { method: 'PATCH', body: JSON.stringify({ data: { type: 'builds', id: b.id, attributes: { usesNonExemptEncryption: false } } }) });
+            sum(`Экспортное соответствие: ответ «шифрование не используется» → HTTP ${pr.s}`);
+          }
           const gs = (await api(`/v1/betaGroups?filter[app]=${app.id}&limit=50`)).j?.data || [];
           sum('Группы: ' + gs.map(g => g.attributes.name + (g.attributes.isInternalGroup ? ' (внутр.)' : '')).join(', '));
           const g = gs.find(x => x.attributes.name === e.GROUP);
@@ -56,7 +59,18 @@ jobs:
           const add = await api(`/v1/betaGroups/${g.id}/relationships/builds`, { method: 'POST', body: JSON.stringify({ data: [{ type: 'builds', id: b.id }] }) });
           sum(`Добавление в «${e.GROUP}»: HTTP ${add.s}${add.s >= 300 ? ' ' + add.t.slice(0, 300) : ''}`);
           const inG = (await api(`/v1/betaGroups/${g.id}/builds?limit=50&fields[builds]=version`)).j?.data || [];
-          const ok = inG.some(x => x.id === b.id); sum(ok ? `✅ Сборка ${e.BUILD} доступна группе «${e.GROUP}»` : `❌ Сборки нет в группе «${e.GROUP}»`);
+          const ok = inG.some(x => x.id === b.id); sum(ok ? `Сборка ${e.BUILD} в группе «${e.GROUP}»` : `❌ Сборки нет в группе «${e.GROUP}»`);
           if (!ok) process.exit(1);
+          // Ready to Test = internalBuildState IN_BETA_TESTING (READY_FOR_BETA_TESTING — тоже можно ставить)
+          let st = '';
+          for (let i = 0; i < 30; i++) {
+            st = (await api(`/v1/builds/${b.id}/buildBetaDetail`)).j?.data?.attributes?.internalBuildState || '?';
+            console.log(new Date().toISOString(), 'TestFlight (внутр.):', st);
+            if (['IN_BETA_TESTING', 'READY_FOR_BETA_TESTING'].includes(st)) break;
+            if (['MISSING_EXPORT_COMPLIANCE', 'PROCESSING_EXCEPTION', 'EXPIRED', 'BETA_REJECTED'].includes(st) && i > 3) break;
+            await new Promise(r => setTimeout(r, 30000));
+          }
+          sum(['IN_BETA_TESTING', 'READY_FOR_BETA_TESTING'].includes(st) ? `✅ Сборка ${e.BUILD}: Ready to Test (${st}), группа «${e.GROUP}»` : `❌ Сборка ${e.BUILD}: TestFlight ${st}`);
+          if (!['IN_BETA_TESTING', 'READY_FOR_BETA_TESTING'].includes(st)) process.exit(1);
           JS
           rc=0; node "$RUNNER_TEMP/asc.mjs" "$RUNNER_TEMP/k.p8" || rc=$?; rm -f "$RUNNER_TEMP/k.p8"; exit $rc
