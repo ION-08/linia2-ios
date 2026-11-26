@@ -115,8 +115,8 @@ final class Linia2DesignShots: Linia2CallTestBase {
         shot("chat", "pinned")
 
         // Меню сообщения (долгое нажатие).
-        let msg = app.collectionViews.firstMatch.textViews.matching(NSPredicate(format: "label CONTAINS 'Сообщение'")).firstMatch
-        let target = msg.exists ? msg : app.collectionViews.firstMatch.textViews.firstMatch
+        let msg = app.collectionViews.firstMatch.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Сообщение'")).firstMatch
+        let target = msg.exists ? msg : app.collectionViews.firstMatch.staticTexts.firstMatch
         if target.exists {
             target.press(forDuration: 1.0)
             if any("l2.menu").waitForExistence(timeout: 5) {

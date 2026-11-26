@@ -41,6 +41,39 @@ class RichTextView: UITextView {
         }
     }
 
+    // MARK: LINIA2: доступность
+    // Текст сообщения и цитаты (ответ/пересылка) — нередактируемый: для VoiceOver и XCUITest это обычный
+    // текст (StaticText) одним элементом с подписью = текст. Иначе UITextView в iOS 17/18 отдаётся как
+    // TextView с вложенным TextView-фрагментом: подпись у вложенного, проверка «нажимаемости» по нему
+    // не проходит (долгое нажатие по сообщению после закрытия меню не срабатывало), цитата над полем
+    // ввода не читалась как текст. Без текста (только вложение) — поведение UITextView по умолчанию.
+    private var l2AccessibleText: String? {
+        let t = (attributedText?.string ?? text ?? "")
+            .replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    override var isAccessibilityElement: Bool {
+        get { l2AccessibleText != nil ? true : super.isAccessibilityElement }
+        set { super.isAccessibilityElement = newValue }
+    }
+
+    override var accessibilityTraits: UIAccessibilityTraits {
+        get { l2AccessibleText != nil ? .staticText : super.accessibilityTraits }
+        set { super.accessibilityTraits = newValue }
+    }
+
+    override var accessibilityLabel: String? {
+        get { l2AccessibleText ?? super.accessibilityLabel }
+        set { super.accessibilityLabel = newValue }
+    }
+
+    override var accessibilityValue: String? {
+        get { l2AccessibleText != nil ? nil : super.accessibilityValue }
+        set { super.accessibilityValue = newValue }
+    }
+
     override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
         super.setContentOffset(contentOffset, animated: false)
     }
