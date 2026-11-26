@@ -271,9 +271,15 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         b.noteRead(topic, seq: seq ?? 0)
         // Исчезает у обоих.
         let gone = NSPredicate(format: "exists == false")
+        // На сообщении — таймер, после прочтения идёт обратный отсчёт (⏱0:1x).
+        let timer = any("l2.burn.timer.\(seq ?? -1)")
+        if timer.waitForExistence(timeout: 15) {
+            let counting = NSPredicate(format: "label BEGINSWITH '⏱0:1' OR label BEGINSWITH '⏱0:0'")
+            expectation(for: counting, evaluatedWith: timer)
+            waitForExpectations(timeout: 20)
+        }
+        screenshot("burn-countdown")
         expectation(for: gone, evaluatedWith: labelContains(text))
-        sleep(6)
-        screenshot("burn-countdown")       // на сообщении отсчёт ⏱0:1x
         waitForExpectations(timeout: 60)   // 20 с после прочтения + доставка
         screenshot("burn-gone")
         b.fetchLatest(topic)
@@ -284,5 +290,61 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         wait(app.alerts.buttons["Выключить"].firstMatch, "«Выключить»").tap()
         wait(labelContains("Вы выключили исчезающие сообщения"), "строка «Вы выключили исчезающие сообщения»", timeout: 15)
         XCTAssertFalse(any("l2.chat.burnLabel").isHittable, "подпись об исчезающих сообщениях осталась")
+    }
+
+    // MARK: - Исчезающие сообщения: совместимость с вебом (переключатель собеседника, linia2-burn у своих)
+
+    func testF4_BurnModeFromPeerWebFormat() throws {
+        openPeerChat()
+        let (b, topic) = try peer()
+        let burn = app.buttons["l2.chat.burn"].firstMatch
+        wait(burn, "⏱ в шапке чата")
+        if isOn(burn) {   // остался с прошлой попытки
+            b.publish(topic, content: "выкл", head: ["linia2-burnmode": "off"])
+            sleep(3)
+        }
+        // Собеседник (веб) включает «для обоих» на 10 с — строками/числами, как шлёт веб.
+        let on = b.publish(topic, content: peerName + " включил(а) исчезающие сообщения: 10 с после прочтения",
+                           head: ["linia2-burnmode": "on", "linia2-burn-scope": "both", "linia2-burn-secs": 10])
+        XCTAssertNotNil(on, "собеседник не смог включить режим")
+        wait(labelContains("включил(а) исчезающие сообщения: 10 с после прочтения"), "системная строка от собеседника", timeout: 20)
+        let label = wait(any("l2.chat.burnLabel"), "подпись у поля ввода", timeout: 15)
+        XCTAssertTrue(label.label.contains("10 с после прочтения"), "подпись: \(label.label)")
+        let end = Date().addingTimeInterval(10)
+        while Date() < end && !isOn(app.buttons["l2.chat.burn"].firstMatch) { usleep(300_000) }
+        XCTAssertTrue(isOn(app.buttons["l2.chat.burn"].firstMatch), "⏱ не покраснел у получателя")
+        screenshot("burn-peer-on")
+
+        // Своё сообщение уходит с "linia2-burn": 10 (число).
+        let text = "Веб-формат " + Self.stamp
+        send(text)
+        sleep(2)
+        b.fetchLatest(topic)
+        let mine = b.datas.last(where: { ($0["content"] as? String) == text })
+        let head = mine?["head"] as? [String: Any]
+        XCTAssertEqual((head?["linia2-burn"] as? NSNumber)?.intValue, 10, "нет linia2-burn: 10 в head: \(String(describing: head))")
+
+        // Сообщение собеседника в режиме исчезает у получателя (чат открыт — прочитано).
+        let ptext = "От собеседника " + Self.stamp
+        let pseq = b.publish(topic, content: ptext, head: ["linia2-burn": 10])
+        XCTAssertNotNil(pseq, "собеседник не отправил сообщение")
+        wait(labelContains(ptext), "сообщение собеседника", timeout: 20)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: labelContains(ptext))
+        waitForExpectations(timeout: 45)
+        screenshot("burn-peer-gone")
+
+        // Собеседник выключает — у получателя тоже выкл. (режим был «для обоих»).
+        b.publish(topic, content: peerName + " выключил(а) исчезающие сообщения", head: ["linia2-burnmode": "off"])
+        wait(labelContains("выключил(а) исчезающие сообщения"), "строка «выключил(а)»", timeout: 20)
+        let end2 = Date().addingTimeInterval(10)
+        while Date() < end2 && isOn(app.buttons["l2.chat.burn"].firstMatch) { usleep(300_000) }
+        XCTAssertFalse(isOn(app.buttons["l2.chat.burn"].firstMatch), "⏱ остался красным после выключения собеседником")
+        // После выключения новые сообщения хранятся (без linia2-burn).
+        let keep = "Хранится " + Self.stamp
+        send(keep)
+        sleep(2)
+        b.fetchLatest(topic)
+        let kh = b.datas.last(where: { ($0["content"] as? String) == keep })?["head"] as? [String: Any]
+        XCTAssertNil(kh?["linia2-burn"], "после выключения сообщение всё ещё с linia2-burn")
     }
 }

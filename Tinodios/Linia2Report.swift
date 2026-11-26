@@ -278,6 +278,44 @@ enum Linia2Disappearing {
 
     static func title(_ ttl: Int?) -> String { options.first { $0.0 == (ttl ?? 0) }?.1 ?? "Выкл." }
 
+    /// «1 час», «1 день», «1 неделя», «1 месяц», «N дн.» (как на вебе).
+    static func label(_ s: Int) -> String {
+        switch s {
+        case 3600: return "1 час"
+        case 86400: return "1 день"
+        case 604800: return "1 неделя"
+        case 2592000: return "1 месяц"
+        default:
+            if s % 86400 == 0 { return "\(s / 86400) дн." }
+            if s % 3600 == 0 { return "\(s / 3600) ч" }
+            return "\(max(1, s / 60)) мин"
+        }
+    }
+
+    /// Служебное сообщение автоудаления из ленты (веб или iOS): head {"linia2-autodelete": <секунд> | "off"}. Старые не перетирают новые.
+    static func record(topic: String, seq: Int, secs: Int) {
+        let seqKey = "linia2.ttl.seq." + topic
+        guard seq > UserDefaults.standard.integer(forKey: seqKey) else { return }
+        UserDefaults.standard.set(seq, forKey: seqKey)
+        UserDefaults.standard.set(max(0, secs), forKey: key(topic))
+    }
+
+    /// Сообщить собеседникам: служебное сообщение (выкл. — строкой "off": SDK Tinode web выбрасывает 0, CONTRACTS-next.md §5).
+    static func publish(topic name: String, secs: Int) {
+        guard let t = Cache.tinode.getTopic(topicName: name) as? DefaultComTopic else { return }
+        let fn = Cache.tinode.getMeTopic()?.pub?.fn ?? ""
+        let me = fn.isEmpty ? "Собеседник" : fn
+        var text: String = me
+        if secs > 0 { text += " включил(а) автоудаление: " + label(secs) } else { text += " выключил(а) автоудаление" }
+        let v: JSONValue = secs > 0 ? .int(secs) : .string("off")
+        t.publish(content: Drafty(content: text), withExtraHeaders: [Linia2Burn.kAutoDeleteHeader: v]).then(onSuccess: { msg in
+            if let seq = msg?.ctrl?.getIntParam(for: "seq") {
+                DispatchQueue.main.async { record(topic: name, seq: seq, secs: secs) }
+            }
+            return nil
+        }, onFailure: nil)
+    }
+
     /// Сообщение с linia2-ttl, срок которого истёк.
     static func isExpired(_ m: Message) -> Bool {
         guard let head = m.head, let v = head[kHeader], let ts = m.ts else { return false }
@@ -300,6 +338,7 @@ enum Linia2Disappearing {
         for (secs, name) in options {
             sheet.addAction(UIAlertAction(title: (secs == cur ? "✓ " : "") + name, style: .default) { _ in
                 UserDefaults.standard.set(secs, forKey: key(topic))
+                publish(topic: topic, secs: secs)
                 UiUtils.showToast(message: secs == 0 ? "Исчезающие сообщения выключены" : "Новые сообщения исчезнут через " + name, level: .info)
             })
         }

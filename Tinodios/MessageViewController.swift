@@ -223,11 +223,12 @@ class MessageViewController: UIViewController {
 
     var isInitialLayout = true
 
-    // LINIA2: подпись «Самоуничтожение включено» над полем ввода (Linia2Burn.swift).
+    // LINIA2: подпись «Исчезающие сообщения: 20 с после прочтения» над полем ввода (Linia2Burn.swift).
     var linia2BurnLabel: UILabel?
     var linia2BurnLabelBottom: NSLayoutConstraint?
     var linia2LastScreenshotNote: Date?
     var linia2BurnTimer: Timer?
+    var linia2BurnFading = Set<String>()
 
     // Highlight this cell when scroll finishes (after the user tapped on a quote or a pinned message).
     var highlightCellAtPathAfterScroll: IndexPath?
@@ -800,12 +801,13 @@ extension MessageViewController: UICollectionViewDataSource {
         }
         let markerTextColor = isFromCurrentSender(message: message) ? UIColor.white.withAlphaComponent(0.75) : L2.textSecondary
         if let ts = message.ts, !linia2IsServiceMessage(message) {
-            // LINIA2: 🔥 — сообщение в режиме самоуничтожения.
-            cell.timestampLabel.text = (Linia2Burn.isBurnMessage(message) ? "🔥" : "") + RelativeDateFormatter.shared.timeOnly(from: ts)
-            if let t = topic, let dl = Linia2Burn.deadlines[Linia2Burn.k(t.name, message.seqId)], dl.timeIntervalSinceNow > 0 {
-                let left = Int(ceil(dl.timeIntervalSinceNow))
-                cell.timestampLabel.text = String(format: "⏱%d:%02d", left / 60, left % 60)   // отсчёт до исчезновения
-            }
+            // LINIA2: исчезающее сообщение — вместо времени таймер «⏱0:20» (после прочтения — обратный отсчёт).
+            let burnStamp = topic.flatMap { Linia2Burn.stamp(topic: $0.name, message: message) }
+            cell.timestampLabel.text = burnStamp ?? RelativeDateFormatter.shared.timeOnly(from: ts)
+            cell.timestampLabel.isAccessibilityElement = burnStamp != nil
+            cell.timestampLabel.accessibilityIdentifier = burnStamp != nil ? "l2.burn.timer.\(message.seqId)" : nil
+            cell.timestampLabel.accessibilityLabel = nil
+            cell.timestampLabel.accessibilityValue = nil
             cell.timestampLabel.textColor = markerTextColor
         }
         cell.editedMarker.text = editedMarkerText(forMessage: message)
