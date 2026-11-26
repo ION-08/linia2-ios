@@ -162,6 +162,10 @@ class PinnedMessagesView: UICollectionReusableView {
         didSet {
             dotSelectorView.dotCount = pins.count
             dotSelectorView.alpha = pins.count > 1 ? 1 : 0
+            // Дизайн: при одном закреплённом место под точки не держим — текст ближе к «×».
+            for c in dotSelectorView.constraints where c.firstAttribute == .width && c.secondItem == nil {
+                c.constant = pins.count > 1 ? 24 : 4
+            }
             if selectedPage >= pins.count { selectedPage = 0 }
             linia2UpdateCounter()
             var pages: [UIView] = []

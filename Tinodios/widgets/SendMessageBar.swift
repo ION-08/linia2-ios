@@ -126,7 +126,8 @@ class SendMessageBar: UIView {
     private var pendingPreviewAction: PendingPreviewAction = .none
     public var pendingPreviewText: NSAttributedString? {
         get { return previewView.attributedText.length != .zero ? previewView.attributedText : nil }
-        set { previewView.attributedText = newValue }
+        // Дизайн: цитата без своего цвета рисовалась почти чёрной на тёмном фоне — основной цвет темы.
+        set { previewView.attributedText = newValue?.linia2WithDefaultColor(L2.textPrimary) }
     }
 
     private var sendButtonTextImage: UIImage? {
