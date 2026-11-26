@@ -1,0 +1,33 @@
+# Большой автотест «как живые люди»: 2 симулятора iPhone + веб (Playwright).
+# ЗАГОТОВКА: настоящий тест дописывается в ветке e2e и заменит этот файл, сохранив интерфейс:
+#   on: workflow_call (input dry_run) + push в main; concurrency e2e-${{ github.workflow }}-${{ github.ref }};
+#   отдельный прогон на push с [release] пропускается (это делает release.yml).
+name: E2E
+
+on:
+  push:
+    branches: [main, e2e]
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    if: ${{ github.workflow != 'E2E' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Большой автотест ещё не готов
+        env:
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          echo "::warning::Большой e2e-тест (iPhone+iPhone+Веб) ещё в разработке — это заготовка."
+          echo "Большой e2e-тест: ЗАГОТОВКА (ещё не готов)" >> "$GITHUB_STEP_SUMMARY"
+          # В пробном выпуске пропускаем с предупреждением; настоящий выпуск без e2e невозможен.
+          if [ "$DRY" = "true" ]; then exit 0; fi
+          if [ "${{ github.workflow }}" = "Release" ]; then echo "::error::Выпуск без большого e2e-теста запрещён"; exit 1; fi
