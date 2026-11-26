@@ -66,7 +66,7 @@ class ForwardMessageBar: UIView {
         if let message = message, let delegate = self.delegate {
             let textBounds = delegate.pendingPreviewMessageSize(forMessage: message)
             previewViewHeight.constant = textBounds.height
-            previewView.attributedText = message
+            previewView.attributedText = message.linia2WithDefaultColor(L2.textPrimary)   // Дизайн: читаемо в тёмной теме
             previewView.isHidden = false
         } else {
             previewViewHeight.constant = CGFloat.zero

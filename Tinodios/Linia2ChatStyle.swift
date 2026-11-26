@@ -488,3 +488,16 @@ extension MessageViewController {
         ])
     }
 }
+
+// MARK: - Дизайн: цвет текста по умолчанию для превью (цитата, пересылка, закреплённое)
+
+extension NSAttributedString {
+    /// Копия, где у фрагментов без своего цвета — `color` (иначе UITextView рисует их чёрным).
+    func linia2WithDefaultColor(_ color: UIColor) -> NSAttributedString {
+        let m = NSMutableAttributedString(attributedString: self)
+        m.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: m.length)) { v, r, _ in
+            if v == nil { m.addAttribute(.foregroundColor, value: color, range: r) }
+        }
+        return m
+    }
+}
