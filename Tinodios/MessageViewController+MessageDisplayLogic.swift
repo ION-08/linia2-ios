@@ -68,7 +68,8 @@ extension MessageViewController: MessageDisplayLogic {
         assert(Thread.isMainThread)
         guard collectionView != nil else { return }
 
-        self.pinnedMessageSeqs = pins
+        // LINIA2: закрепление выключено в удалённых настройках — плашку не показываем.
+        self.pinnedMessageSeqs = Linia2Config.shared.feature("pins") ? pins : []
         if selected >= 0 && selected < pins.count {
             self.pinnedSelectionIndex = selected
         }

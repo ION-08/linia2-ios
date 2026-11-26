@@ -51,6 +51,12 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
         ])
         bar.onSelect = { [weak self] i in self?.selectTab(Tab(rawValue: i) ?? .chats) }
         bar.select(selectedIndex)
+        // Вкладки (порядок, названия, видимость, иконки) — из удалённых настроек, применяются без перезапуска.
+        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.bar.rebuild()
+            if !self.bar.hasTab(self.selectedIndex) { self.selectTab(.chats) } else { self.bar.select(self.selectedIndex) }
+        }
     }
 
     func selectTab(_ tab: Tab) {
@@ -96,12 +102,15 @@ final class Linia2FloatingBar: UIView {
     private let pill = UIView()
     private var pillLeading: NSLayoutConstraint?
     private let stack = UIStackView()
+    private var pillWidth: NSLayoutConstraint?
+    private var shownSpecs: [Linia2Config.TabSpec] = []
 
-    private static let tabs: [(String, String, String)] = [
-        ("Чаты", "bubble.left", "bubble.left.fill"),
-        ("Звонки", "phone", "phone.fill"),
-        ("Контакты", "person.2", "person.2.fill"),
-        ("Настройки", "gearshape", "gearshape.fill"),
+    /// Встроенные вкладки: id → (индекс контроллера, название, иконка, иконка выбранной).
+    private static let builtin: [String: (Int, String, String, String)] = [
+        "chats": (0, "Чаты", "bubble.left", "bubble.left.fill"),
+        "calls": (1, "Звонки", "phone", "phone.fill"),
+        "contacts": (2, "Контакты", "person.2", "person.2.fill"),
+        "settings": (3, "Настройки", "gearshape", "gearshape.fill"),
     ]
 
     override init(frame: CGRect) {
@@ -131,14 +140,6 @@ final class Linia2FloatingBar: UIView {
         stack.distribution = .fillEqually
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
-        for (i, t) in Self.tabs.enumerated() {
-            let item = Linia2TabItem(title: t.0, symbol: t.1, symbolSelected: t.2)
-            item.tag = i
-            item.accessibilityIdentifier = ["l2.tab.chats", "l2.tab.calls", "l2.tab.contacts", "l2.tab.settings"][i]
-            item.addTarget(self, action: #selector(tap(_:)), for: .touchUpInside)
-            items.append(item)
-            stack.addArrangedSubview(item)
-        }
         NSLayoutConstraint.activate([
             blur.topAnchor.constraint(equalTo: topAnchor), blur.bottomAnchor.constraint(equalTo: bottomAnchor),
             blur.leadingAnchor.constraint(equalTo: leadingAnchor), blur.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -146,15 +147,35 @@ final class Linia2FloatingBar: UIView {
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 10), stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             pill.topAnchor.constraint(equalTo: stack.topAnchor), pill.bottomAnchor.constraint(equalTo: stack.bottomAnchor),
-            pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(Self.tabs.count), constant: -12),
         ])
-        // Сразу привязываем выделение к первой вкладке — без этого до первого select() оно прижималось к левому краю.
-        if let first = items.first {
-            pillLeading = pill.centerXAnchor.constraint(equalTo: first.centerXAnchor)
-            pillLeading?.isActive = true
-            (first as? Linia2TabItem)?.setSelected(true)
-        }
+        rebuild()
         accessibilityTraits = .tabBar
+    }
+
+    func hasTab(_ index: Int) -> Bool { items.contains { $0.tag == index } }
+
+    /// Пересобрать вкладки по удалённым настройкам (порядок, названия, видимость, иконки по URL).
+    func rebuild() {
+        let specs = Linia2Config.shared.tabs
+        guard specs != shownSpecs || items.isEmpty else { return }
+        shownSpecs = specs
+        let selected = items.first { ($0 as? Linia2TabItem)?.isOn ?? false }?.tag ?? 0
+        items.forEach { $0.removeFromSuperview() }
+        items = []
+        for spec in specs {
+            guard let b = Self.builtin[spec.id] else { continue }
+            let item = Linia2TabItem(title: spec.title ?? L2T("l2.tab." + spec.id, b.1), symbol: b.2, symbolSelected: b.3, iconURL: spec.iconURL)
+            item.tag = b.0
+            item.accessibilityIdentifier = "l2.tab." + spec.id
+            item.addTarget(self, action: #selector(tap(_:)), for: .touchUpInside)
+            items.append(item)
+            stack.addArrangedSubview(item)
+        }
+        pillWidth?.isActive = false
+        pillWidth = pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(max(1, items.count)), constant: -12)
+        pillWidth?.isActive = true
+        // Сразу привязываем выделение — без этого до первого select() оно прижималось к левому краю.
+        select(hasTab(selected) ? selected : (items.first?.tag ?? 0), animated: false)
     }
 
     required init?(coder: NSCoder) { return nil }
@@ -164,12 +185,13 @@ final class Linia2FloatingBar: UIView {
         onSelect?(c.tag)
     }
 
-    func select(_ index: Int) {
+    func select(_ index: Int, animated: Bool = true) {
         for item in items { (item as? Linia2TabItem)?.setSelected(item.tag == index) }
+        guard let target = items.first(where: { $0.tag == index }) else { return }
         pillLeading?.isActive = false
-        guard index < items.count else { return }
-        pillLeading = pill.centerXAnchor.constraint(equalTo: items[index].centerXAnchor)
+        pillLeading = pill.centerXAnchor.constraint(equalTo: target.centerXAnchor)
         pillLeading?.isActive = true
+        if !animated { layoutIfNeeded(); return }
         UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0.4, options: [.beginFromCurrentState]) {
             self.layoutIfNeeded()
         }
@@ -181,11 +203,28 @@ private final class Linia2TabItem: UIControl {
     private let label = UILabel()
     private let symbol: String
     private let symbolSelected: String
+    private var remoteIcon: UIImage?
+    private(set) var isOn = false
+    private static var iconCache: [URL: UIImage] = [:]
 
-    init(title: String, symbol: String, symbolSelected: String) {
+    init(title: String, symbol: String, symbolSelected: String, iconURL: URL? = nil) {
         self.symbol = symbol
         self.symbolSelected = symbolSelected
         super.init(frame: .zero)
+        if let u = iconURL {
+            if let img = Self.iconCache[u] { remoteIcon = img } else {
+                URLSession.shared.dataTask(with: u) { [weak self] d, r, _ in
+                    guard let d = d, d.count < 500_000, (r as? HTTPURLResponse)?.statusCode == 200,
+                          let img = UIImage(data: d, scale: 3)?.withRenderingMode(.alwaysTemplate) else { return }
+                    DispatchQueue.main.async {
+                        Self.iconCache[u] = img
+                        guard let self = self else { return }
+                        self.remoteIcon = img
+                        self.setSelected(self.isOn)
+                    }
+                }.resume()
+            }
+        }
         icon.contentMode = .scaleAspectFit
         icon.translatesAutoresizingMaskIntoConstraints = false
         label.text = title
@@ -212,7 +251,8 @@ private final class Linia2TabItem: UIControl {
     required init?(coder: NSCoder) { return nil }
 
     func setSelected(_ on: Bool) {
-        icon.image = L2.symbol(on ? symbolSelected : symbol, 20, .medium)
+        isOn = on
+        icon.image = remoteIcon ?? L2.symbol(on ? symbolSelected : symbol, 20, .medium)
         let color = on ? L2.onAccent : L2.textPrimary
         icon.tintColor = color
         label.textColor = color

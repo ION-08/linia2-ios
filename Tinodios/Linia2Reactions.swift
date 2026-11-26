@@ -1,11 +1,14 @@
 //
 //  Linia2Reactions.swift
-//  Линия 2.0: реакции на сообщения (в Tinode их нет — делаем своим протоколом).
+//  Линия 2.0: реакции, меню долгого нажатия (как в Telegram) и ответ свайпом.
 //
 //  Реакция = обычное сообщение с текстом-эмодзи и заголовками:
 //    "reply": "<seq сообщения>", "linia2-react": "<эмодзи>".
-//  Приложение «Линия 2.0» скрывает такие сообщения из ленты и показывает «пилюлю» (❤️ 2) под пузырём.
-//  Снять свою реакцию — удалить своё сообщение-реакцию. Другие клиенты Tinode увидят реакцию как ответ-эмодзи.
+//  Снять — сообщение с "linia2-unreact": "<эмодзи>" (видно всем; удалять сообщения в личном чате права нет).
+//  Обрабатываются по порядку seq; оба вида скрыты из ленты. Другие клиенты Tinode увидят ответ-эмодзи.
+//  Эмодзи — только системные (Apple Color Emoji), никаких картинок и чужих анимаций.
+//  Всё настраивается с сервера (app-config.json): features.reactions / reply / swipeReply / forward / edit /
+//  delete / pins, reactions.primary / more / fullList, menus.message, limits.editWindowMinutes.
 //
 
 import UIKit
@@ -14,8 +17,16 @@ import TinodiosDB
 
 extension MessageViewController {
     static let kL2ReactHeader = "linia2-react"
-    static let kL2QuickReactions = ["❤️", "👍", "😂", "😮", "😢", "🙏"]
+    static let kL2UnreactHeader = "linia2-unreact"
+    static let kL2PrimaryReactions = ["👍", "🤝", "🔥", "✅", "❤️", "👏", "😂", "🙏"]
+    static let kL2MoreReactions = ["👎", "❌", "💯", "🤔", "👀", "💰", "🚀", "😮", "😢", "🎉", "⏳", "📌"]
+    static let kL2DefaultMessageMenu = ["reply", "copy", "forward", "edit", "pin", "delete", "deleteAll", "report"]
     private static let kL2ChipTag = 0x4C52
+
+    /// Первый ряд реакций (reactions.primary; старое reactions.emoji — тоже первый ряд).
+    static var l2PrimaryReactions: [String] { Linia2Config.shared.reactionList("primary") ?? Linia2Config.shared.reactionEmoji ?? kL2PrimaryReactions }
+    /// Второй ряд по «+» (reactions.more).
+    static var l2MoreReactions: [String] { Linia2Config.shared.reactionList("more") ?? kL2MoreReactions }
 
     /// Убирает сообщения-реакции из ленты и пересчитывает таблицу реакций.
     func linia2ExtractReactions(_ all: [StoredMessage]) -> [StoredMessage] {
@@ -25,6 +36,15 @@ extension MessageViewController {
         var visible: [StoredMessage] = []
         visible.reserveCapacity(all.count)
         for m in all {
+            if let head = m.head, case .string(let emoji)? = head[Self.kL2UnreactHeader],
+               case .string(let target)? = head["reply"], let seq = Int(target) {
+                let from = m.from ?? ""
+                map[seq]?[emoji]?.removeAll { $0 == from }
+                if map[seq]?[emoji]?.isEmpty ?? false { map[seq]?[emoji] = nil }
+                if map[seq]?.isEmpty ?? false { map[seq] = nil }
+                if Cache.tinode.isMe(uid: from) { mine[seq]?[emoji] = nil }
+                continue
+            }
             if let head = m.head, case .string(let emoji)? = head[Self.kL2ReactHeader],
                case .string(let target)? = head["reply"], let seq = Int(target) {
                 if m.isDeleted || emoji.isEmpty { continue }
@@ -39,7 +59,7 @@ extension MessageViewController {
             }
             visible.append(m)
         }
-        let changed = map != linia2Reactions
+        let changed = map != linia2Reactions || mine.mapValues { Set($0.keys) } != linia2MyReactions.mapValues { Set($0.keys) }
         linia2Reactions = map
         linia2MyReactions = mine
         if changed {
@@ -53,59 +73,57 @@ extension MessageViewController {
 
     /// Дополнительный отступ под сообщением с реакциями.
     func linia2ReactionSpacing(for seq: Int) -> CGFloat {
-        (linia2Reactions[seq]?.isEmpty ?? true) ? 0 : 24
+        (linia2Reactions[seq]?.isEmpty ?? true) || !Linia2Config.shared.feature("reactions") ? 0 : 30
     }
 
-    /// Рисует «пилюлю» с реакциями у нижнего края пузыря.
+    /// Пилюли «эмодзи + счётчик» под пузырём; своя — мятная; нажатие ставит/снимает.
     func linia2RenderReactions(cell: MessageCell, message: Message) {
         cell.contentView.viewWithTag(Self.kL2ChipTag)?.removeFromSuperview()
-        guard !message.isDeleted, let r = linia2Reactions[message.seqId], !r.isEmpty else { return }
+        guard Linia2Config.shared.feature("reactions"), !message.isDeleted,
+              let r = linia2Reactions[message.seqId], !r.isEmpty else { return }
         cell.clipsToBounds = false
         cell.contentView.clipsToBounds = false
 
         let mineSet = Set(linia2MyReactions[message.seqId]?.keys.map { $0 } ?? [])
-        let parts = r.sorted { $0.value.count != $1.value.count ? $0.value.count > $1.value.count : $0.key < $1.key }
-            .prefix(4)
-            .map { $0.value.count > 1 ? "\($0.key) \($0.value.count)" : $0.key }
-        let label = UILabel()
-        label.text = parts.joined(separator: "  ")
-        label.font = L2.font(14, .semibold)
-        label.textColor = L2.textPrimary
-        label.sizeToFit()
-
-        let chip = UIControl()
-        chip.tag = Self.kL2ChipTag
-        chip.backgroundColor = L2.surface2
-        chip.layer.borderWidth = 2
-        chip.layer.borderColor = (mineSet.isEmpty ? L2.background : L2.accent).cgColor
-        let w = label.bounds.width + 20, h: CGFloat = 26
-        chip.layer.cornerRadius = h / 2
+        let sorted = r.sorted { $0.value.count != $1.value.count ? $0.value.count > $1.value.count : $0.key < $1.key }
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 6
+        row.tag = Self.kL2ChipTag
+        row.accessibilityIdentifier = "l2.reactions.\(message.seqId)"
+        for (emoji, users) in sorted.prefix(6) {
+            let my = mineSet.contains(emoji)
+            let b = UIButton(type: .custom)
+            b.setTitle(users.count > 1 ? "\(emoji) \(users.count)" : emoji, for: .normal)
+            b.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+            b.setTitleColor(my ? L2.onAccent : L2.textPrimary, for: .normal)
+            b.backgroundColor = my ? L2.hex(Linia2Config.shared.color("accent") ?? 0x7EE0C3) : L2.surface2
+            b.layer.cornerRadius = 13
+            b.contentEdgeInsets = UIEdgeInsets(top: 3, left: 9, bottom: 3, right: 9)
+            b.isAccessibilityElement = true
+            b.accessibilityLabel = "Реакция \(emoji) \(users.count)" + (my ? ", моя" : "")
+            b.accessibilityIdentifier = "l2.reaction.\(emoji)"
+            let seq = message.seqId
+            b.addAction(UIAction { [weak self] _ in self?.linia2ToggleReaction(emoji, on: seq) }, for: .touchUpInside)
+            row.addArrangedSubview(b)
+        }
+        row.isAccessibilityElement = false
+        row.accessibilityLabel = "Реакции: " + sorted.map { "\($0.key) \($0.value.count)" }.joined(separator: ", ")
+        let size = row.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
         let c = cell.containerView.frame
-        let x = isFromCurrentSender(message: message) ? max(4, c.maxX - w - 8) : c.minX + 8
-        chip.frame = CGRect(x: x, y: c.maxY - 6, width: w, height: h)
-        label.frame = CGRect(x: 10, y: (h - label.bounds.height) / 2, width: label.bounds.width, height: label.bounds.height)
-        label.isUserInteractionEnabled = false
-        chip.addSubview(label)
-        chip.isAccessibilityElement = true
-        chip.accessibilityLabel = "Реакции: " + parts.joined(separator: ", ")
-        chip.tag = Self.kL2ChipTag
-        chip.addTarget(self, action: #selector(linia2ChipTapped(_:)), for: .touchUpInside)
-        chip.accessibilityValue = String(message.seqId)
-        cell.contentView.addSubview(chip)
+        let x = isFromCurrentSender(message: message) ? max(4, c.maxX - size.width - 4) : c.minX + 4
+        row.frame = CGRect(x: x, y: c.maxY + 2, width: size.width, height: max(26, size.height))
+        cell.contentView.addSubview(row)
     }
 
-    @objc private func linia2ChipTapped(_ chip: UIControl) {
-        guard let seq = Int(chip.accessibilityValue ?? "") else { return }
-        linia2ShowReactionPicker(for: seq, from: chip)
-    }
-
-    /// Двойное касание по сообщению — ❤️.
+    /// Двойное касание по сообщению — первая реакция первого ряда.
     func linia2InstallReactionGestures() {
         let dbl = UITapGestureRecognizer(target: self, action: #selector(linia2DoubleTap(_:)))
         dbl.numberOfTapsRequired = 2
         dbl.cancelsTouchesInView = false
         dbl.delaysTouchesBegan = false
         collectionView?.addGestureRecognizer(dbl)
+        linia2InstallSwipeReply()
     }
 
     @objc private func linia2DoubleTap(_ g: UITapGestureRecognizer) {
@@ -113,47 +131,509 @@ extension MessageViewController {
         guard let cv = collectionView, let ip = cv.indexPathForItem(at: g.location(in: cv)), ip.item < messages.count else { return }
         let msg = messages[ip.item]
         guard !msg.isDeleted, msg.seqId > 0 else { return }
-        linia2ToggleReaction("❤️", on: msg.seqId)
+        linia2ToggleReaction(Self.l2PrimaryReactions.first ?? "👍", on: msg.seqId)
     }
 
-    /// Пункт «Реакция» в меню сообщения.
-    @objc func linia2ReactMenu(sender: UIMenuController) {
-        guard let item = sender.menuItems?.first as? MessageMenuItem, item.seqId > 0 else { return }
-        linia2ShowReactionPicker(for: item.seqId, from: nil)
-    }
-
-    func linia2ShowReactionPicker(for seq: Int, from source: UIView?) {
-        guard Linia2Config.shared.feature("reactions") else { return }
-        let mine = linia2MyReactions[seq] ?? [:]
-        let sheet = UIAlertController(title: "Реакция", message: nil, preferredStyle: .actionSheet)
-        for e in Self.kL2QuickReactions {
-            let title = mine[e] != nil ? "\(e)  — убрать" : e
-            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in self?.linia2ToggleReaction(e, on: seq) })
-        }
-        sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        if let p = sheet.popoverPresentationController {
-            p.sourceView = source ?? view
-            p.sourceRect = source?.bounds ?? CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
-        }
-        present(sheet, animated: true)
-    }
+    /// Пункт «Реакция» исходного меню (оставлен для совместимости).
+    @objc func linia2ReactMenu(sender: UIMenuController) {}
 
     /// Поставить реакцию или снять свою.
     func linia2ToggleReaction(_ emoji: String, on seq: Int) {
         guard let topic = topic else { return }
         L2.haptic()
-        if let mySeq = linia2MyReactions[seq]?[emoji] {
-            topic.delMessages(ids: [mySeq], hard: true).thenCatch { err in
-                Cache.log.error("Linia2: не удалось снять реакцию: %@", err.localizedDescription)
-                return nil
+        let remove = linia2MyReactions[seq]?[emoji] != nil
+        let head: [String: JSONValue] = ["reply": .string(String(seq)), (remove ? Self.kL2UnreactHeader : Self.kL2ReactHeader): .string(emoji)]
+        topic.publish(content: Drafty(content: emoji), withExtraHeaders: head).thenCatch { err in
+            Cache.log.error("Linia2: реакция не отправлена: %@", err.localizedDescription)
+            DispatchQueue.main.async { UiUtils.showToast(message: remove ? "Не удалось снять реакцию" : "Не удалось отправить реакцию") }
+            return nil
+        }
+    }
+}
+
+// MARK: - Меню долгого нажатия как в Telegram
+
+struct Linia2MenuAction {
+    let id: String
+    let title: String
+    let symbol: String
+    let destructive: Bool
+    let action: Selector
+}
+
+final class Linia2MessageMenuViewController: UIViewController {
+    private let anchor: CGRect
+    private let primary: [String]
+    private let more: [String]
+    private let fullList: Bool
+    private let selected: Set<String>
+    private let actions: [Linia2MenuAction]
+    var onReact: ((String) -> Void)?
+    var onAction: ((Selector) -> Void)?
+
+    private let column = UIStackView()
+    private let reactBox = UIView()
+    private let moreRow = UIStackView()
+    private var reactButtons: [UIButton] = []
+
+    init(anchor: CGRect, primary: [String], more: [String], fullList: Bool, selected: Set<String>, actions: [Linia2MenuAction]) {
+        self.anchor = anchor
+        self.primary = primary
+        self.more = more
+        self.fullList = fullList
+        self.selected = selected
+        self.actions = actions
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .overFullScreen
+        modalTransitionStyle = .crossDissolve
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    private func emojiButton(_ e: String) -> UIButton {
+        let b = UIButton(type: .custom)
+        b.setTitle(e, for: .normal)
+        b.titleLabel?.font = .systemFont(ofSize: 36)   // системные эмодзи (Apple Color Emoji)
+        b.layer.cornerRadius = 22
+        if selected.contains(e) { b.backgroundColor = L2.accent.withAlphaComponent(0.35) }
+        b.accessibilityIdentifier = "l2.react." + e
+        b.accessibilityLabel = e + (selected.contains(e) ? ", снять реакцию" : "")
+        b.widthAnchor.constraint(equalToConstant: 46).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        b.addAction(UIAction { [weak self, weak b] _ in
+            guard let self = self, let b = b else { return }
+            self.pick(e, from: b)
+        }, for: .touchUpInside)
+        reactButtons.append(b)
+        return b
+    }
+
+    private func scrollRow(_ items: [UIView], id: String) -> UIScrollView {
+        let row = UIStackView(arrangedSubviews: items)
+        row.axis = .horizontal
+        row.spacing = 0
+        row.translatesAutoresizingMaskIntoConstraints = false
+        let sc = UIScrollView()
+        sc.showsHorizontalScrollIndicator = false
+        sc.accessibilityIdentifier = id
+        sc.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: sc.contentLayoutGuide.leadingAnchor, constant: 6),
+            row.trailingAnchor.constraint(equalTo: sc.contentLayoutGuide.trailingAnchor, constant: -6),
+            row.topAnchor.constraint(equalTo: sc.contentLayoutGuide.topAnchor),
+            row.bottomAnchor.constraint(equalTo: sc.contentLayoutGuide.bottomAnchor),
+            row.heightAnchor.constraint(equalTo: sc.frameLayoutGuide.heightAnchor),
+            sc.heightAnchor.constraint(equalToConstant: 52)])
+        return sc
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.accessibilityIdentifier = "l2.menu"
+        // Размытие фона, как в Telegram.
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        blur.frame = view.bounds
+        blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(blur)
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(close(_:)))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
+
+        column.axis = .vertical
+        column.spacing = 10
+        column.alignment = .fill
+        column.translatesAutoresizingMaskIntoConstraints = false
+
+        // Тёмная «пилюля» с эмодзи: первый ряд + «+».
+        if !primary.isEmpty {
+            reactBox.backgroundColor = L2.hex(0x1B2133, 0.96)
+            reactBox.layer.cornerRadius = 28
+            reactBox.accessibilityIdentifier = "l2.menu.reactions"
+            var items: [UIView] = primary.map { emojiButton($0) }
+            if !more.isEmpty || fullList {
+                let plus = UIButton(type: .system)
+                plus.setImage(L2.symbol("plus", 20, .bold), for: .normal)
+                plus.tintColor = L2.textPrimary
+                plus.backgroundColor = L2.surface2
+                plus.layer.cornerRadius = 19
+                plus.accessibilityIdentifier = "l2.react.more"
+                plus.accessibilityLabel = "Ещё реакции"
+                plus.widthAnchor.constraint(equalToConstant: 38).isActive = true
+                plus.heightAnchor.constraint(equalToConstant: 38).isActive = true
+                plus.addAction(UIAction { [weak self] _ in self?.showMore() }, for: .touchUpInside)
+                let wrap = UIView()
+                wrap.translatesAutoresizingMaskIntoConstraints = false
+                plus.translatesAutoresizingMaskIntoConstraints = false
+                wrap.addSubview(plus)
+                NSLayoutConstraint.activate([wrap.widthAnchor.constraint(equalToConstant: 48),
+                                             plus.centerXAnchor.constraint(equalTo: wrap.centerXAnchor),
+                                             plus.centerYAnchor.constraint(equalTo: wrap.centerYAnchor)])
+                items.append(wrap)
             }
+            let inner = UIStackView(arrangedSubviews: [scrollRow(items, id: "l2.menu.row1")])
+            inner.axis = .vertical
+            inner.spacing = 2
+            inner.translatesAutoresizingMaskIntoConstraints = false
+            reactBox.addSubview(inner)
+            NSLayoutConstraint.activate([
+                inner.topAnchor.constraint(equalTo: reactBox.topAnchor, constant: 2),
+                inner.bottomAnchor.constraint(equalTo: reactBox.bottomAnchor, constant: -2),
+                inner.leadingAnchor.constraint(equalTo: reactBox.leadingAnchor, constant: 4),
+                inner.trailingAnchor.constraint(equalTo: reactBox.trailingAnchor, constant: -4)])
+            column.addArrangedSubview(reactBox)
+        }
+
+        // Действия.
+        let list = UIStackView()
+        list.axis = .vertical
+        let listBox = UIView()
+        listBox.backgroundColor = L2.hex(0x1B2133, 0.96)
+        listBox.layer.cornerRadius = 16
+        listBox.clipsToBounds = true
+        for (i, a) in actions.enumerated() {
+            let b = UIButton(type: .system)
+            b.contentHorizontalAlignment = .leading
+            b.setTitle(a.title, for: .normal)
+            b.setImage(L2.symbol(a.symbol, 18, .medium), for: .normal)
+            let color = a.destructive ? L2.danger : L2.textPrimary
+            b.tintColor = color
+            b.setTitleColor(color, for: .normal)
+            b.titleLabel?.font = L2.font(16)
+            b.contentEdgeInsets = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+            b.titleEdgeInsets = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: -12)
+            b.heightAnchor.constraint(equalToConstant: 46).isActive = true
+            b.accessibilityIdentifier = "l2.menu." + a.id
+            b.accessibilityLabel = a.title
+            let sel = a.action
+            b.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) { self?.onAction?(sel) } }, for: .touchUpInside)
+            list.addArrangedSubview(b)
+            if i < actions.count - 1 {
+                let sep = UIView()
+                sep.backgroundColor = L2.textSecondary.withAlphaComponent(0.15)
+                sep.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+                list.addArrangedSubview(sep)
+            }
+        }
+        list.translatesAutoresizingMaskIntoConstraints = false
+        listBox.addSubview(list)
+        NSLayoutConstraint.activate([
+            list.topAnchor.constraint(equalTo: listBox.topAnchor), list.bottomAnchor.constraint(equalTo: listBox.bottomAnchor),
+            list.leadingAnchor.constraint(equalTo: listBox.leadingAnchor), list.trailingAnchor.constraint(equalTo: listBox.trailingAnchor)])
+        if !actions.isEmpty {
+            let holder = UIView()
+            holder.addSubview(listBox)
+            listBox.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                listBox.topAnchor.constraint(equalTo: holder.topAnchor), listBox.bottomAnchor.constraint(equalTo: holder.bottomAnchor),
+                listBox.leadingAnchor.constraint(equalTo: holder.leadingAnchor),
+                listBox.widthAnchor.constraint(equalToConstant: 250)])
+            column.addArrangedSubview(holder)
+        }
+        view.addSubview(column)
+
+        let width = min(view.bounds.width - 24, 470)
+        let height = (primary.isEmpty ? 0 : 66) + CGFloat(actions.count) * 46.5 + 4
+        let safe = view.safeAreaLayoutGuide.layoutFrame.isEmpty ? view.bounds.insetBy(dx: 0, dy: 50) : view.safeAreaLayoutGuide.layoutFrame
+        var y = anchor.maxY + 8
+        if y + height > safe.maxY - 8 { y = anchor.minY - height - 8 }
+        y = max(safe.minY + 8, min(y, safe.maxY - height - 8))
+        NSLayoutConstraint.activate([
+            column.widthAnchor.constraint(equalToConstant: width),
+            column.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            column.topAnchor.constraint(equalTo: view.topAnchor, constant: y)])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Эмодзи появляются с лёгким «прыжком».
+        for (i, b) in reactButtons.enumerated() {
+            b.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
+            UIView.animate(withDuration: 0.35, delay: Double(i) * 0.02, usingSpringWithDamping: 0.55, initialSpringVelocity: 0.8, options: []) {
+                b.transform = .identity
+            }
+        }
+    }
+
+    /// «+»: второй ряд; при fullList — кнопка «Все эмодзи» с поиском.
+    private func showMore() {
+        guard moreRow.superview == nil, let inner = reactBox.subviews.first as? UIStackView else {
+            if fullList { openFullList() }
             return
         }
-        let head: [String: JSONValue] = ["reply": .string(String(seq)), Self.kL2ReactHeader: .string(emoji)]
-        topic.publish(content: Drafty(content: emoji), withExtraHeaders: head).thenCatch { err in
-            Cache.log.error("Linia2: не удалось отправить реакцию: %@", err.localizedDescription)
-            DispatchQueue.main.async { UiUtils.showToast(message: "Не удалось отправить реакцию") }
-            return nil
+        var items: [UIView] = more.map { emojiButton($0) }
+        if fullList {
+            let all = UIButton(type: .system)
+            all.setImage(L2.symbol("magnifyingglass", 18, .bold), for: .normal)
+            all.tintColor = L2.textPrimary
+            all.accessibilityIdentifier = "l2.react.all"
+            all.accessibilityLabel = "Все эмодзи"
+            all.widthAnchor.constraint(equalToConstant: 48).isActive = true
+            all.addAction(UIAction { [weak self] _ in self?.openFullList() }, for: .touchUpInside)
+            items.append(all)
+        }
+        let sc = scrollRow(items, id: "l2.menu.row2")
+        sc.alpha = 0
+        inner.addArrangedSubview(sc)
+        moreRow.tag = 1
+        inner.addSubview(moreRow)   // признак, что второй ряд уже показан
+        UIView.animate(withDuration: 0.25) { sc.alpha = 1; self.view.layoutIfNeeded() }
+        for b in reactButtons.suffix(more.count) {
+            b.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.55, initialSpringVelocity: 0.8, options: []) { b.transform = .identity }
+        }
+    }
+
+    private func openFullList() {
+        let picker = Linia2EmojiPickerViewController()
+        picker.onPick = { [weak self] e in
+            self?.dismiss(animated: false) { self?.onReact?(e) }
+        }
+        present(picker, animated: true)
+    }
+
+    /// Эмодзи увеличивается, подпрыгивает и «летит» в сообщение; лёгкая вибрация.
+    private func pick(_ e: String, from b: UIButton) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let fly = UILabel()
+        fly.text = e
+        fly.font = .systemFont(ofSize: 36)
+        fly.sizeToFit()
+        fly.center = b.convert(CGPoint(x: b.bounds.midX, y: b.bounds.midY), to: view)
+        view.addSubview(fly)
+        b.alpha = 0
+        let target = CGPoint(x: anchor.midX, y: anchor.maxY)
+        UIView.animateKeyframes(withDuration: 0.55, delay: 0, options: [.calculationModeCubic]) {
+            UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.3) {
+                fly.transform = CGAffineTransform(scaleX: 1.6, y: 1.6)
+                fly.center.y -= 24
+            }
+            UIView.addKeyframe(withRelativeStartTime: 0.3, relativeDuration: 0.7) {
+                fly.center = target
+                fly.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            }
+        } completion: { [weak self] _ in
+            fly.removeFromSuperview()
+            self?.dismiss(animated: true) { self?.onReact?(e) }
+        }
+    }
+
+    @objc private func close(_ g: UITapGestureRecognizer) {
+        let p = g.location(in: view)
+        if !column.frame.contains(p) { dismiss(animated: true) }
+    }
+}
+
+// MARK: - Полный список эмодзи с поиском (системные эмодзи)
+
+final class Linia2EmojiPickerViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate, UISearchBarDelegate {
+    var onPick: ((String) -> Void)?
+    private var all: [(String, String)] = []   // эмодзи, ключевые слова
+    private var shown: [String] = []
+    private var collection: UICollectionView!
+
+    /// Русские ключевые слова для частых эмодзи (поиск по-русски); остальные — по английскому названию Unicode.
+    private static let ru: [String: String] = [
+        "👍": "класс лайк да хорошо", "👎": "нет плохо дизлайк", "❤️": "сердце любовь", "🔥": "огонь круто",
+        "😂": "смех ржу", "😮": "удивление вау", "😢": "грусть слёзы", "👏": "аплодисменты браво", "🙏": "спасибо пожалуйста",
+        "🤝": "рукопожатие договорились", "✅": "готово галочка да", "❌": "нет крестик", "💯": "сто идеально",
+        "🤔": "думаю хм", "👀": "смотрю глаза", "💰": "деньги", "🚀": "ракета быстро", "🎉": "праздник ура",
+        "⏳": "ждём время", "📌": "закрепить важно", "😀": "улыбка радость", "😍": "влюблён", "😡": "злость",
+        "🥳": "праздник", "😎": "круто очки", "🤣": "смех", "😘": "поцелуй", "👌": "окей хорошо", "💪": "сила",
+    ]
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = L2.background
+        view.accessibilityIdentifier = "l2.emoji.picker"
+        all = Self.buildList()
+        shown = all.map { $0.0 }
+        let search = UISearchBar()
+        search.placeholder = L2T("l2.emoji.search", "Поиск эмодзи")
+        search.searchBarStyle = .minimal
+        search.delegate = self
+        search.searchTextField.accessibilityIdentifier = "l2.emoji.search"
+        search.translatesAutoresizingMaskIntoConstraints = false
+        let layout = UICollectionViewFlowLayout()
+        layout.itemSize = CGSize(width: 48, height: 48)
+        layout.minimumInteritemSpacing = 2
+        layout.minimumLineSpacing = 2
+        collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collection.backgroundColor = .clear
+        collection.dataSource = self
+        collection.delegate = self
+        collection.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "e")
+        collection.translatesAutoresizingMaskIntoConstraints = false
+        collection.keyboardDismissMode = .onDrag
+        view.addSubview(search)
+        view.addSubview(collection)
+        NSLayoutConstraint.activate([
+            search.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            search.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            search.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            collection.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4),
+            collection.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            collection.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            collection.bottomAnchor.constraint(equalTo: view.bottomAnchor)])
+    }
+
+    private static func buildList() -> [(String, String)] {
+        var out: [(String, String)] = []
+        let ranges: [ClosedRange<UInt32>] = [0x1F600...0x1F64F, 0x1F44D...0x1F4FF, 0x1F300...0x1F44C, 0x1F680...0x1F6FF,
+                                             0x1F900...0x1F9FF, 0x1FA70...0x1FAFF, 0x2600...0x27BF]
+        var seen = Set<String>()
+        for r in ranges {
+            for v in r {
+                guard let sc = Unicode.Scalar(v) else { continue }
+                let p = sc.properties
+                guard p.isEmoji else { continue }
+                var s = String(Character(sc))
+                if !p.isEmojiPresentation { s += "\u{FE0F}" }   // текстовые символы — в эмодзи-виде
+                guard seen.insert(s).inserted else { continue }
+                let name = (p.name ?? "").lowercased()
+                out.append((s, name + " " + (ru[s] ?? ru[String(Character(sc))] ?? "")))
+            }
+        }
+        // Сначала наши ряды, затем остальное.
+        let first = MessageViewController.l2PrimaryReactions + MessageViewController.l2MoreReactions
+        let head = first.map { e in (e, ru[e] ?? "") }
+        return head + out.filter { !first.contains($0.0) }
+    }
+
+    func searchBar(_ searchBar: UISearchBar, textDidChange text: String) {
+        let q = text.trimmingCharacters(in: .whitespaces).lowercased()
+        shown = q.isEmpty ? all.map { $0.0 } : all.filter { $0.1.contains(q) || $0.0 == q }.map { $0.0 }
+        collection.reloadData()
+    }
+
+    func collectionView(_ cv: UICollectionView, numberOfItemsInSection section: Int) -> Int { shown.count }
+
+    func collectionView(_ cv: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
+        let cell = cv.dequeueReusableCell(withReuseIdentifier: "e", for: ip)
+        let l = (cell.contentView.viewWithTag(1) as? UILabel) ?? {
+            let l = UILabel(frame: cell.contentView.bounds)
+            l.tag = 1
+            l.textAlignment = .center
+            l.font = .systemFont(ofSize: 32)
+            l.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            cell.contentView.addSubview(l)
+            return l
+        }()
+        l.text = shown[ip.item]
+        cell.isAccessibilityElement = true
+        cell.accessibilityLabel = shown[ip.item]
+        cell.accessibilityIdentifier = "l2.emoji." + shown[ip.item]
+        return cell
+    }
+
+    func collectionView(_ cv: UICollectionView, didSelectItemAt ip: IndexPath) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let e = shown[ip.item]
+        dismiss(animated: true) { [weak self] in self?.onPick?(e) }
+    }
+}
+
+// MARK: - Сборка меню, ответ свайпом
+
+final class Linia2SwipeReplyDelegate: NSObject, UIGestureRecognizerDelegate {
+    static let shared = Linia2SwipeReplyDelegate()
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard Linia2Config.shared.feature("reply"), Linia2Config.shared.feature("swipeReply"),
+              let pan = g as? UIPanGestureRecognizer, let v = pan.view else { return false }
+        let vel = pan.velocity(in: v)
+        // Только вправо, почти горизонтально и не от самого края (там «свайп назад»).
+        return vel.x > 0 && abs(vel.x) > abs(vel.y) * 1.5 && pan.location(in: v.window).x > 40
+    }
+}
+
+extension MessageViewController {
+    private static var l2SwipeIndex: IndexPath?
+    private static let kL2SwipeName = "l2.swipeReply"
+
+    /// Выполнить действие исходного меню Tinode для сообщения seq (оно читает seq из UIMenuController).
+    func linia2Perform(_ action: Selector, seq: Int) {
+        UIMenuController.shared.menuItems = [MessageMenuItem(title: "", action: action, seqId: seq)]
+        perform(action, with: UIMenuController.shared)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { UIMenuController.shared.menuItems = nil }
+    }
+
+    /// Меню по долгому нажатию: реакции сверху, затем действия по порядку из menus.message.
+    func linia2PresentMessageMenu(items: [MessageMenuItem], cell: MessageCell) {
+        sendMessageBar.inputField.nextResponderOverride = nil
+        let seq = cell.seqId
+        let cfg = Linia2Config.shared
+        // id → (селектор, название, иконка, «опасное», флаг функции)
+        let builtin: [String: [(Selector, String, String, Bool, String)]] = [
+            "reply": [(#selector(showReplyPreview(sender:)), L2T("l2.menu.reply", "Ответить"), "arrowshape.turn.up.left", false, "reply")],
+            "copy": [(#selector(copyMessageContent(sender:)), L2T("l2.menu.copy", "Копировать"), "doc.on.doc", false, "")],
+            "forward": [(#selector(showForwardSelector(sender:)), L2T("l2.menu.forward", "Переслать"), "arrowshape.turn.up.right", false, "forward")],
+            "edit": [(#selector(showEditPreview(sender:)), L2T("l2.menu.edit", "Изменить"), "pencil", false, "edit")],
+            "pin": [(#selector(pinMessage(sender:)), L2T("l2.menu.pin", "Закрепить"), "pin", false, "pins"),
+                    (#selector(unpinMessage(sender:)), L2T("l2.menu.unpin", "Открепить"), "pin.slash", false, "pins")],
+            "delete": [(#selector(deleteMessageSoft(sender:)), L2T("l2.menu.delete", "Удалить у меня"), "trash", true, "delete")],
+            "deleteAll": [(#selector(deleteMessageHard(sender:)), L2T("l2.menu.deleteAll", "Удалить у всех"), "trash.fill", true, "delete")],
+            "report": [(#selector(linia2ReportMessage(sender:)), L2T("l2.menu.report", "Пожаловаться"), "exclamationmark.bubble", true, "")],
+        ]
+        let present = Set(items.map { $0.action })
+        // Время на изменение своего сообщения.
+        var editAllowed = true
+        if let win = cfg.editWindowSeconds, let ts = cell.timeStamp, Date().timeIntervalSince(ts) > win { editAllowed = false }
+        let order = cfg.menu("message") ?? Self.kL2DefaultMessageMenu
+        var actions: [Linia2MenuAction] = []
+        var used = Set<String>()
+        for id in order where !used.contains(id) {
+            used.insert(id)
+            for (sel, title, sym, destr, flag) in builtin[id] ?? [] where present.contains(sel) {
+                if !flag.isEmpty && !cfg.feature(flag) { continue }
+                if id == "edit" && !editAllowed { continue }
+                // В «Избранном» (self-чат) один пункт «Удалить».
+                let t = (id == "deleteAll" && !present.contains(#selector(deleteMessageSoft(sender:)))) ? L2T("l2.menu.deleteSelf", "Удалить") : title
+                actions.append(Linia2MenuAction(id: sel == #selector(unpinMessage(sender:)) ? "unpin" : id, title: t, symbol: sym, destructive: destr, action: sel))
+            }
+        }
+        let canReact = cfg.feature("reactions") && seq > 0 && !cell.isDeleted && (messageSeqIdIndex[seq].map { messages[$0].isSynced } ?? false)
+        let frame = cell.containerView.convert(cell.containerView.bounds, to: nil)
+        let menu = Linia2MessageMenuViewController(anchor: frame,
+                                                   primary: canReact ? Self.l2PrimaryReactions : [],
+                                                   more: canReact ? Self.l2MoreReactions : [],
+                                                   fullList: canReact && cfg.reactionsFullList,
+                                                   selected: Set(linia2MyReactions[seq]?.keys.map { $0 } ?? []),
+                                                   actions: actions)
+        menu.onReact = { [weak self] e in self?.linia2ToggleReaction(e, on: seq) }
+        menu.onAction = { [weak self] sel in self?.linia2Perform(sel, seq: seq) }
+        L2.haptic()
+        present(menu, animated: true)
+    }
+
+    /// Свайп вправо по сообщению — «Ответить».
+    func linia2InstallSwipeReply() {
+        guard let cv = collectionView, !(cv.gestureRecognizers ?? []).contains(where: { $0.name == Self.kL2SwipeName }) else { return }
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(linia2SwipeReply(_:)))
+        pan.name = Self.kL2SwipeName
+        pan.delegate = Linia2SwipeReplyDelegate.shared
+        cv.addGestureRecognizer(pan)
+    }
+
+    @objc private func linia2SwipeReply(_ g: UIPanGestureRecognizer) {
+        guard let cv = collectionView else { return }
+        switch g.state {
+        case .began:
+            Self.l2SwipeIndex = cv.indexPathForItem(at: g.location(in: cv))
+        case .changed:
+            guard let ip = Self.l2SwipeIndex, let cell = cv.cellForItem(at: ip) else { return }
+            let dx = min(max(0, g.translation(in: cv).x), 90)
+            cell.contentView.transform = CGAffineTransform(translationX: dx * 0.8, y: 0)
+        default:
+            guard let ip = Self.l2SwipeIndex else { return }
+            Self.l2SwipeIndex = nil
+            let cell = cv.cellForItem(at: ip)
+            let dx = g.translation(in: cv).x
+            UIView.animate(withDuration: 0.2) { cell?.contentView.transform = .identity }
+            guard g.state == .ended, dx > 60, ip.item < messages.count else { return }
+            let msg = messages[ip.item]
+            guard !msg.isDeleted, msg.seqId > 0, msg.isSynced else { return }
+            L2.haptic()
+            linia2Perform(#selector(showReplyPreview(sender:)), seq: msg.seqId)
         }
     }
 }

@@ -338,6 +338,11 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
             DispatchQueue.main.async { UiUtils.showToast(message: "Сообщение не отправлено: недопустимое слово «\(word)».") }
             return
         }
+        // LINIA2: максимальная длина сообщения (limits.maxMessageLength).
+        if let maxLen = Linia2Config.shared.maxMessageLength, content.string.count > maxLen {
+            DispatchQueue.main.async { UiUtils.showToast(message: String(format: L2T("l2.limit.text", "Сообщение длиннее %d символов — сократите его."), maxLen)) }
+            return
+        }
         defer {
             loadMessagesFromCache()
         }
@@ -411,6 +416,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
     }
 
     func sendTypingNotification() {
+        guard Linia2Config.shared.feature("typing") else { return }   // LINIA2: флаг «печатает…»
         topic?.noteKeyPress()
     }
 
@@ -613,7 +619,8 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         let filename = def.filename ?? ""
 
         // Check if the attachment is too big even for out-of-band uploads.
-        if def.data.count > Cache.tinode.getServerLimit(for: Tinode.kMaxFileUploadSize, withDefault: MessageViewController.kMaxAttachmentSize) {
+        if def.data.count > min(Cache.tinode.getServerLimit(for: Tinode.kMaxFileUploadSize, withDefault: MessageViewController.kMaxAttachmentSize),
+                                Linia2Config.shared.maxFileBytes ?? Int64.max) {
             DispatchQueue.main.async {
                 UiUtils.showToast(message: NSLocalizedString("Attachment exceeds maximum size", comment: "Error message: attachment too large"))
             }

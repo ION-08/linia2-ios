@@ -14,6 +14,8 @@ protocol PinnedMessagesDelegate: AnyObject {
     func didTapCancel(seq: Int)
     /// Tap on the message.
     func didTapMessage(seq: Int)
+    /// LINIA2: список всех закреплённых («Открепить все»).
+    func didTapPinnedList(pins: [Int])
 }
 
 class PinnedMessagesView: UICollectionReusableView {
@@ -50,6 +52,43 @@ class PinnedMessagesView: UICollectionReusableView {
 
         dotSelectorView.dotCount = 3
         pagerView.delegate = self
+        linia2Setup(nibView)
+    }
+
+    // MARK: LINIA2: плашка как в Telegram — «📌 Закреплённое K из N», нажатие переключает, список всех.
+    private let l2Counter = UILabel()
+
+    private func linia2Setup(_ nibView: UIView) {
+        backgroundColor = L2.surface
+        nibView.backgroundColor = L2.surface
+        for c in nibView.constraints where (c.firstItem as? UIView) === pagerView && c.firstAttribute == .top { c.constant = 18 }
+        l2Counter.font = L2.font(12, .semibold)
+        l2Counter.textColor = L2.accent
+        l2Counter.translatesAutoresizingMaskIntoConstraints = false
+        l2Counter.isUserInteractionEnabled = true
+        l2Counter.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(linia2ShowList)))
+        nibView.addSubview(l2Counter)
+        NSLayoutConstraint.activate([
+            l2Counter.leadingAnchor.constraint(equalTo: pagerView.leadingAnchor, constant: 6),
+            l2Counter.topAnchor.constraint(equalTo: nibView.topAnchor, constant: 3)])
+        addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(linia2ShowList)))
+        accessibilityIdentifier = "l2.pinned"
+        if let cancel = nibView.subviews.first(where: { ($0 as? UIButton)?.actions(forTarget: self, forControlEvent: .touchUpInside)?.isEmpty == false }) as? UIButton {
+            cancel.accessibilityIdentifier = "l2.pinned.unpin"
+            cancel.accessibilityLabel = "Открепить"
+            cancel.tintColor = L2.textSecondary
+        }
+    }
+
+    private func linia2UpdateCounter() {
+        let n = pins.count
+        l2Counter.text = n > 1 ? String(format: L2T("l2.pin.counter", "📌 Закреплённое %d из %d"), selectedPage + 1, n) : L2T("l2.pin.single", "📌 Закреплённое")
+        l2Counter.accessibilityIdentifier = "l2.pinned.counter"
+    }
+
+    @objc private func linia2ShowList(_ g: UIGestureRecognizer) {
+        if let lp = g as? UILongPressGestureRecognizer, lp.state != .began { return }
+        delegate?.didTapPinnedList(pins: pins)
     }
 
     @IBAction func unpinMessageClick(_ sender: Any) {
@@ -69,18 +108,21 @@ class PinnedMessagesView: UICollectionReusableView {
     public var pins: [Int] = [] {
         didSet {
             dotSelectorView.dotCount = pins.count
+            if selectedPage >= pins.count { selectedPage = 0 }
+            linia2UpdateCounter()
             var pages: [UIView] = []
             if !pins.isEmpty {
                 guard let topicName = topicName, let topic = Cache.tinode.getTopic(topicName: topicName) else { return }
                 let font = UITextView().font ?? UIFont.systemFont(ofSize: 15)
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: UIColor.tertiaryLabel,
+                    .foregroundColor: L2.textSecondary,
                     .font: UIFont(descriptor: font.fontDescriptor.withSymbolicTraits(.traitItalic)!, size: font.pointSize)
                 ]
                 pins.forEach { seq in
                     let tv = UITextView()
                     tv.delegate = self
-                    tv.backgroundColor = .systemBackground
+                    tv.backgroundColor = .clear
+                    tv.textColor = L2.textPrimary
                     tv.autocorrectionType = .no
                     tv.spellCheckingType = .no
                     pages.append(tv)
@@ -115,6 +157,7 @@ class PinnedMessagesView: UICollectionReusableView {
                 selectedPage = newValue
                 dotSelectorView.selected = selectedPage
             }
+            linia2UpdateCounter()
         }
     }
 
@@ -144,18 +187,25 @@ extension PinnedMessagesView: PagerViewDelegate {
     func didSelectPage(index: Int) {
         dotSelectorView.selected = index
         self.selectedPage = index
+        linia2UpdateCounter()
     }
 }
 
 extension PinnedMessagesView: UITextViewDelegate {
     func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
         UIView.animate(withDuration: 0.2, delay: 0, options: .curveLinear, animations: {
-            textView.backgroundColor = .secondarySystemBackground
+            textView.backgroundColor = L2.surface2
         }, completion: { _ in
-            textView.backgroundColor = .systemBackground
+            textView.backgroundColor = .clear
         })
-
+        guard selectedPage < pins.count else { return false }
         delegate?.didTapMessage(seq: pins[selectedPage])
+        // Как в Telegram: следующее нажатие — к следующему закреплённому.
+        if pins.count > 1 {
+            let next = (selectedPage + 1) % pins.count
+            pagerView.moveToPage(at: next)
+            didSelectPage(index: next)
+        }
         return false
     }
 }

@@ -48,7 +48,7 @@ class MessageViewController: UIViewController {
         static let kAvatarSize: CGFloat = 30
 
         static let kProgressViewHeight: CGFloat = 30
-        static let kPinnedMessagesViewHeight: CGFloat = 50
+        static let kPinnedMessagesViewHeight: CGFloat = 64   // LINIA2: + строка «📌 Закреплённое K из N»
 
         // Size of delivery marker (checkmarks etc)
         static let kDeliveryMarkerSize: CGFloat = 16
@@ -162,7 +162,10 @@ class MessageViewController: UIViewController {
 
     /// Call button in NavBar
     lazy var navBarCallBtn: UIBarButtonItem = {
-        return UIBarButtonItem(image: UIImage(systemName: "phone", withConfiguration:UIImage.SymbolConfiguration(pointSize: 16, weight: .light)), style: .plain, target: self, action: #selector(navBarCallTapped(sender:)))
+        let b = UIBarButtonItem(image: UIImage(systemName: "phone", withConfiguration:UIImage.SymbolConfiguration(pointSize: 16, weight: .light)), style: .plain, target: self, action: #selector(navBarCallTapped(sender:)))
+        b.accessibilityIdentifier = "l2.chat.call"   // LINIA2_UITEST_IDS
+        b.accessibilityLabel = "Позвонить"
+        return b
     }()
 
     /// Pointer to the view holding messages.
@@ -814,6 +817,8 @@ extension MessageViewController: UICollectionViewDataSource {
 
     func deliveryMarker(for message: Message) -> (UIImage, UIColor)? {
         guard isFromCurrentSender(message: message), let topic = topic else { return nil }
+        // LINIA2: флаг отметок «доставлено/прочитано» (features.readReceipts).
+        guard Linia2Config.shared.feature("readReceipts") else { return nil }
         return UiUtils.deliveryMarkerIcon(for: message, in: topic)
     }
 

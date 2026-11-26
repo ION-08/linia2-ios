@@ -195,6 +195,10 @@ class UiUtils {
         // Configure FCM.
         FirebaseApp.configure()
         Messaging.messaging().delegate = appDelegate
+        // LINIA2: подписка на тему изменений удалённых настроек (админка шлёт тихий push после «Применить»).
+        Messaging.messaging().subscribe(toTopic: "linia2-config") { err in
+            if let err = err { Cache.log.error("Linia2: подписка на linia2-config: %@", err.localizedDescription) }
+        }
         UNUserNotificationCenter.current().delegate = appDelegate
 
         let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]

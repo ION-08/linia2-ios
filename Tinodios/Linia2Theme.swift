@@ -33,31 +33,35 @@ enum L2 {
 
     /// Цвет из удалённых настроек (тёмная тема) или встроенный.
     private static func rc(_ key: String, _ builtin: UInt32) -> UInt32 { Linia2Config.shared.color(key) ?? builtin }
+    /// Цвет светлой темы из удалённых настроек (colorsLight) или встроенный.
+    private static func rcl(_ key: String, _ builtin: UInt32) -> UInt32 { Linia2Config.shared.colorLight(key) ?? builtin }
+    /// Радиус из удалённых настроек (radii) или встроенный.
+    static func r(_ key: String, _ builtin: CGFloat) -> CGFloat { Linia2Config.shared.radius(key, builtin) }
     /// Пользователь оставил цвет по умолчанию — тогда действует цвет с сервера.
     private static var usesServerAccent: Bool { Linia2Appearance.accentIndex == 0 }
 
-    static var background: UIColor { dyn(rc("background", 0x0A0E1B), 0xF4F3FA) }      // фон экранов
-    static var surface: UIColor { dyn(rc("surface", 0x222839), 0xFFFFFF) }         // поиск, фильтры, поле ввода, карточки
-    static var surface2: UIColor { dyn(rc("surface2", 0x292F42), 0xE9E7F3) }        // входящие пузыри, кнопки на поверхностях
-    static var bubbleIn: UIColor { dyn(rc("bubbleIn", 0x292F42), 0xE9E7F3) }
+    static var background: UIColor { dyn(rc("background", 0x0A0E1B), rcl("background", 0xF4F3FA)) }      // фон экранов
+    static var surface: UIColor { dyn(rc("surface", 0x222839), rcl("surface", 0xFFFFFF)) }         // поиск, фильтры, поле ввода, карточки
+    static var surface2: UIColor { dyn(rc("surface2", 0x292F42), rcl("surface2", 0xE9E7F3)) }        // входящие пузыри, кнопки на поверхностях
+    static var bubbleIn: UIColor { dyn(rc("bubbleIn", 0x292F42), rcl("bubbleIn", 0xE9E7F3)) }
     static var elevated: UIColor { dyn(0x161D2E, 0xFFFFFF) }        // круглые кнопки в шапке
     static var tabBar: UIColor { dyn(0x121826, 0xFFFFFF) }          // плавающее меню
     static var separator: UIColor { dyn(0xFFFFFF, 0x12111C, 0.08, 0.08) }
     static var accent: UIColor {   // активные элементы
         let a = accentSet
-        return usesServerAccent ? dyn(rc("accent", a.accentDark), rc("accentLight", a.accentLight)) : dyn(a.accentDark, a.accentLight)
+        return usesServerAccent ? dyn(rc("accent", a.accentDark), Linia2Config.shared.colorLight("accent") ?? rc("accentLight", a.accentLight)) : dyn(a.accentDark, a.accentLight)
     }
     static var accentStrong: UIColor {   // свои пузыри
         usesServerAccent ? hex(Linia2Config.shared.color("bubbleOut") ?? rc("accentStrong", accentSet.strong)) : hex(accentSet.strong)
     }
     static var onAccent: UIColor { let a = accentSet; return dyn(usesServerAccent ? rc("onAccent", a.onAccent) : a.onAccent, 0xFFFFFF) }
-    static var textPrimary: UIColor { dyn(0xFFFFFF, 0x12111C) }
-    static var textSecondary: UIColor { dyn(0x8A92A3, 0x6B6F80) }
+    static var textPrimary: UIColor { dyn(rc("textPrimary", 0xFFFFFF), rcl("textPrimary", 0x12111C)) }
+    static var textSecondary: UIColor { dyn(rc("textSecondary", 0x8A92A3), rcl("textSecondary", 0x6B6F80)) }
     static let online = hex(0x2CE2A6)
     static let callOutgoing = hex(0x2FD1A2)
-    static let danger = hex(0xFF6B7A)
+    static var danger: UIColor { hex(Linia2Config.shared.color("danger") ?? 0xFF6B7A) }
 
-    static let radius: CGFloat = 16
+    static var radius: CGFloat { r("card", 16) }
     static let fieldHeight: CGFloat = 52
 
     static func font(_ size: CGFloat, _ weight: UIFont.Weight = .regular) -> UIFont {
@@ -278,7 +282,7 @@ final class L2Button: UIButton {
         super.init(frame: .zero)
         setTitle(title, for: .normal)
         titleLabel?.font = L2.font(17, .semibold)
-        layer.cornerRadius = 26
+        layer.cornerRadius = L2.r("button", 26)
         heightAnchor.constraint(equalToConstant: 52).isActive = true
         if let symbol = symbol {
             setImage(L2.symbol(symbol, 17, .semibold), for: .normal)

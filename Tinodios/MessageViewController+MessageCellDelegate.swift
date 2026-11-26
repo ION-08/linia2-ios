@@ -167,13 +167,9 @@ extension MessageViewController: MessageCellDelegate {
             }
         }
 
-        UIMenuController.shared.menuItems = menuItems
-
-        // Show the menu.
-        UIMenuController.shared.showMenu(from: cell.containerView, rect: cell.content.frame)
-
-        // Capture menu dismissal
-        NotificationCenter.default.addObserver(self, selector: #selector(willHidePopupMenu), name: UIMenuController.willHideMenuNotification, object: nil)
+        // LINIA2_TG_MENU: меню как в Telegram (Linia2Reactions.swift).
+        cell.resignFirstResponder()
+        linia2PresentMessageMenu(items: menuItems, cell: cell)
     }
 
     @objc func willHidePopupMenu() {
@@ -196,7 +192,10 @@ extension MessageViewController: MessageCellDelegate {
             senderName = pub.fn
         }
         senderName = senderName ?? String(format: NSLocalizedString("Unknown %@", comment: ""), msg.from ?? "none")
-        UIPasteboard.general.string = "[\(senderName!)]: \(msg.content?.string ?? ""); \(RelativeDateFormatter.shared.shortDate(from: msg.ts))"
+        // LINIA2: как в Telegram — копируется только текст сообщения.
+        _ = senderName
+        UIPasteboard.general.string = msg.content?.string ?? ""
+        UiUtils.showToast(message: "Скопировано", level: .info)
     }
 
     func showInPreviewBar(content: Drafty?, forwarded: Bool, onAction action: PendingPreviewAction = .none) {
@@ -471,5 +470,24 @@ extension MessageViewController: PinnedMessagesDelegate {
     /// Tap on the message.
     func didTapMessage(seq: Int) {
         scrollToAndAnimate(seqId: seq)
+    }
+
+    /// LINIA2: список всех закреплённых + «Открепить все».
+    func didTapPinnedList(pins: [Int]) {
+        guard let topic = topic, !pins.isEmpty else { return }
+        let sheet = UIAlertController(title: String(format: L2T("l2.pin.listTitle", "Закреплённые (%d)"), pins.count), message: nil, preferredStyle: .actionSheet)
+        for seq in pins {
+            var text = topic.getMessage(byEffectiveSeq: seq)?.content?.string ?? L2T("l2.pin.missing", "Сообщение")
+            if text.count > 60 { text = String(text.prefix(57)) + "…" }
+            sheet.addAction(UIAlertAction(title: "📌 " + text, style: .default) { [weak self] _ in self?.scrollToAndAnimate(seqId: seq) })
+        }
+        if topic.isAdmin || topic.isOwner || topic.isP2PType {
+            sheet.addAction(UIAlertAction(title: L2T("l2.pin.unpinAll", "Открепить все"), style: .destructive) { [weak self] _ in
+                for seq in pins { self?.interactor?.pinMessage(seqId: seq, pin: false) }
+            })
+        }
+        sheet.addAction(UIAlertAction(title: L2T("l2.cancel", "Отмена"), style: .cancel))
+        if let p = sheet.popoverPresentationController { p.sourceView = view; p.sourceRect = CGRect(x: view.bounds.midX, y: 80, width: 1, height: 1) }
+        present(sheet, animated: true)
     }
 }

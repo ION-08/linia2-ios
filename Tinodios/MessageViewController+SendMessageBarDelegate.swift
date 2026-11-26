@@ -124,7 +124,8 @@ extension MessageViewController: UIDocumentPickerDelegate {
                 // Remove this code in 2026.
                 mimeType = "application/octet-stream"
             }
-            let maxAttachmentSize = Cache.tinode.getServerLimit(for: Tinode.kMaxFileUploadSize, withDefault: MessageViewController.kMaxAttachmentSize)
+            let maxAttachmentSize = min(Cache.tinode.getServerLimit(for: Tinode.kMaxFileUploadSize, withDefault: MessageViewController.kMaxAttachmentSize),
+                                        Linia2Config.shared.maxFileBytes ?? Int64.max)   // LINIA2: limits.maxFileMB
             guard bits.count <= maxAttachmentSize else {
                 UiUtils.showToast(message: String(format: NSLocalizedString("The file size exceeds the limit %@", comment: "Error message"), UiUtils.bytesToHumanSize(maxAttachmentSize)))
                 return

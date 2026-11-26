@@ -223,6 +223,14 @@ class Linia2FormViewController: UIViewController {
         let pulse = L2PulseView()
         pulse.translatesAutoresizingMaskIntoConstraints = false
         tile.addSubview(pulse)
+        // LINIA2: логотип с сервера (images.logoUrl) поверх встроенного; без сети — встроенный.
+        if let u = Linia2Config.shared.image("logoUrl") {
+            let iv = UIImageView()
+            iv.contentMode = .scaleAspectFit
+            iv.frame = CGRect(x: size * 0.12, y: size * 0.12, width: size * 0.76, height: size * 0.76)
+            tile.addSubview(iv)
+            L2RemoteImage.load(u, into: iv) { _ in pulse.isHidden = true }
+        }
         tile.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([tile.widthAnchor.constraint(equalToConstant: size), tile.heightAnchor.constraint(equalToConstant: size),
                                      pulse.centerXAnchor.constraint(equalTo: tile.centerXAnchor), pulse.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
@@ -251,21 +259,36 @@ final class Linia2WelcomeViewController: Linia2FormViewController {
         let wmWrap = UIStackView(arrangedSubviews: [wordmark])
         wmWrap.axis = .vertical
         wmWrap.alignment = .center
-        let titles = bigTitle("Добро пожаловать\nв «Линия 2.0»", "Мессенджер для своих. Регистрация — только по приглашению.")
-        let code = L2Button("У меня есть код приглашения", kind: .primary, symbol: "ticket")
+        let titles = bigTitle(L2T("l2.welcome.title", "Добро пожаловать\nв «Линия 2.0»"),
+                              L2T("l2.welcome.subtitle", "Мессенджер для своих. Регистрация — только по приглашению."))
+        let code = L2Button(L2T("l2.welcome.code", "У меня есть код приглашения"), kind: .primary, symbol: "ticket")
         code.addTarget(self, action: #selector(codeTapped), for: .touchUpInside)
         code.accessibilityIdentifier = "l2.welcome.code"
-        let login = L2Button("Войти", kind: .secondary)
+        let login = L2Button(L2T("l2.welcome.login", "Войти"), kind: .secondary)
         login.accessibilityIdentifier = "l2.welcome.login"
         login.addTarget(self, action: #selector(loginTapped), for: .touchUpInside)
 
+        // LINIA2: картинка экрана приветствия с сервера (images.welcomeSlides / welcomeImageUrl).
+        if let wu = Linia2Config.shared.welcomeImageURL {
+            let hero = UIImageView()
+            hero.contentMode = .scaleAspectFit
+            hero.clipsToBounds = true
+            hero.layer.cornerRadius = L2.r("card", 16)
+            hero.isHidden = true
+            hero.heightAnchor.constraint(equalToConstant: 180).isActive = true
+            hero.accessibilityIdentifier = "l2.welcome.image"
+            stack.addArrangedSubview(hero)
+            stack.setCustomSpacing(18, after: hero)
+            L2RemoteImage.load(wu, into: hero) { _ in hero.isHidden = false }
+        }
         stack.addArrangedSubview(logo)
         stack.setCustomSpacing(18, after: logo)
         stack.addArrangedSubview(wmWrap)
         stack.setCustomSpacing(28, after: wmWrap)
         titles.forEach { stack.addArrangedSubview($0) }
         if let last = titles.last { stack.setCustomSpacing(36, after: last) }
-        stack.addArrangedSubview(code)
+        // Регистрация по коду выключается с сервера (features.inviteRegistration).
+        if Linia2Config.shared.feature("inviteRegistration") { stack.addArrangedSubview(code) }
         stack.addArrangedSubview(login)
 
         // Плавное появление.

@@ -59,7 +59,8 @@ extension ChatListViewController: UITextFieldDelegate {
         addContact.addTarget(self, action: #selector(linia2AddContact), for: .touchUpInside)
         let compose = L2CircleButton(symbol: "square.and.pencil", accessibility: "Новый чат")
         compose.addTarget(self, action: #selector(linia2NewChat), for: .touchUpInside)
-        let header = L2Header(title: "Чаты", buttons: [addContact, compose])
+        let header = L2Header(title: Linia2Config.shared.tabs.first { $0.id == "chats" }?.title ?? L2T("l2.tab.chats", "Чаты"),
+                              buttons: [addContact, compose])
         let search = L2SearchField()
         search.text = linia2Query
         search.delegate = self
@@ -72,11 +73,21 @@ extension ChatListViewController: UITextFieldDelegate {
         }
         var parts: [UIView] = [header]
         if let b = Linia2Config.shared.banner { parts.append(linia2BannerView(b)) }   // объявление из админки
-        parts += [search, chips]
+        if Linia2Config.shared.feature("search") { parts.append(search) } else if !linia2Query.isEmpty { linia2Query = ""; linia2Refilter() }
+        parts.append(chips)
         let h = L2TableHeader(parts, spacing: 18)
         h.install(in: tableView)
         linia2Header = h
         linia2HeaderWidth = tableView.bounds.width
+        // Баннер, поиск, название — меняются с сервера без перезапуска.
+        NotificationCenter.default.removeObserver(self, name: Linia2Config.changedNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(linia2ConfigChanged), name: Linia2Config.changedNotification, object: nil)
+    }
+
+    @objc func linia2ConfigChanged() {
+        guard !(tableView.tableHeaderView?.subviews.contains { $0.isFirstResponder } ?? false) else { return }
+        linia2InstallHeader()
+        tableView.reloadData()
     }
 
     func linia2LayoutHeaderIfNeeded() {
@@ -261,7 +272,7 @@ extension MessageViewController {
                                    target: self, action: #selector(linia2TitleTapped))
         more.accessibilityLabel = "Информация о чате"
         items.append(more)
-        if let t = topic, t.callsAllowed {
+        if let t = topic, t.callsAllowed, Linia2Config.shared.feature("calls") {
             navBarCallBtn.image = L2.symbol("phone", 20, .regular)
             navBarCallBtn.accessibilityLabel = "Позвонить"
             items.append(navBarCallBtn)
@@ -286,6 +297,7 @@ extension MessageViewController {
     }
 
     func linia2SetTyping() {
+        guard Linia2Config.shared.feature("typing") else { return }
         guard let tv = navigationItem.leftBarButtonItem?.customView,
               let status = tv.viewWithTag(Self.kL2Status) as? UILabel else { return }
         status.text = "печатает…"

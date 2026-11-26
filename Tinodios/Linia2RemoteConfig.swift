@@ -24,10 +24,26 @@ final class Linia2Config {
             .appendingPathComponent("linia2-app-config.json")
     }
 
+    /// Автотесты: конфиг подменяется из окружения (L2_CONFIG_OVERRIDE = JSON как есть, может быть битым), сеть и кэш не используются.
+    private let testOverride: Bool
+
     private init() {
+        let env = ProcessInfo.processInfo.environment
+        if ProcessInfo.processInfo.arguments.contains("-l2-uitest"), let raw = env["L2_CONFIG_OVERRIDE"] {
+            testOverride = true
+            data = Self.validate(Data(raw.utf8)) ?? [:]
+            return
+        }
+        testOverride = false
         if let u = cacheURL, let d = try? Data(contentsOf: u), let obj = Self.validate(d) {
             data = obj
         }
+    }
+
+    /// Как часто перечитывать конфиг (live.pollSeconds, не чаще раза в минуту).
+    var pollSeconds: TimeInterval {
+        guard let v = section("live")["pollSeconds"] as? NSNumber else { return 900 }
+        return min(86400, max(60, v.doubleValue))
     }
 
     // MARK: загрузка
@@ -35,16 +51,28 @@ final class Linia2Config {
     func start() {
         Self.installTextOverrides()
         fetch()
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in self?.fetch() }
+        scheduleTimer()
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self = self, Date().timeIntervalSince(self.lastFetch) > 15 * 60 else { return }
+            guard let self = self, Date().timeIntervalSince(self.lastFetch) > 60 else { return }
             self.fetch()
         }
         DispatchQueue.main.async { Linia2UpdateGate.checkAndShow() }
     }
 
+    private func scheduleTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: pollSeconds, repeats: true) { [weak self] _ in self?.fetch() }
+    }
+
+    /// Тихий push FCM на тему linia2-config ({"l2cfg": "<версия>"}) — перечитать сразу.
+    static func handlePush(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard userInfo["l2cfg"] != nil else { return false }
+        shared.fetch()
+        return true
+    }
+
     func fetch() {
+        if testOverride { return }
         lastFetch = Date()
         guard let u = URL(string: url + "?t=\(Int(Date().timeIntervalSince1970))") else { return }
         var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 15)
@@ -61,6 +89,7 @@ final class Linia2Config {
                     try? d.write(to: cu, options: .atomic)
                 }
                 DispatchQueue.main.async {
+                    self.scheduleTimer()
                     NotificationCenter.default.post(name: Self.changedNotification, object: nil)
                     Linia2UpdateGate.checkAndShow()
                 }
@@ -78,15 +107,97 @@ final class Linia2Config {
         queue.sync { (data[name] as? [String: Any]) ?? [:] }
     }
 
+    private func array(_ name: String) -> [Any]? {
+        queue.sync { data[name] as? [Any] }
+    }
+
+    private static func hex(_ any: Any?) -> UInt32? {
+        guard let s = any as? String else { return nil }
+        let h = s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "")
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        return v
+    }
+
+    /// Цвет светлой темы (colorsLight).
+    func colorLight(_ key: String) -> UInt32? { Self.hex(section("colorsLight")[key]) }
+
+    /// Радиус скругления (radii), 0…40, иначе встроенный.
+    func radius(_ key: String, _ builtin: CGFloat) -> CGFloat {
+        guard let v = section("radii")[key] as? NSNumber else { return builtin }
+        return CGFloat(min(40, max(0, v.doubleValue)))
+    }
+
+    struct TabSpec: Equatable { let id: String; let title: String?; let iconURL: URL? }
+    static let builtinTabs = ["chats", "calls", "contacts", "settings"]
+
+    /// Видимые вкладки по порядку. «Чаты» и «Настройки» скрыть нельзя; неизвестные id игнорируются.
+    var tabs: [TabSpec] {
+        var out: [TabSpec] = []
+        for case let t as [String: Any] in array("tabs") ?? [] {
+            guard let id = t["id"] as? String, Self.builtinTabs.contains(id), !out.contains(where: { $0.id == id }) else { continue }
+            let visible = (t["visible"] as? Bool) ?? true
+            if !visible && id != "chats" && id != "settings" { continue }
+            var title = (t["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let tt = title, tt.isEmpty || tt.count > 20 { title = nil }
+            var icon: URL?
+            if let s = t["iconUrl"] as? String, let u = URL(string: s), u.scheme?.lowercased() == "https" { icon = u }
+            out.append(TabSpec(id: id, title: title, iconURL: icon))
+        }
+        for id in ["chats", "settings"] where !out.contains(where: { $0.id == id }) {
+            out.insert(TabSpec(id: id, title: nil, iconURL: nil), at: id == "chats" ? 0 : out.count)
+        }
+        if out.count == 2, array("tabs") == nil {   // поля нет — встроенный набор
+            return Self.builtinTabs.map { TabSpec(id: $0, title: nil, iconURL: nil) }
+        }
+        return out
+    }
+
+    /// Набор эмодзи реакций (reactions.emoji), 1…12 штук.
+    var reactionEmoji: [String]? {
+        guard let a = section("reactions")["emoji"] as? [Any] else { return nil }
+        let e = a.compactMap { $0 as? String }.filter { !$0.isEmpty && $0.count <= 4 }
+        return e.isEmpty ? nil : Array(e.prefix(12))
+    }
+
+    /// Ряд реакций (reactions.primary / reactions.more), 1…24 системных эмодзи; nil — встроенный.
+    func reactionList(_ key: String) -> [String]? {
+        guard let a = section("reactions")[key] as? [Any] else { return nil }
+        var seen = Set<String>()
+        let e = a.compactMap { $0 as? String }.filter { !$0.isEmpty && $0.count <= 2 && $0.unicodeScalars.contains { $0.properties.isEmoji && $0.value > 0x238C } && seen.insert($0).inserted }
+        return e.isEmpty ? nil : Array(e.prefix(24))
+    }
+
+    /// Полный список эмодзи с поиском по «+» (reactions.fullList), по умолчанию — да.
+    var reactionsFullList: Bool { (section("reactions")["fullList"] as? Bool) ?? true }
+
+    /// Порядок и видимость пунктов меню (menus.message / menus.settings); nil — встроенный.
+    func menu(_ name: String) -> [String]? {
+        guard let a = section("menus")[name] as? [Any] else { return nil }
+        let ids = a.compactMap { $0 as? String }
+        return ids.isEmpty && !a.isEmpty ? nil : ids
+    }
+
+    private func limit(_ key: String) -> Double? {
+        guard let v = section("limits")[key] as? NSNumber, v.doubleValue > 0 else { return nil }
+        return v.doubleValue
+    }
+    /// Максимальный размер вложения в байтах (limits.maxFileMB, 1…100).
+    var maxFileBytes: Int64? { limit("maxFileMB").map { Int64(min(100, max(1, $0)) * 1024 * 1024) } }
+    /// Максимальная длина сообщения (limits.maxMessageLength, 100…20000).
+    var maxMessageLength: Int? { limit("maxMessageLength").map { Int(min(20000, max(100, $0))) } }
+    /// Время на изменение своего сообщения, секунд (limits.editWindowMinutes; нет/0 — без ограничения).
+    var editWindowSeconds: TimeInterval? { limit("editWindowMinutes").map { $0 * 60 } }
+
+    /// Контакты поддержки (support.*).
+    func support(_ key: String) -> String? {
+        guard let s = section("support")[key] as? String, !s.isEmpty, s.count < 200 else { return nil }
+        return s
+    }
+
     // MARK: значения
 
     /// Цвет #RRGGBB из раздела colors.
-    func color(_ key: String) -> UInt32? {
-        guard let s = section("colors")[key] as? String else { return nil }
-        let hex = s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "")
-        guard hex.count == 6, let v = UInt32(hex, radix: 16) else { return nil }
-        return v
-    }
+    func color(_ key: String) -> UInt32? { Self.hex(section("colors")[key]) }
 
     var defaultTheme: String? { section("colors")["defaultTheme"] as? String }
 
@@ -99,6 +210,12 @@ final class Linia2Config {
         guard let s = section("links")[key] as? String, let u = URL(string: s),
               ["https", "mailto"].contains(u.scheme?.lowercased() ?? "") else { return nil }
         return u
+    }
+
+    /// Слайды экрана приветствия (images.welcomeSlides, только https).
+    var welcomeSlides: [URL] {
+        ((section("images")["welcomeSlides"] as? [Any]) ?? []).compactMap { ($0 as? String).flatMap(URL.init(string:)) }
+            .filter { $0.scheme?.lowercased() == "https" }
     }
 
     func image(_ key: String) -> URL? {
@@ -337,4 +454,33 @@ enum Linia2Texts {
 
     /// Для строк, зашитых в код без NSLocalizedString.
     static func t(_ s: String) -> String { ru[s] ?? s }
+}
+
+
+// MARK: - Картинки по URL из удалённых настроек (логотип, экран приветствия, иконки)
+
+enum L2RemoteImage {
+    private static var cache: [URL: UIImage] = [:]
+
+    /// Загрузить картинку (https, до 2 МБ) в imageView; при ошибке ничего не меняется (остаётся встроенное).
+    static func load(_ url: URL?, into iv: UIImageView, onLoad: ((UIImage) -> Void)? = nil) {
+        guard let url = url else { return }
+        if let img = cache[url] { iv.image = img; onLoad?(img); return }
+        URLSession.shared.dataTask(with: url) { [weak iv] d, r, _ in
+            guard let d = d, d.count < 2_000_000, (r as? HTTPURLResponse)?.statusCode == 200, let img = UIImage(data: d) else { return }
+            DispatchQueue.main.async {
+                cache[url] = img
+                iv?.image = img
+                onLoad?(img)
+            }
+        }.resume()
+    }
+}
+
+extension Linia2Config {
+    /// Картинки экрана приветствия: images.welcomeSlides (первая) или images.welcomeImageUrl.
+    var welcomeImageURL: URL? {
+        if let first = welcomeSlides.first { return first }
+        return image("welcomeImageUrl")
+    }
 }

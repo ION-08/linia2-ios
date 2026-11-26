@@ -179,6 +179,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         let state = application.applicationState
+        // LINIA2: тихий push «конфиг обновлён» (тема FCM linia2-config) — перечитать удалённые настройки.
+        if Linia2Config.handlePush(userInfo) {
+            completionHandler(.newData)
+            return
+        }
         guard let topicName = userInfo["topic"] as? String, !topicName.isEmpty else {
             completionHandler(.failed)
             return

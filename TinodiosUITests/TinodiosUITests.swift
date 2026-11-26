@@ -14,6 +14,7 @@
 //
 
 import XCTest
+import UIKit
 
 final class TinodiosUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -639,6 +640,240 @@ final class TinodiosUITests: XCTestCase {
         wait(dialogButton("Разблокировать"), "подтверждение разблокировки").tap(); sleep(2)
         XCTAssertEqual(app.state, .runningForeground, "вылет при блокировке")
         screenshot("unblocked")
+    }
+
+    // MARK: - 7б. Как в Telegram: меню, реакции, ответ, шапка, единый фон
+
+    private func longPressMessage(_ text: String) {
+        let m = wait(labelContains(text), "сообщение «\(text)»")
+        m.press(forDuration: 1.0)
+        wait(any("l2.menu"), "меню сообщения", timeout: 5)
+        sleep(1)
+    }
+
+    private func closeMenu() {
+        if any("l2.menu").exists { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap(); sleep(1) }
+    }
+
+    func test30_ChatHeaderBackAvatarNameCall() {
+        openPeerChat()
+        let nav = app.navigationBars.firstMatch
+        XCTAssertTrue(nav.exists && nav.isHittable, "в чате нет шапки")
+        XCTAssertTrue(nav.buttons.element(boundBy: 0).isHittable, "в шапке нет «Назад»")
+        XCTAssertTrue(labelContains(peerName).exists, "в шапке нет имени собеседника")
+        XCTAssertTrue(app.buttons["l2.chat.call"].firstMatch.exists || nav.buttons["Позвонить"].exists, "в шапке нет кнопки звонка")
+        XCTAssertTrue(tabBarVisible, "в чате нет нижнего меню")
+        XCTAssertTrue(labelContains("История").exists, "экран чата пустой — нет сообщений из истории")
+        screenshot("chat-header")
+    }
+
+    func test31_MessageMenuRussianAndOrder() {
+        openPeerChat()
+        longPressMessage("История ответ")       // своё сообщение: есть «Изменить»
+        screenshot("menu-own")
+        for e in ["👍", "🤝", "🔥", "✅", "❤️", "👏", "😂", "🙏"] {
+            XCTAssertTrue(any("l2.react." + e).exists, "в меню нет реакции \(e)")
+        }
+        var lastY: CGFloat = -1
+        for (id, title) in [("reply", "Ответить"), ("copy", "Копировать"), ("forward", "Переслать"), ("edit", "Изменить"), ("delete", "Удалить у меня")] {
+            let b = any("l2.menu." + id)
+            XCTAssertTrue(b.exists, "в меню нет «\(title)»")
+            XCTAssertEqual(b.label, title, "пункт меню не по-русски")
+            XCTAssertGreaterThan(b.frame.minY, lastY, "порядок пунктов меню нарушен на «\(title)»")
+            lastY = b.frame.minY
+        }
+        XCTAssertFalse(app.buttons["Reply"].exists || app.buttons["Copy"].exists, "в меню английский текст")
+        closeMenu()
+        longPressMessage("История 1")            // чужое: есть «Пожаловаться»
+        XCTAssertTrue(any("l2.menu.report").exists, "в меню чужого сообщения нет «Пожаловаться»")
+        screenshot("menu-peer")
+        closeMenu()
+    }
+
+    func test32_ReactionAddAndRemove() {
+        openPeerChat()
+        longPressMessage("История 1")
+        any("l2.react.🔥").tap()
+        let chip = any("l2.reaction.🔥")
+        XCTAssertTrue(chip.waitForExistence(timeout: 15), "реакция не появилась под сообщением")
+        XCTAssertTrue(chip.label.contains("моя"), "своя реакция не подсвечена")
+        screenshot("reaction-on")
+        // Повторное нажатие на пилюлю снимает реакцию.
+        chip.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: chip)
+        waitForExpectations(timeout: 15)
+        screenshot("reaction-off")
+    }
+
+    func test32b_ReactionPlusAndFullList() {
+        openPeerChat()
+        longPressMessage("История 2")
+        wait(any("l2.react.more"), "кнопка «+»").tap()
+        sleep(1)
+        for e in ["👎", "❌", "💯", "🚀", "🎉", "📌"] {
+            XCTAssertTrue(any("l2.react." + e).exists, "во втором ряду нет \(e)")
+        }
+        screenshot("reactions-more")
+        wait(any("l2.react.all"), "кнопка «Все эмодзи»").tap()
+        let search = wait(app.searchFields.firstMatch, "поиск эмодзи")
+        search.tap()
+        search.typeText("ракета")
+        sleep(1)
+        wait(any("l2.emoji.🚀"), "эмодзи 🚀 в поиске").tap()
+        let chip = any("l2.reaction.🚀")
+        XCTAssertTrue(chip.waitForExistence(timeout: 15), "реакция из полного списка не появилась")
+        screenshot("reaction-from-list")
+        chip.tap()   // снять
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: chip)
+        waitForExpectations(timeout: 15)
+    }
+
+    func test32c_PinAndUnpin() {
+        openPeerChat()
+        longPressMessage("История 1")
+        wait(any("l2.menu.pin"), "пункт «Закрепить»").tap()
+        let counter = any("l2.pinned.counter")
+        XCTAssertTrue(counter.waitForExistence(timeout: 15), "плашка закреплённого не появилась")
+        XCTAssertTrue(counter.label.contains("Закреплённое"), "на плашке нет «Закреплённое»")
+        screenshot("pinned")
+        wait(any("l2.pinned.unpin"), "крестик «Открепить»").tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: counter)
+        waitForExpectations(timeout: 15)
+        screenshot("unpinned")
+    }
+
+    func test33_ReplyViaMenu() {
+        openPeerChat()
+        longPressMessage("История 3")
+        any("l2.menu.reply").tap()
+        sleep(1)
+        XCTAssertGreaterThanOrEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'История 3'")).count, 2,
+                                    "над полем ввода нет цитаты")
+        screenshot("reply-preview")
+        let text = "Ответ на цитату " + String(Int(Date().timeIntervalSince1970) % 100000)
+        sendMessage(text)
+        XCTAssertTrue(labelContains(text).waitForExistence(timeout: 15), "ответ не появился")
+        screenshot("reply-sent")
+        back()
+        assertOnChatList("назад после ответа")
+    }
+
+    func test34_SwipeToReply() {
+        openPeerChat()
+        let m = wait(labelContains("История 2"), "сообщение «История 2»")
+        let from = m.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 160, dy: 0)))
+        sleep(1)
+        XCTAssertGreaterThanOrEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'История 2'")).count, 2,
+                                    "свайп вправо не открыл ответ")
+        screenshot("swipe-reply")
+    }
+
+    /// Цвет точки скриншота (в точках экрана).
+    private func rgb(_ img: UIImage, _ p: CGPoint) -> [Int] {
+        guard let cg = img.cgImage else { return [0, 0, 0] }
+        let sx = CGFloat(cg.width) / img.size.width, sy = CGFloat(cg.height) / img.size.height
+        let x = min(cg.width - 1, max(0, Int(p.x * sx))), y = min(cg.height - 1, max(0, Int(p.y * sy)))
+        var px = [UInt8](repeating: 0, count: 4)
+        px.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.draw(cg, in: CGRect(x: -CGFloat(x), y: -CGFloat(cg.height - 1 - y), width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        }
+        return [Int(px[0]), Int(px[1]), Int(px[2])]
+    }
+
+    func test35_ChatBackgroundUniform() {
+        openPeerChat()
+        if app.keyboards.firstMatch.exists { app.swipeDown(); sleep(1) }
+        let input = chatInput()
+        let shot = XCUIScreen.main.screenshot()
+        let a = XCTAttachment(screenshot: shot); a.name = "background-check"; a.lifetime = .keepAlways; add(a)
+        let img = shot.image
+        let x: CGFloat = 4
+        let ref = rgb(img, CGPoint(x: x, y: input.frame.minY - 60))          // фон ленты сообщений
+        let probes: [(String, CGFloat)] = [("рядом с полем «Сообщение»", input.frame.midY),
+                                           ("под полем «Сообщение»", input.frame.maxY + 6)]
+        for (name, y) in probes {
+            let c = rgb(img, CGPoint(x: x, y: y))
+            let d = zip(ref, c).map { abs($0 - $1) }.max() ?? 0
+            XCTAssertLessThanOrEqual(d, 14, "фон \(name) отличается от фона чата: \(c) vs \(ref) — серая полоса")
+        }
+    }
+
+    // MARK: - 7в. Удалённые настройки: старый / пустой / битый / новый конфиг
+
+    /// Запуск с подменённым конфигом (приложение не ходит в сеть за конфигом и не трогает кэш).
+    private func openPeerChat(config: String) {
+        app.launchEnvironment["L2_CONFIG_OVERRIDE"] = config
+        openPeerChat()
+    }
+
+    private func assertDefaultTabs() {
+        for id in ["chats", "calls", "contacts", "settings"] {
+            XCTAssertTrue(tab("l2.tab." + id).exists, "нет вкладки \(id)")
+        }
+    }
+
+    func test36_EmptyConfig() {
+        openPeerChat(config: "{}")
+        assertDefaultTabs()
+        XCTAssertTrue(labelContains("История").exists, "с пустым конфигом не видна история")
+        longPressMessage("История 1")
+        XCTAssertTrue(any("l2.react.👍").exists, "с пустым конфигом нет встроенных реакций")
+        XCTAssertTrue(any("l2.menu.reply").exists, "с пустым конфигом нет «Ответить»")
+        closeMenu()
+    }
+
+    func test37_BrokenConfig() {
+        openPeerChat(config: "{ \"schema\": 1, \"tabs\": [ это не JSON")
+        assertDefaultTabs()
+        XCTAssertTrue(app.buttons["l2.chat.attach"].firstMatch.exists, "с битым конфигом пропали вложения")
+        sendMessage("Битый конфиг " + String(Int(Date().timeIntervalSince1970) % 100000))
+        XCTAssertEqual(app.state, .runningForeground, "вылет с битым конфигом")
+    }
+
+    func test38_OldConfig() {
+        // Формат сборок 1.2.0 (9–11): без tabs/menus/reactions.primary.
+        let old = """
+        {"schema":1,"version":3,"colors":{"accent":"#7EE0C3","background":"#0A0E1B"},"texts":{},
+         "features":{"reactions":true,"videoCalls":true},"reactions":{"emoji":["❤️","👍"]},"banner":{"enabled":false}}
+        """
+        openPeerChat(config: old)
+        assertDefaultTabs()
+        longPressMessage("История 1")
+        XCTAssertTrue(any("l2.react.❤️").exists && any("l2.react.👍").exists, "старый набор реакций не применился")
+        XCTAssertFalse(any("l2.react.🤝").exists, "старый конфиг: показан встроенный ряд вместо заданного")
+        closeMenu()
+    }
+
+    func test39_CustomConfigAppliedLive() {
+        let cfg = """
+        {"schema":1,"tabs":[{"id":"chats","title":"Беседы","visible":true},{"id":"calls","visible":false},
+          {"id":"contacts","visible":true},{"id":"settings","visible":true}],
+         "features":{"reactions":false,"attachments":false,"pins":false,"forward":false},
+         "menus":{"message":["copy","reply","report"]}}
+        """
+        openPeerChat(config: cfg)
+        XCTAssertFalse(tab("l2.tab.calls").exists, "скрытая вкладка «Звонки» видна")
+        XCTAssertEqual(tab("l2.tab.chats").label, "Беседы", "название вкладки не из конфига")
+        let attach = app.buttons["l2.chat.attach"].firstMatch
+        XCTAssertFalse(attach.exists && attach.isHittable, "вложения не выключились")
+        longPressMessage("История 1")
+        XCTAssertFalse(any("l2.menu.reactions").exists, "реакции не выключились")
+        XCTAssertFalse(any("l2.menu.forward").exists, "«Переслать» не выключилось")
+        XCTAssertFalse(any("l2.menu.pin").exists, "«Закрепить» не выключилось")
+        let copy = any("l2.menu.copy"), reply = any("l2.menu.reply")
+        XCTAssertTrue(copy.exists && reply.exists, "нет пунктов из menus.message")
+        XCTAssertLessThan(copy.frame.minY, reply.frame.minY, "порядок меню не из конфига")
+        screenshot("custom-config")
+        closeMenu()
+    }
+
+    func test40_FutureSchemaIgnored() {
+        openPeerChat(config: "{\"schema\": 2, \"tabs\": [{\"id\": \"chats\"}, {\"id\": \"settings\"}]}")
+        assertDefaultTabs()   // конфиг новой схемы этой версией не применяется
     }
 
     // MARK: - 8. Обход всех экранов без вылетов

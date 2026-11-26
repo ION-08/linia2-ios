@@ -107,6 +107,17 @@ class MessageBubbleDecorator {
     }
 
     public static func draw(_ rect: CGRect, isIncoming: Bool, style: Style) -> UIBezierPath {
+        // LINIA2: радиус пузыря с сервера (radii.bubble) — скруглённый прямоугольник, угол у края отправителя меньше.
+        let r = Linia2Config.shared.radius("bubble", -1)
+        if r >= 0 {
+            let b = CGRect(origin: .zero, size: rect.size)
+            let corners: UIRectCorner = isIncoming ? [.topLeft, .topRight, .bottomRight] : [.topLeft, .topRight, .bottomLeft]
+            let p = UIBezierPath(roundedRect: b, byRoundingCorners: corners, cornerRadii: CGSize(width: r, height: r))
+            let small = UIBezierPath(roundedRect: b, cornerRadius: min(r, 6))
+            p.append(small)
+            p.usesEvenOddFillRule = false
+            return p
+        }
         let path = UIBezierPath()
 
         if isIncoming {

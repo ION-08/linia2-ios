@@ -349,11 +349,12 @@ class SendMessageBar: UIView {
         sendButton.accessibilityIdentifier = "l2.chat.send"
         sendButton.accessibilityLabel = "Отправить"
         inputField.accessibilityIdentifier = "l2.chat.input"
+        attachButton.isHidden = !Linia2Config.shared.feature("attachments")   // LINIA2: флаг вложений
         horizontalSliderView.alpha = 0.9
         verticalSliderView.alpha = 0.9
 
         inputField.layer.borderWidth = 0
-        inputField.layer.cornerRadius = 18
+        inputField.layer.cornerRadius = L2.r("input", 18)
         inputField.autoresizingMask = [.flexibleHeight]
         inputField.delegate = self
         inputField.textContainerInset = UIEdgeInsets(
@@ -437,7 +438,7 @@ class SendMessageBar: UIView {
         if state == .hidden {
             // Bar hidden.
             inputField.show(true, height: Constants.kInitialInputFieldHeight)
-            attachButton.isHidden = false
+            attachButton.isHidden = !Linia2Config.shared.feature("attachments")   // LINIA2: флаг вложений
             // audioDurationLabel.show(false)
             audioDurationLabel.isHidden = true
             wavePreviewImageView.isHidden = true

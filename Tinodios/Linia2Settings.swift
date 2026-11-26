@@ -246,20 +246,51 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     private var headerWidth: CGFloat = 0
     private var listener: Linia2TinodeListener?
 
-    private lazy var menu: [Linia2GroupedTableViewController.Row] = [
-        .init(symbol: "bell.fill", color: L2.hex(0xF0884A), title: "Уведомления") { [weak self] in
-            self?.push(Linia2NotificationsViewController())
-        },
-        .init(symbol: "lock.fill", color: L2.hex(0x5B8DEF), title: "Конфиденциальность") { [weak self] in
-            self?.push(Linia2PrivacyViewController())
-        },
-        .init(symbol: "paintbrush.fill", color: L2.accentStrong, title: "Внешний вид") { [weak self] in
-            self?.push(Linia2AppearanceViewController())
-        },
-        .init(symbol: "info.circle.fill", color: L2.hex(0x2FB39A), title: "О приложении") { [weak self] in
-            self?.push(Linia2AboutViewController())
-        },
-    ]
+    /// Порядок и видимость пунктов — из удалённых настроек (menus.settings). «Выйти» показывается всегда.
+    static let kDefaultSettingsMenu = ["profile", "notifications", "privacy", "appearance", "about"]
+    private var settingsIds: [String] { Linia2Config.shared.menu("settings") ?? Self.kDefaultSettingsMenu }
+    private var showProfile: Bool { settingsIds.contains("profile") }
+
+    private var menu: [Linia2GroupedTableViewController.Row] {
+        var out: [Linia2GroupedTableViewController.Row] = []
+        for id in settingsIds {
+            switch id {
+            case "notifications":
+                out.append(.init(symbol: "bell.fill", color: L2.hex(0xF0884A), title: L2T("l2.settings.notifications", "Уведомления")) { [weak self] in
+                    self?.push(Linia2NotificationsViewController()) })
+            case "privacy":
+                out.append(.init(symbol: "lock.fill", color: L2.hex(0x5B8DEF), title: L2T("l2.settings.privacy", "Конфиденциальность")) { [weak self] in
+                    self?.push(Linia2PrivacyViewController()) })
+            case "appearance":
+                out.append(.init(symbol: "paintbrush.fill", color: L2.accentStrong, title: L2T("l2.settings.appearance", "Внешний вид")) { [weak self] in
+                    self?.push(Linia2AppearanceViewController()) })
+            case "about":
+                out.append(.init(symbol: "info.circle.fill", color: L2.hex(0x2FB39A), title: L2T("l2.settings.about", "О приложении")) { [weak self] in
+                    self?.push(Linia2AboutViewController()) })
+            case "support":
+                out.append(.init(symbol: "envelope.fill", color: L2.hex(0x7C8CF8), title: L2T("l2.settings.support", "Написать в поддержку"),
+                                 subtitle: Linia2Config.shared.support("email") ?? Linia2Config.shared.support("telegram")) { [weak self] in
+                    self?.openSupport() })
+            case "deleteAccount":
+                out.append(.init(symbol: "trash.fill", color: L2.danger, title: L2T("l2.settings.deleteAccount", "Удалить аккаунт")) { [weak self] in
+                    self?.openProfileEditor() })
+            default: continue
+            }
+        }
+        return out
+    }
+
+    /// Поддержка: support.url → support.telegram → support.email → links.support.
+    private func openSupport() {
+        let c = Linia2Config.shared
+        if let s = c.support("url"), let u = URL(string: s), u.scheme?.lowercased() == "https" { Linia2Links.open(u, from: self); return }
+        if let t = c.support("telegram") {
+            let name = t.replacingOccurrences(of: "@", with: "").replacingOccurrences(of: "https://t.me/", with: "")
+            if let u = URL(string: "https://t.me/" + name) { UIApplication.shared.open(u); return }
+        }
+        if let e = c.support("email"), let u = URL(string: "mailto:" + e) { UIApplication.shared.open(u); return }
+        Linia2Links.open(Linia2Links.support, from: self)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -285,9 +316,12 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
-        header = L2TableHeader([L2Header(title: "Настройки")])
+        header = L2TableHeader([L2Header(title: Linia2Config.shared.tabs.first { $0.id == "settings" }?.title ?? L2T("l2.tab.settings", "Настройки"))])
         header?.install(in: tableView)
         headerWidth = tableView.bounds.width
+        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.tableView.reloadData()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -355,7 +389,8 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch Sec(rawValue: section) {
         case .menu: return menu.count
-        case .profile, .logout: return 1
+        case .profile: return showProfile ? 1 : 0
+        case .logout: return 1
         case .none: return 0
         }
     }
