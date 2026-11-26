@@ -7,7 +7,8 @@
 //  (сервер удаляет у всех через N дней, по умолчанию 7). Признак кружка — любой из двух.
 //  Запись: кнопка микрофона по нажатию переключается на камеру; удержание — запись (фронтальная камера,
 //  384×384 H.264, до roundVideo.maxSeconds = 60 с), отпустить — отправить, смахнуть влево — отменить.
-//  В чате кружок играет по кругу без звука; нажатие — со звуком с начала, ещё нажатие — снова без звука.
+//  В чате — превью-кадр с ▶ (без автозапуска); нажатие — воспроизведение со звуком, ещё нажатие — пауза.
+//  Одновременно играет только один кружок или одно голосовое (Linia2Playback); уход с экрана / за край / в фон — стоп.
 //
 
 import AVFoundation
@@ -138,13 +139,14 @@ final class Linia2RoundVideoView: UIView {
     /// WebM (веб без MP4) AVPlayer не играет — по нажатию открывается обычный просмотр видео (VLC).
     var onOpenFallback: (() -> Void)?
     private var isWebM = false
-    private let soundIcon = UIImageView()
-    private var player: AVQueuePlayer?
-    private var looper: AVPlayerLooper?
-    private var statusObs: NSKeyValueObservation?
+    private let playIcon = UIImageView()
+    private var player: AVPlayer?
+    private var endObs: NSObjectProtocol?
     private var loadedKey: String?
     private var loading = false
-    private(set) var soundOn = false
+    /// Нажали ▶ до окончания загрузки — запустить, когда загрузится.
+    private var pendingPlay = false
+    private(set) var isPlaying = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -162,13 +164,13 @@ final class Linia2RoundVideoView: UIView {
         badge.clipsToBounds = true
         badge.isHidden = true
         addSubview(badge)
-        soundIcon.image = L2.symbol("speaker.slash.fill", 12, .bold)
-        soundIcon.tintColor = .white
-        soundIcon.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        soundIcon.contentMode = .center
-        soundIcon.layer.cornerRadius = 11
-        soundIcon.clipsToBounds = true
-        addSubview(soundIcon)
+        playIcon.image = L2.symbol("play.fill", 22, .bold)
+        playIcon.tintColor = .white
+        playIcon.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        playIcon.contentMode = .center
+        playIcon.layer.cornerRadius = 24
+        playIcon.clipsToBounds = true
+        addSubview(playIcon)
         layer.borderColor = L2.accent.cgColor
         leftLabel.font = L2.font(11, .medium)
         leftLabel.textColor = L2.textSecondary
@@ -181,6 +183,10 @@ final class Linia2RoundVideoView: UIView {
 
     required init?(coder: NSCoder) { return nil }
 
+    deinit {
+        if let o = endObs { NotificationCenter.default.removeObserver(o) }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         layer.cornerRadius = bounds.width / 2
@@ -188,7 +194,7 @@ final class Linia2RoundVideoView: UIView {
         playerLayer.frame = bounds
         let bs = badge.sizeThatFits(CGSize(width: bounds.width, height: 20))
         badge.frame = CGRect(x: (bounds.width - bs.width - 28) / 2, y: 10, width: bs.width + 28, height: 20)
-        soundIcon.frame = CGRect(x: bounds.width * 0.15 - 11, y: bounds.height * 0.85 - 11, width: 22, height: 22)
+        playIcon.frame = CGRect(x: bounds.midX - 24, y: bounds.midY - 24, width: 48, height: 48)
     }
 
     func configure(message: Message, entity: Entity, key: String) {
@@ -207,18 +213,15 @@ final class Linia2RoundVideoView: UIView {
             accessibilityValue = "формат WebM"
             return
         }
-        guard loadedKey != key, !loading else {
-            if player != nil, player?.rate == 0 { player?.play() }
-            return
-        }
+        guard loadedKey != key, !loading else { return }   // без автозапуска
         let file = Linia2Round.cacheDir.appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".mp4")
         if FileManager.default.fileExists(atPath: file.path) {
-            start(file, key: key)
+            prepare(file, key: key)
             return
         }
         if let bits = entity.data?["val"]?.asData(), !bits.isEmpty {
             try? bits.write(to: file)
-            start(file, key: key)
+            prepare(file, key: key)
             return
         }
         guard let ref = entity.data?["ref"]?.asString(), !ref.hasPrefix("mid:"),
@@ -230,7 +233,7 @@ final class Linia2RoundVideoView: UIView {
             DispatchQueue.main.async {
                 self?.loading = false
                 if FileManager.default.fileExists(atPath: file.path) {
-                    self?.start(file, key: key)
+                    self?.prepare(file, key: key)
                 } else {
                     self?.accessibilityValue = "не загрузилось"
                 }
@@ -238,57 +241,85 @@ final class Linia2RoundVideoView: UIView {
         }.resume()
     }
 
-    private func start(_ file: URL, key: String) {
+    /// Готовит плеер, не запуская; превью — первый кадр, если в сообщении его нет.
+    private func prepare(_ file: URL, key: String) {
         loadedKey = key
         let item = AVPlayerItem(url: file)
-        let p = AVQueuePlayer()
-        p.isMuted = !soundOn
+        let p = AVPlayer(playerItem: item)
+        p.actionAtItemEnd = .pause
         p.preventsDisplaySleepDuringVideoPlayback = false
-        looper = AVPlayerLooper(player: p, templateItem: item)
         player = p
         playerLayer.player = p
-        statusObs = p.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if p.timeControlStatus == .playing {
-                    self.accessibilityValue = self.soundOn ? "играет со звуком" : "играет без звука"
+        if let o = endObs { NotificationCenter.default.removeObserver(o) }
+        endObs = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            self?.finished()
+        }
+        if poster.image == nil {
+            let gen = AVAssetImageGenerator(asset: AVAsset(url: file))
+            gen.appliesPreferredTrackTransform = true
+            gen.generateCGImagesAsynchronously(forTimes: [NSValue(time: .zero)]) { [weak self] _, img, _, _, _ in
+                guard let img = img else { return }
+                DispatchQueue.main.async {
+                    if self?.poster.image == nil { self?.poster.image = UIImage(cgImage: img) }
                 }
             }
         }
-        accessibilityValue = "без звука"
-        p.play()
+        accessibilityValue = "остановлено"
+        if pendingPlay {
+            pendingPlay = false
+            play()
+        }
     }
 
-    /// Нажатие: со звуком с начала / снова без звука.
-    func toggleSound() {
+    /// Нажатие: ▶ воспроизведение со звуком / ❚❚ пауза.
+    func togglePlay() {
         if isWebM { onOpenFallback?(); return }
-        guard let p = player else { return }
-        soundOn.toggle()
-        if soundOn {
-            let s = AVAudioSession.sharedInstance()
-            if s.category != .playAndRecord {   // во время звонка сессию не трогаем
-                try? s.setCategory(.playback, mode: .default, options: [])
-                try? s.setActive(true)
-            }
-            p.seek(to: .zero)
-        }
-        p.isMuted = !soundOn
-        p.play()
-        layer.borderWidth = soundOn ? 3 : 0
-        soundIcon.isHidden = soundOn
-        accessibilityValue = soundOn ? "играет со звуком" : "играет без звука"
+        if isPlaying { pause() } else { play() }
         L2.haptic()
     }
 
-    /// Ячейка ушла с экрана: без звука, пауза.
-    func stop() {
-        if soundOn {
-            soundOn = false
-            player?.isMuted = true
-            layer.borderWidth = 0
-            soundIcon.isHidden = false
+    private func play() {
+        guard let p = player else {
+            pendingPlay = true   // ещё грузится
+            accessibilityValue = "загрузка"
+            return
         }
+        Linia2Playback.shared.claimRound(self)
+        let s = AVAudioSession.sharedInstance()
+        if s.mode != .voiceChat && s.mode != .videoChat {   // во время звонка сессию не трогаем
+            try? s.setCategory(.playback, mode: .default, options: [])
+            try? s.setActive(true)
+        }
+        if let item = p.currentItem, item.duration.isNumeric, CMTimeCompare(p.currentTime(), item.duration) >= 0 {
+            p.seek(to: .zero)
+        }
+        p.isMuted = false
+        p.play()
+        isPlaying = true
+        playIcon.isHidden = true
+        layer.borderWidth = 3
+        accessibilityValue = "играет"
+    }
+
+    /// Пауза (повторное нажатие, другое воспроизведение, ячейка за экраном, уход с экрана, фон).
+    func pause() {
+        pendingPlay = false
+        let was = isPlaying
         player?.pause()
+        isPlaying = false
+        playIcon.isHidden = false
+        layer.borderWidth = 0
+        if was { accessibilityValue = "пауза" }
+        Linia2Playback.shared.releaseRound(self)
+    }
+
+    /// Ячейка переиспользуется.
+    func stop() { pause() }
+
+    private func finished() {
+        player?.seek(to: .zero)
+        pause()
+        accessibilityValue = "остановлено"
     }
 }
 
@@ -357,6 +388,7 @@ extension MessageViewController {
     private func linia2BeginRoundRecording() {
         guard Linia2Round.featureOn else { return }
         currentAudioPlayer?.stop()
+        Linia2Playback.shared.stopAll()
         let start: () -> Void = { [weak self] in
             guard let self = self else { return }
             let rec = Linia2RoundRecorder()

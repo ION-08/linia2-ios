@@ -46,7 +46,7 @@ class BrandingViewController: UIViewController {
     }
 
     private func handleCodeEntered(_ code: String) {
-        UiUtils.showToast(message: "Configuring. Config ID: " + code, level: .info)
+        UiUtils.showToast(message: "Настройка. Код конфигурации: " + code, level: .info)
         SharedUtils.setUpBranding(withConfigurationCode: code)
         self.navigationController?.popViewController(animated: true)
     }
@@ -57,7 +57,7 @@ extension BrandingViewController: QRScannerDelegate {
         guard let code = codeValue else {
             Cache.log.error("Invalid host QR code")
             DispatchQueue.main.async {
-                UiUtils.showToast(message: "Invalid Tinode configuration QR code")
+                UiUtils.showToast(message: "Неверный QR-код конфигурации")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) { [weak self] in
                 // Restart QR scanner.

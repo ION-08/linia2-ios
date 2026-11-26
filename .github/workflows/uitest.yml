@@ -11,6 +11,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      design:
+        description: "Дизайн-контроль: только снимки экранов (Linia2DesignShots) на SE / 16 / 16 Pro Max × тема × шрифт"
+        type: boolean
+        default: false
   workflow_call:
     outputs:
       compiled:
@@ -27,7 +32,8 @@ concurrency:
 jobs:
   uitest:
     # Push с [release] тестирует release.yml (2 круга подряд) — отдельный прогон не нужен (общий тестовый сервер).
-    if: ${{ github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]') }}
+    # Ручной запуск с design=true — только job design.
+    if: ${{ (github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]')) && !(github.event_name == 'workflow_dispatch' && inputs.design) }}
     # macos-15: симуляторы iOS 18 уже установлены (на macos-26 их приходится скачивать ~30+ мин).
     # Сборка для TestFlight остаётся на macos-26 / Xcode 26 (testflight.yml).
     runs-on: macos-15
@@ -100,38 +106,7 @@ jobs:
           echo "::add-mask::$(grep '^L2_REG_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
 
       - name: История переписки для теста
-        run: |
-          cat > "$RUNNER_TEMP/seed.mjs" <<'EOF'
-          const API = 'wss://v2.chat-linia.site/v0/channels?apikey=AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K';
-          function client(login, pass) {
-            const ws = new WebSocket(API); let id = 0; const pend = {}; const opened = new Promise(r => ws.onopen = r);
-            const c = { req: o => new Promise((res, rej) => { const k = String(++id); const key = Object.keys(o)[0]; o[key].id = k; pend[k] = res; ws.send(JSON.stringify(o)); setTimeout(() => rej(new Error('timeout ' + key)), 15000); }) };
-            ws.onmessage = ev => { const m = JSON.parse(ev.data); if (m.ctrl && pend[m.ctrl.id]) { pend[m.ctrl.id](m.ctrl); delete pend[m.ctrl.id]; } };
-            c.login = async () => { await opened; await c.req({ hi: { ver: '0.25' } });
-              const l = await c.req({ login: { scheme: 'basic', secret: Buffer.from(login + ':' + pass).toString('base64') } }); c.uid = l.params?.user; return l.code; };
-            return c;
-          }
-          const A = client(process.env.L2_LOGIN, process.env.L2_PASSWORD), B = client(process.env.L2_PEER_LOGIN, process.env.L2_PEER_PASSWORD);
-          console.log('вход', await A.login(), await B.login());
-          // Имя меняется только после подписки на me (без неё Tinode отвечает 304 и имя остаётся «Тест CI»).
-          await B.req({ sub: { topic: 'me' } }).catch(() => {});
-          console.log('имя', (await B.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник CI' } } } }).catch(e => ({ code: String(e) }))).code);
-          const sb = await B.req({ sub: { topic: A.uid } }); const topic = sb.topic || A.uid;
-          for (let i = 1; i <= 3; i++) { const p = await B.req({ pub: { topic, content: 'История ' + i } }); console.log('pub', p.code); }
-          const sa = await A.req({ sub: { topic: B.uid } }); await A.req({ pub: { topic: sa.topic || B.uid, content: 'История ответ' } });
-          // Звонки: uid A для веб-собеседника; чат C ↔ A для звонка iOS ↔ iOS.
-          (await import('node:fs')).appendFileSync(process.env.GITHUB_ENV, `L2_IOS_UID=${A.uid}\n`);
-          if (process.env.L2_C_LOGIN) {
-            const C = client(process.env.L2_C_LOGIN, process.env.L2_C_PASSWORD);
-            console.log('вход C', await C.login());
-            await C.req({ sub: { topic: 'me' } }).catch(() => {});
-            console.log('имя C', (await C.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник iOS' } } } }).catch(e => ({ code: String(e) }))).code);
-            const sc = await C.req({ sub: { topic: A.uid } }); await C.req({ pub: { topic: sc.topic || A.uid, content: 'Позвони мне' } });
-            const sa2 = await A.req({ sub: { topic: C.uid } }); await A.req({ pub: { topic: sa2.topic || C.uid, content: 'Сейчас позвоню' } });
-          }
-          process.exit(0);
-          EOF
-          node "$RUNNER_TEMP/seed.mjs" || echo "::warning::не удалось подготовить историю"
+        run: node ci/seed-chat.mjs || echo "::warning::не удалось подготовить историю"
 
       - name: Симулятор (iPhone, iOS 18 или 17)
         run: |
@@ -210,6 +185,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests \
             -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests \
+            -skip-testing:TinodiosUITests/Linia2DesignShots \
             -parallel-testing-enabled NO \
             -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
@@ -328,3 +304,190 @@ jobs:
           [ -n "$L2_REG_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_REG_LOGIN" "$L2_REG_PASSWORD" || true
           [ -n "$L2_PEER_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_PEER_LOGIN" "$L2_PEER_PASSWORD" || true
           [ -n "$L2_C_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_C_LOGIN" "$L2_C_PASSWORD" || true
+
+  # Дизайн-контроль: «фотограф» Linia2DesignShots на трёх iPhone × светлая/тёмная × обычный/крупный шрифт.
+  # Запуск: Actions → UI tests → Run workflow → design = true. Итог — артефакт design-shots
+  # (PNG <устройство>-<тема>-<шрифт>-<экран>-<состояние>.png).
+  design:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.design }}
+    runs-on: macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - device: se
+            types: "iPhone-SE-3rd-generation"
+            idx: 1
+          - device: iphone16
+            types: "iPhone-16 iPhone-15"
+            idx: 2
+          - device: promax
+            types: "iPhone-16-Pro-Max iPhone-15-Pro-Max"
+            idx: 3
+    env:
+      API: https://v2.chat-linia.site/invite/api
+      L2_D_NAME: Дизайн CI
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
+          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"; xcodebuild -version
+
+      - name: Подготовка
+        run: |
+          cp ci/GoogleService-Info.stub.plist GoogleService-Info.plist
+          which pod || sudo gem install cocoapods --no-document
+          pod install --repo-update
+
+      - name: Тестовые данные на сервере
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          [ -n "$CI_TOKEN" ] || { echo "::error::нет секрета CI_TOKEN"; exit 1; }
+          RUN="${{ github.run_id }}${{ github.run_attempt }}"; RUN="${RUN: -9}"
+          # A — пользователь приложения, D — «Дизайн CI» с подготовленной перепиской.
+          for who in "A:${RUN}${{ matrix.idx }}" "D:${RUN}$(( ${{ matrix.idx }} + 5 ))"; do
+            n=${who%%:*}; r=${who#*:}
+            curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
+                 -d "{\"run\":\"$r\"}" -o "$RUNNER_TEMP/$n.json"
+          done
+          python3 - "$RUNNER_TEMP/A.json" "$RUNNER_TEMP/D.json" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          a = json.load(open(sys.argv[1])); d = json.load(open(sys.argv[2]))
+          print(f"L2_LOGIN={a['login']}"); print(f"L2_PASSWORD={a['password']}")
+          print(f"L2_D_LOGIN={d['login']}"); print(f"L2_D_PASSWORD={d['password']}")
+          PY
+          echo "::add-mask::$(grep '^L2_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
+          echo "::add-mask::$(grep '^L2_D_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
+
+      - name: История переписки для теста
+        run: node ci/seed-chat.mjs || echo "::warning::не удалось подготовить дизайн-чат"
+
+      - name: Симулятор ${{ matrix.device }}
+        run: |
+          pick() { xcrun simctl list runtimes available | grep -o "com.apple.CoreSimulator.SimRuntime.iOS-$1-[0-9-]*" | sort -V | tail -1; }
+          RT=$(pick 18); [ -n "$RT" ] || RT=$(pick 17)
+          [ -n "$RT" ] || { echo "::error::нет симулятора iOS 18/17"; exit 1; }
+          UDID=""
+          for DT in ${{ matrix.types }}; do
+            UDID=$(xcrun simctl create "L2 design $DT" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
+          done
+          [ -n "$UDID" ] || { echo "::error::не удалось создать ${{ matrix.types }} на $RT"; xcrun simctl list devicetypes; exit 1; }
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          echo "Симулятор ${{ matrix.device }}: $(xcrun simctl list devices | grep "$UDID" | sed 's/^ *//')" | tee -a "$GITHUB_STEP_SUMMARY"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
+          for k in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do
+            xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences $k -bool true || true
+          done
+          xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false || true
+
+      - name: Сборка
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            ENABLE_TESTABILITY=YES \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E 'error:|\*\* TEST BUILD' || true
+          grep -q '\*\* TEST BUILD SUCCEEDED \*\*' "$RUNNER_TEMP/build.log"
+
+      - name: Снимки (тема × шрифт)
+        run: |
+          XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+          [ -n "$XR" ] || { echo "::error::нет .xctestrun"; exit 1; }
+          for k in microphone camera photos; do xcrun simctl privacy "$UDID" grant $k info.codix.liniya2 || true; done
+          mkdir -p "$RUNNER_TEMP/design/png"
+          for THEME in light dark; do
+            for FONT in normal large; do
+              TAG="${{ matrix.device }}-$THEME-$FONT"
+              xcrun simctl ui "$UDID" appearance "$THEME" || true
+              if [ "$FONT" = large ]; then xcrun simctl ui "$UDID" content_size accessibility-large || true
+              else xcrun simctl ui "$UDID" content_size large || true; fi
+              TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_D_NAME="$L2_D_NAME" \
+              TEST_RUNNER_L2_THEME="$THEME" TEST_RUNNER_L2_FONT="$FONT" \
+                xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+                  -only-testing:TinodiosUITests/Linia2DesignShots -resultBundlePath "$RUNNER_TEMP/design/$TAG.xcresult" \
+                  2>&1 | tee "$RUNNER_TEMP/design/$TAG.log" | grep -E 'error:|Test Case .* (passed|failed)|\*\* TEST' || true
+              OUT="$RUNNER_TEMP/design/att-$TAG"; mkdir -p "$OUT"
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/design/$TAG.xcresult" --output-path "$OUT" >/dev/null 2>&1 || true
+              python3 - "$OUT" "$TAG" "$RUNNER_TEMP/design/png" <<'PY'
+          import json, os, re, shutil, sys
+          src, tag, dst = sys.argv[1:4]
+          try:
+              manifest = json.load(open(os.path.join(src, "manifest.json")))
+          except Exception:
+              manifest = []
+          seen = {}
+          def walk(o):
+              if isinstance(o, dict):
+                  f = o.get("exportedFileName")
+                  if f:
+                      name = o.get("suggestedHumanReadableName") or o.get("name") or f
+                      m = re.search(r"design-([A-Za-z0-9-]+?)(?:_\d+_[0-9A-Fa-f-]+)?\.(png|jpe?g|heic)$", name) or re.search(r"design-([A-Za-z0-9-]+)", name)
+                      if m and os.path.exists(os.path.join(src, f)):
+                          base = f"{tag}-{m.group(1)}"
+                          seen[base] = seen.get(base, 0) + 1
+                          suffix = "" if seen[base] == 1 else f"-{seen[base]}"
+                          shutil.copy(os.path.join(src, f), os.path.join(dst, base + suffix + os.path.splitext(f)[1]))
+                  for v in o.values(): walk(v)
+              elif isinstance(o, list):
+                  for v in o: walk(v)
+          walk(manifest)
+          print(tag, "снимков:", sum(seen.values()))
+          PY
+            done
+          done
+          N=$(ls "$RUNNER_TEMP/design/png" | wc -l | tr -d ' ')
+          echo "### Дизайн-снимки ${{ matrix.device }}: $N" >> "$GITHUB_STEP_SUMMARY"
+          ls "$RUNNER_TEMP/design/png" | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: design-shots-${{ matrix.device }}
+          path: ${{ runner.temp }}/design/png
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: design-logs-${{ matrix.device }}
+          path: ${{ runner.temp }}/design/*.log
+          if-no-files-found: ignore
+
+      - name: Удалить тестовых пользователей
+        if: always()
+        run: |
+          cat > "$RUNNER_TEMP/del.mjs" <<'EOF'
+          const [login, pass] = process.argv.slice(2);
+          const ws = new WebSocket('wss://v2.chat-linia.site/v0/channels?apikey=AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K');
+          const send = o => ws.send(JSON.stringify(o));
+          ws.onopen = () => send({hi:{id:'1',ver:'0.25'}});
+          ws.onmessage = ev => { const m = JSON.parse(ev.data);
+            if (m.meta && m.meta.sub) for (const s of m.meta.sub) if (s.topic && s.topic !== 'me') send({del:{id:'t'+s.topic,topic:s.topic,what:'topic',hard:true}});
+            if (!m.ctrl) return;
+            if (m.ctrl.id==='1') send({login:{id:'2',scheme:'basic',secret:Buffer.from(login+':'+pass).toString('base64')}});
+            else if (m.ctrl.id==='2') { if (m.ctrl.code>=300) { console.log(login, 'вход', m.ctrl.code); process.exit(0); } send({sub:{id:'4',topic:'me',get:{what:'sub'}}}); }
+            else if (m.ctrl.id==='4') { setTimeout(() => send({del:{id:'3',what:'user',hard:true}}), 1500); }
+            else if (m.ctrl.id==='3') { console.log(login, 'удалён', m.ctrl.code); process.exit(0); } };
+          setTimeout(()=>{ console.log(login, 'таймаут'); process.exit(0); }, 15000);
+          EOF
+          [ -n "$L2_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_LOGIN" "$L2_PASSWORD" || true
+          [ -n "$L2_D_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_D_LOGIN" "$L2_D_PASSWORD" || true
+
+  design-shots:
+    needs: design
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.design }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact/merge@v4
+        with:
+          name: design-shots
+          pattern: design-shots-*

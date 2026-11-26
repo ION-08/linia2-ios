@@ -1,7 +1,8 @@
 //
 //  Linia2ChatChrome.swift
 //  Линия 2.0: экран чата как в Telegram —
-//   • плавающие полупрозрачные (blur) кнопки в шапке: «‹ Назад», по центру имя и статус, справа 📞 📹 ⏱ 🔍 ⋮;
+//   • плавающие полупрозрачные (blur) кнопки в шапке: «‹ Назад», по центру имя и статус, справа 📞 📹 ⏱ 🔍
+//     (без «⋮»: блокировка, жалоба, автоудаление, информация — по нажатию на аватар/имя, экран «Информация о чате»);
 //   • поиск по чату: поле, ↑/↓ и счётчик «3 из 12», переход к сообщению с подсветкой (загруженные + догрузка истории);
 //   • один фон чата с лёгким узором-пульсом (без серых полос), плавающая скруглённая полупрозрачная строка ввода;
 //   • «Избранное» — чат с самим собой (топик slf): закреплено сверху списка чатов, пересылка «в Избранное».
@@ -10,7 +11,8 @@
 //   features.chatFloatingHeader, features.chatSearch, features.chatPattern, features.chatFloatingInput,
 //   features.savedMessages — по умолчанию true;
 //   chatHeader.buttons — кнопки справа по порядку, из "call", "video", "burn", "search", "more"
-//     (по умолчанию все пять; 📞/📹/⏱ показываются, только если доступны в этом чате);
+//     (по умолчанию ["call","video","burn","search"]; "more" — «⋮» только если сервер явно указал;
+//      📞/📹/⏱ показываются, только если доступны в этом чате);
 //   chatStyle.patternOpacity — заметность узора 0…0.12 (по умолчанию 0.035; 0 — без узора);
 //   texts: l2.chat.back «Назад», l2.saved.title «Избранное», l2.saved.subtitle, l2.search.placeholder «Поиск в чате»,
 //     l2.search.counter «{i} из {n}», l2.search.none «Нет совпадений», l2.search.loading «Ищу в истории…».
@@ -31,8 +33,9 @@ enum Linia2Chrome {
     }
 
     static let knownButtons = ["call", "video", "burn", "search", "more"]
+    static let defaultButtons = ["call", "video", "burn", "search"]
     static var headerButtons: [String] {
-        guard let a = Linia2Config.shared.strings("chatHeader", "buttons") else { return knownButtons }
+        guard let a = Linia2Config.shared.strings("chatHeader", "buttons") else { return defaultButtons }
         return a.filter { knownButtons.contains($0) }
     }
 
@@ -170,7 +173,7 @@ extension MessageViewController {
         return g
     }
 
-    /// Справа: 📞 📹 ⏱ 🔍 ⋮ (по chatHeader.buttons) в одной пилюле.
+    /// Справа: 📞 📹 ⏱ 🔍 (по chatHeader.buttons) в одной пилюле.
     func linia2RightCapsule() -> UIView? {
         var buttons: [UIButton] = []
         let calls = (topic?.callsAllowed ?? false) && Linia2Config.shared.feature("calls")
@@ -482,9 +485,14 @@ extension ChatListViewController {
         row.isUserInteractionEnabled = false
         row.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(row)
+        // Высота как у строки чата (72 + отступ шапки 18 ≈ 88), содержимое — по вертикальному центру.
+        let h = v.heightAnchor.constraint(equalToConstant: 72)
+        h.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            row.topAnchor.constraint(equalTo: v.topAnchor, constant: 4),
-            row.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -4),
+            h,
+            row.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            row.topAnchor.constraint(greaterThanOrEqualTo: v.topAnchor, constant: 4),
+            row.bottomAnchor.constraint(lessThanOrEqualTo: v.bottomAnchor, constant: -4),
             row.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             row.trailingAnchor.constraint(equalTo: v.trailingAnchor),
         ])

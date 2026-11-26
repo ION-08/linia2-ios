@@ -8,6 +8,16 @@ import MobileVLCKit
 import UIKit
 import TinodeSDK
 
+extension UIFont {
+    /// LINIA2: шрифт стиля с Dynamic Type, но не крупнее `limit` — для времени, галочек и подписей
+    /// фиксированной высоты (при крупном шрифте не обрезаются и не наезжают на текст).
+    static func l2Capped(_ style: UIFont.TextStyle, limit: UIContentSizeCategory = .extraLarge) -> UIFont {
+        let cur = UIApplication.shared.preferredContentSizeCategory
+        let cat = cur > limit ? limit : cur
+        return UIFont.preferredFont(forTextStyle: style, compatibleWith: UITraitCollection(preferredContentSizeCategory: cat))
+    }
+}
+
 /// A protocol used to detect events in the chat message.
 protocol MessageCellDelegate: AnyObject {
     /// Long tap anywhere in massage cell.
@@ -45,27 +55,24 @@ class MessageCell: UICollectionViewCell {
     var audioPlayer: VLCMediaPlayer?
     // Which entity is configured in the player: entity key.
     var mediaEntityKey: Int?
+    /// LINIA2: плеер остановлен нами (не дослушан) — без автоперехода к следующему.
+    var linia2StopRequested = false
 
     // MARK: - Initializers
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
-        if traitCollection.userInterfaceStyle == .dark {
-            backgroundColor = .black
-        } else {
-            backgroundColor = .white
-        }
+        // LINIA2: строки прозрачные — под всеми сообщениями один общий фон чата.
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
         contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         setupSubviews()
     }
 
     public required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
-        if traitCollection.userInterfaceStyle == .dark {
-            backgroundColor = .black
-        } else {
-            backgroundColor = .white
-        }
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
         contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         setupSubviews()
     }
@@ -125,14 +132,14 @@ class MessageCell: UICollectionViewCell {
     /// Message timestamp.
     var timestampLabel: PaddedLabel = {
         let label = PaddedLabel()
-        label.font = UIFont.preferredFont(forTextStyle: .caption2)
+        label.font = UIFont.l2Capped(.caption2)
         return label
     }()
 
     /// Edited marker.
     var editedMarker: PaddedLabel = {
         let label = PaddedLabel()
-        label.font = UIFont.preferredFont(forTextStyle: .caption2).withTraits(traits: .traitItalic)
+        label.font = UIFont.l2Capped(.caption2).withTraits(traits: .traitItalic)
         label.textAlignment = .right
         label.adjustsFontSizeToFitWidth = true
         return label
@@ -152,6 +159,18 @@ class MessageCell: UICollectionViewCell {
     /// LINIA2: видео-кружок поверх содержимого (Linia2RoundVideo.swift).
     var linia2Round: Linia2RoundVideoView?
 
+    /// LINIA2: область кнопки ▶ голосового — для VoiceOver и автотестов (касания проходят насквозь в ячейку).
+    var linia2VoicePlay: UIView = {
+        let v = UIView()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        v.isAccessibilityElement = true
+        v.accessibilityTraits = .button
+        v.accessibilityLabel = "Голосовое сообщение"
+        v.isHidden = true
+        return v
+    }()
+
     /// The `MessageCellDelegate` for the cell.
     weak var delegate: MessageCellDelegate?
 
@@ -164,6 +183,7 @@ class MessageCell: UICollectionViewCell {
         containerView.addSubview(timestampLabel)
         containerView.addSubview(deliveryMarker)
         containerView.addSubview(editedMarker)
+        containerView.addSubview(linia2VoicePlay)
         contentView.addSubview(avatarView)
     }
 
@@ -178,6 +198,8 @@ class MessageCell: UICollectionViewCell {
 
         content.text = nil
         content.attributedText = nil
+        content.textAlignment = .natural
+        content.accessibilityIdentifier = nil
         newDateLabel.text = nil
         senderNameLabel.text = nil
         timestampLabel.text = nil
@@ -186,14 +208,20 @@ class MessageCell: UICollectionViewCell {
         avatarView.image = nil
         progressView.isHidden = true
         linia2MetaPill.isHidden = true
-        linia2Round?.stop()
-        linia2Round?.leftLabel.removeFromSuperview()
-        linia2Round?.removeFromSuperview()
+        // Кружок мог уже переехать в другую ячейку того же сообщения (reloadItems) — тогда его не трогаем.
+        if let r = linia2Round, r.superview === containerView {
+            r.stop()
+            r.leftLabel.removeFromSuperview()
+            r.removeFromSuperview()
+        }
         linia2Round = nil
+        linia2VoicePlay.isHidden = true
+        linia2VoicePlay.accessibilityIdentifier = nil
         content.isHidden = false
 
         isDeleted = false
 
+        linia2StopRequested = true
         audioPlayer?.stop()
         audioPlayer = nil
         seqId = 0
@@ -211,9 +239,9 @@ class MessageCell: UICollectionViewCell {
 
         let touchLocation = gesture.location(in: self)
 
-        // LINIA2: кружок — звук вкл/выкл; галочки своего сообщения — «Информация».
+        // LINIA2: кружок — воспроизведение/пауза; галочки своего сообщения — «Информация».
         if let r = linia2Round, r.superview != nil, r.frame.contains(convert(touchLocation, to: r.superview)) {
-            r.toggleSound()
+            r.togglePlay()
             return
         }
         if !linia2MetaPill.isHidden, linia2MetaPill.frame.insetBy(dx: -8, dy: -8).contains(convert(touchLocation, to: containerView)) {

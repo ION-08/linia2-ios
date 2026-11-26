@@ -196,15 +196,19 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         while Date() < end && roundElements().count <= before { usleep(500_000) }
         XCTAssertGreaterThan(roundElements().count, before, "кружок не появился в чате")
         let mine = roundElements().element(boundBy: roundElements().count - 1)
-        let playing = NSPredicate(format: "value CONTAINS 'играет'")
-        expectation(for: playing, evaluatedWith: mine)
+        // Без автозапуска: превью с ▶, «остановлено»; по нажатию — «играет», повторно — «пауза».
+        expectation(for: NSPredicate(format: "value == 'остановлено'"), evaluatedWith: mine)
         waitForExpectations(timeout: 30)
+        sleep(2)
+        XCTAssertFalse((mine.value as? String ?? "").contains("играет"), "кружок запустился сам")
         XCTAssertTrue(mine.label.contains("исчезнет через"), "нет значка «исчезнет через N дн.»: \(mine.label)")
         screenshot("round-sent")
         mine.tap()
-        expectation(for: NSPredicate(format: "value CONTAINS 'со звуком'"), evaluatedWith: mine)
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: mine)
         waitForExpectations(timeout: 10)
-        mine.tap()   // снова без звука
+        mine.tap()
+        expectation(for: NSPredicate(format: "value == 'пауза'"), evaluatedWith: mine)
+        waitForExpectations(timeout: 5)
         rec.tap()    // вернуть микрофон
         sleep(1)
 
@@ -220,13 +224,90 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         XCTAssertNotNil(seq, "собеседник не смог отправить кружок")
         let got = any("l2.round.\(seq ?? -1)")
         wait(got, "полученный кружок", timeout: 30)
-        expectation(for: playing, evaluatedWith: got)
+        expectation(for: NSPredicate(format: "value == 'остановлено'"), evaluatedWith: got)
         waitForExpectations(timeout: 40)
         got.tap()
-        expectation(for: NSPredicate(format: "value CONTAINS 'со звуком'"), evaluatedWith: got)
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: got)
         waitForExpectations(timeout: 10)
         screenshot("round-received-playing")
-        got.tap()
+        // Одновременно — только один кружок: запуск своего ставит полученный на паузу.
+        if mine.isHittable {
+            mine.tap()
+            expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: mine)
+            waitForExpectations(timeout: 10)
+            XCTAssertNotEqual(got.value as? String, "играет", "играют два кружка сразу")
+            mine.tap()
+        } else {
+            got.tap()
+        }
+        // Уход с экрана — стоп.
+        any("l2.chat.back").tap()
+        sleep(1)
+        openChat(with: peerName)
+        let again = any("l2.round.\(seq ?? -1)")
+        if again.waitForExistence(timeout: 10) {
+            XCTAssertNotEqual(again.value as? String, "играет", "кружок играет после ухода с экрана")
+        }
+    }
+
+    // MARK: - Голосовые: одно за другим, никогда одновременно
+
+    /// WAV 8 кГц, 8 бит, моно — тишина заданной длительности (VLC играет без сети).
+    static func silentWav(seconds: Int) -> Data {
+        let rate = 8000, n = rate * seconds
+        var d = Data()
+        func u32(_ v: Int) { var x = UInt32(v).littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func u16(_ v: Int) { var x = UInt16(v).littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        d.append("RIFF".data(using: .ascii)!); u32(36 + n); d.append("WAVE".data(using: .ascii)!)
+        d.append("fmt ".data(using: .ascii)!); u32(16); u16(1); u16(1); u32(rate); u32(rate); u16(1); u16(8)
+        d.append("data".data(using: .ascii)!); u32(n)
+        d.append(Data(repeating: 0x80, count: n))
+        return d
+    }
+
+    static func voiceDrafty(seconds: Int) -> [String: Any] {
+        let bars = Data((0..<48).map { UInt8(20 + ($0 * 37) % 80) })
+        return ["txt": " ", "fmt": [["at": 0, "len": 1, "key": 0]],
+                "ent": [["tp": "AU", "data": ["mime": "audio/wav", "name": "voice.wav", "duration": seconds * 1000,
+                                               "val": silentWav(seconds: seconds).base64EncodedString(),
+                                               "preview": bars.base64EncodedString()]]]]
+    }
+
+    func testM1_VoiceOneAtATimeAutoNext() throws {
+        openPeerChat()
+        let (b, topic) = try peer()
+        let s1 = b.publish(topic, content: Self.voiceDrafty(seconds: 3), head: ["mime": "text/x-drafty"])
+        let s2 = b.publish(topic, content: Self.voiceDrafty(seconds: 5), head: ["mime": "text/x-drafty"])
+        XCTAssertNotNil(s1, "собеседник не отправил голосовое 1")
+        XCTAssertNotNil(s2, "собеседник не отправил голосовое 2")
+        let v1 = wait(any("l2.voice.\(s1 ?? -1)"), "голосовое 1 в ленте", timeout: 30)
+        let v2 = wait(any("l2.voice.\(s2 ?? -1)"), "голосовое 2 в ленте", timeout: 30)
+        XCTAssertEqual(v1.value as? String, "не играет")
+        screenshot("voice-two")
+        v1.tap()
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: v1)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(v2.value as? String, "не играет", "при запуске первого играет и второе")
+        // Дослушали первое — автоматически второе; одновременно — никогда.
+        let end = Date().addingTimeInterval(20)
+        var both = false
+        while Date() < end && (v2.value as? String) != "играет" {
+            if (v1.value as? String) == "играет" && (v2.value as? String) == "играет" { both = true }
+            usleep(200_000)
+        }
+        XCTAssertFalse(both, "два голосовых играли одновременно")
+        XCTAssertEqual(v2.value as? String, "играет", "после первого не запустилось следующее голосовое")
+        XCTAssertEqual(v1.value as? String, "не играет", "первое не остановилось")
+        screenshot("voice-auto-next")
+        // Запуск другого останавливает текущее.
+        v1.tap()
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: v1)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(v2.value as? String, "не играет", "запуск первого не остановил второе")
+        // Повторное нажатие — пауза.
+        v1.tap()
+        expectation(for: NSPredicate(format: "value == 'не играет'"), evaluatedWith: v1)
+        waitForExpectations(timeout: 5)
     }
 
     // MARK: - Самоуничтожение: включить → отправить → прочитали → исчезло
@@ -396,7 +477,7 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         XCTAssertTrue(any("l2.chat.title").exists, "нет имени и статуса по центру шапки")
         XCTAssertTrue(labelContains(peerName).exists, "в шапке нет имени собеседника")
         XCTAssertTrue(any("l2.chat.search").exists, "нет 🔍 в шапке")
-        XCTAssertTrue(any("l2.chat.more").exists, "нет ⋮ в шапке")
+        XCTAssertFalse(any("l2.chat.more").exists, "«⋮» в шапке должен быть убран (действия — по нажатию на имя)")
         let title = any("l2.chat.title")
         XCTAssertLessThan(back.frame.maxX, title.frame.minX, "«Назад» не слева от имени")
         XCTAssertLessThan(title.frame.maxX, any("l2.chat.search").frame.minX, "🔍 не справа от имени")
@@ -470,5 +551,131 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         while Date() < end && fwd.count < 1 { usleep(500_000) }
         XCTAssertGreaterThanOrEqual(fwd.count, 1, "пересланное сообщение не появилось в «Избранном»")
         screenshot("saved-forwarded")
+    }
+
+    // MARK: - Экран переписки: шапка без «⋮», действия по имени, пузыри, системные плашки, русский текст
+
+    func testU1_ChatScreenLayout() throws {
+        openPeerChat()
+        let width = app.windows.firstMatch.frame.width
+        wait(any("l2.chat.title"), "имя и статус в шапке")
+        XCTAssertFalse(any("l2.chat.more").exists, "в шапке остался «⋮»")
+        XCTAssertTrue(any("l2.chat.search").exists, "нет 🔍 в шапке")
+        XCTAssertTrue(any("l2.chat.back").exists, "нет «‹ Назад»")
+
+        // Пузыри: своё длинное сообщение — не шире 80% экрана и не ближе 10 pt к правому краю.
+        let long = "Длинное " + Self.stamp + " " + String(repeating: "слово ", count: 40)
+        send(long)
+        let bubble = labelContains("Длинное " + Self.stamp)
+        XCTAssertLessThanOrEqual(bubble.frame.width, width * 0.8, "пузырь шире 80% экрана: \(bubble.frame.width) из \(width)")
+        XCTAssertLessThanOrEqual(bubble.frame.maxX, width - 10, "пузырь ближе 10 pt к краю экрана")
+        screenshot("chat-bubbles")
+
+        // Системная строка — компактная плашка по центру.
+        let (b, topic) = try peer()
+        b.publish(topic, content: peerName + " выключил(а) исчезающие сообщения", head: ["linia2-burnmode": "off"])
+        let svc = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'l2.service.'"))
+        let end = Date().addingTimeInterval(20)
+        while Date() < end && svc.count == 0 { usleep(300_000) }
+        if svc.count > 0 {
+            let pill = svc.element(boundBy: svc.count - 1)
+            XCTAssertLessThan(pill.frame.height, 44, "системная строка не компактная: \(pill.frame.height)")
+            XCTAssertLessThan(abs(pill.frame.midX - width / 2), 6, "системная строка не по центру")
+            screenshot("chat-service-pill")
+        } else {
+            XCTFail("нет системной строки об исчезающих сообщениях")
+        }
+        XCTAssertFalse(labelContains("missed").exists, "в чате английское «missed»")
+
+        // Действия бывшего «⋮» — по нажатию на имя: «Информация о чате» → «Пожаловаться», «Заблокировать».
+        any("l2.chat.title").tap()
+        let more = wait(any("l2.topicinfo.more"), "«Ещё» на экране информации о чате", timeout: 10)
+        screenshot("chat-info")
+        more.tap()
+        XCTAssertTrue(app.sheets.buttons["Пожаловаться"].firstMatch.waitForExistence(timeout: 5), "нет «Пожаловаться»")
+        XCTAssertTrue(app.sheets.buttons.matching(NSPredicate(format: "label ENDSWITH 'блокировать'")).firstMatch.exists, "нет «Заблокировать»")
+        app.sheets.buttons["Отмена"].firstMatch.tap()
+        sleep(1)
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        if back.exists { back.tap() }
+        wait(app.textViews["l2.chat.input"].firstMatch, "возврат в чат", timeout: 10)
+    }
+
+    // MARK: - Меню долгого нажатия: реакции в экране, «+» по центру, закрытие
+
+    private func openMenu(on text: String) {
+        labelContains(text).press(forDuration: 1.0)
+        wait(any("l2.menu.reactions"), "панель реакций", timeout: 5)
+    }
+
+    private func assertMenuClosed(_ how: String) {
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: any("l2.menu.reactions"))
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.textViews["l2.chat.input"].firstMatch.exists, "после закрытия (\(how)) нет чата")
+    }
+
+    func testU2_MessageMenuFitsAndCloses() {
+        openPeerChat()
+        let width = app.windows.firstMatch.frame.width
+        let text = "Меню " + Self.stamp
+        send(text)
+        openMenu(on: text)
+        let box = any("l2.menu.reactions")
+        XCTAssertGreaterThanOrEqual(box.frame.minX, 11, "панель реакций вылезает за левый край: \(box.frame)")
+        XCTAssertLessThanOrEqual(box.frame.maxX, width - 11, "панель реакций вылезает за правый край: \(box.frame)")
+        let plus = any("l2.react.more")
+        if plus.exists {
+            XCTAssertLessThanOrEqual(plus.frame.maxX, width - 12, "«+» обрезан справа")
+            XCTAssertLessThan(abs(plus.frame.midY - box.frame.midY), 4, "«+» не по центру панели по вертикали")
+            XCTAssertTrue(box.frame.contains(plus.frame), "«+» не целиком в панели")
+        }
+        screenshot("menu-open")
+        // 1) тап по затемнённому фону
+        any("l2.menu.backdrop").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        assertMenuClosed("тап по фону")
+        // 2) свайп вниз
+        openMenu(on: text)
+        any("l2.menu.backdrop").swipeDown()
+        assertMenuClosed("свайп вниз")
+        // 3) после выбора реакции
+        openMenu(on: text)
+        let first = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'l2.react.' AND identifier != 'l2.react.more' AND identifier != 'l2.react.all'")).firstMatch
+        wait(first, "эмодзи в панели").tap()
+        assertMenuClosed("выбор реакции")
+        // 4) после выбора пункта
+        openMenu(on: text)
+        wait(any("l2.menu.copy"), "«Копировать»").tap()
+        assertMenuClosed("выбор пункта")
+    }
+
+    // MARK: - Список чатов: одинаковая высота строк, текст по центру с аватаром, без двойного эмодзи
+
+    func testU3_ChatListRows() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.chats").tap(); sleep(2)
+        let cells = app.tables.firstMatch.cells
+        let n = min(cells.count, 6)
+        XCTAssertGreaterThan(n, 0, "список чатов пуст")
+        var heights: [CGFloat] = []
+        for i in 0..<n {
+            let c = cells.element(boundBy: i)
+            guard c.isHittable else { continue }
+            heights.append(c.frame.height)
+            let texts = c.staticTexts.allElementsBoundByIndex.filter { $0.frame.height > 0 && !$0.label.isEmpty }
+            guard let first = texts.first else { continue }
+            let union = texts.dropFirst().reduce(first.frame) { $0.union($1.frame) }
+            XCTAssertLessThan(abs(union.midY - c.frame.midY), 8, "строка \(i): имя и превью не по центру (\(union) в \(c.frame))")
+            XCTAssertGreaterThanOrEqual(union.minY, c.frame.minY, "строка \(i): текст обрезан сверху")
+            XCTAssertLessThanOrEqual(union.maxY, c.frame.maxY, "строка \(i): текст обрезан снизу")
+        }
+        if let h0 = heights.first {
+            XCTAssertTrue(heights.allSatisfy { abs($0 - h0) < 0.5 }, "разная высота строк: \(heights)")
+        }
+        // «🛡 Безопасность»: щит только в аватаре.
+        let sec = app.tables.firstMatch.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Безопасность'")).firstMatch
+        if sec.exists {
+            XCTAssertFalse(sec.label.hasPrefix("🛡"), "щит дублируется перед именем: «\(sec.label)»")
+        }
+        screenshot("chat-list-rows")
     }
 }

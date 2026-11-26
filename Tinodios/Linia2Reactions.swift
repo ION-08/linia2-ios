@@ -177,6 +177,8 @@ final class Linia2MessageMenuViewController: UIViewController {
     private let reactBox = UIView()
     private let moreRow = UIStackView()
     private var reactButtons: [UIButton] = []
+    private var listHeight: NSLayoutConstraint?
+    private weak var listHolder: UIView?
 
     init(anchor: CGRect, primary: [String], more: [String], fullList: Bool, selected: Set<String>, actions: [Linia2MenuAction]) {
         self.anchor = anchor
@@ -192,16 +194,19 @@ final class Linia2MessageMenuViewController: UIViewController {
 
     required init?(coder: NSCoder) { return nil }
 
+    /// Ширина ячейки эмодзи: 46 pt, на узком экране — меньше (до 36), чтобы ряд с «+» влез целиком.
+    private var emojiSide: CGFloat = 46
+
     private func emojiButton(_ e: String) -> UIButton {
         let b = UIButton(type: .custom)
         b.setTitle(e, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 36)   // системные эмодзи (Apple Color Emoji)
-        b.layer.cornerRadius = 22
+        b.titleLabel?.font = .systemFont(ofSize: (emojiSide * 36 / 46).rounded())   // системные эмодзи (Apple Color Emoji)
+        b.layer.cornerRadius = emojiSide / 2 - 1
         if selected.contains(e) { b.backgroundColor = L2.accent.withAlphaComponent(0.35) }
         b.accessibilityIdentifier = "l2.react." + e
         b.accessibilityLabel = e + (selected.contains(e) ? ", снять реакцию" : "")
-        b.widthAnchor.constraint(equalToConstant: 46).isActive = true
-        b.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        b.widthAnchor.constraint(equalToConstant: emojiSide).isActive = true
+        b.heightAnchor.constraint(equalToConstant: emojiSide + 2).isActive = true
         b.addAction(UIAction { [weak self, weak b] _ in
             guard let self = self, let b = b else { return }
             self.pick(e, from: b)
@@ -214,6 +219,7 @@ final class Linia2MessageMenuViewController: UIViewController {
         let row = UIStackView(arrangedSubviews: items)
         row.axis = .horizontal
         row.spacing = 0
+        row.alignment = .center   // «+» и эмодзи — по центру ряда по вертикали
         row.translatesAutoresizingMaskIntoConstraints = false
         let sc = UIScrollView()
         sc.showsHorizontalScrollIndicator = false
@@ -238,9 +244,30 @@ final class Linia2MessageMenuViewController: UIViewController {
         blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(blur)
         view.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        // Закрытие: тап по затемнённому фону, свайп вниз, после выбора пункта или реакции.
+        let backdrop = UIButton(type: .custom)
+        backdrop.frame = view.bounds
+        backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        backdrop.accessibilityIdentifier = "l2.menu.backdrop"
+        backdrop.accessibilityLabel = "Закрыть меню"
+        backdrop.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) }, for: .touchUpInside)
+        view.addSubview(backdrop)
         let tap = UITapGestureRecognizer(target: self, action: #selector(close(_:)))
         tap.cancelsTouchesInView = false
         view.addGestureRecognizer(tap)
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipedDown(_:)))
+        swipe.direction = .down
+        view.addGestureRecognizer(swipe)
+
+        // Ширина: целиком в экране с отступами 12 pt.
+        let screenW = view.bounds.width > 0 ? view.bounds.width : UIScreen.main.bounds.width
+        let width = min(screenW - 24, 470)
+        let plusW: CGFloat = (!more.isEmpty || fullList) ? 48 : 0
+        let fixed: CGFloat = 8 + 12 + plusW   // поля пилюли и ряда + «+»
+        if !primary.isEmpty {
+            let fit = (width - fixed) / CGFloat(primary.count)
+            emojiSide = max(36, min(46, fit.rounded(.down)))   // не влезло и при 36 — ряд прокручивается
+        }
 
         column.axis = .vertical
         column.spacing = 10
@@ -318,25 +345,44 @@ final class Linia2MessageMenuViewController: UIViewController {
             }
         }
         list.translatesAutoresizingMaskIntoConstraints = false
-        listBox.addSubview(list)
+        let listScroll = UIScrollView()
+        listScroll.translatesAutoresizingMaskIntoConstraints = false
+        listScroll.showsVerticalScrollIndicator = true
+        listScroll.alwaysBounceVertical = false
+        listScroll.accessibilityIdentifier = "l2.menu.actions"
+        listBox.addSubview(listScroll)
+        listScroll.addSubview(list)
+        let lh = listScroll.heightAnchor.constraint(equalToConstant: CGFloat(actions.count) * 46.5)
+        listHeight = lh
         NSLayoutConstraint.activate([
-            list.topAnchor.constraint(equalTo: listBox.topAnchor), list.bottomAnchor.constraint(equalTo: listBox.bottomAnchor),
-            list.leadingAnchor.constraint(equalTo: listBox.leadingAnchor), list.trailingAnchor.constraint(equalTo: listBox.trailingAnchor)])
+            listScroll.topAnchor.constraint(equalTo: listBox.topAnchor), listScroll.bottomAnchor.constraint(equalTo: listBox.bottomAnchor),
+            listScroll.leadingAnchor.constraint(equalTo: listBox.leadingAnchor), listScroll.trailingAnchor.constraint(equalTo: listBox.trailingAnchor),
+            lh,
+            list.topAnchor.constraint(equalTo: listScroll.contentLayoutGuide.topAnchor),
+            list.bottomAnchor.constraint(equalTo: listScroll.contentLayoutGuide.bottomAnchor),
+            list.leadingAnchor.constraint(equalTo: listScroll.contentLayoutGuide.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: listScroll.contentLayoutGuide.trailingAnchor),
+            list.widthAnchor.constraint(equalTo: listScroll.frameLayoutGuide.widthAnchor)])
         if !actions.isEmpty {
             let holder = UIView()
+            listHolder = listBox
             holder.addSubview(listBox)
             listBox.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 listBox.topAnchor.constraint(equalTo: holder.topAnchor), listBox.bottomAnchor.constraint(equalTo: holder.bottomAnchor),
                 listBox.leadingAnchor.constraint(equalTo: holder.leadingAnchor),
-                listBox.widthAnchor.constraint(equalToConstant: 250)])
+                listBox.widthAnchor.constraint(equalToConstant: min(250, width))])
             column.addArrangedSubview(holder)
         }
         view.addSubview(column)
 
-        let width = min(view.bounds.width - 24, 470)
-        let height = (primary.isEmpty ? 0 : 66) + CGFloat(actions.count) * 46.5 + 4
         let safe = view.safeAreaLayoutGuide.layoutFrame.isEmpty ? view.bounds.insetBy(dx: 0, dy: 50) : view.safeAreaLayoutGuide.layoutFrame
+        // Список действий не выше экрана (SE, крупный шрифт) — иначе прокрутка.
+        let reactH: CGFloat = primary.isEmpty ? 0 : 66
+        let listMax = max(140, safe.height - 16 - reactH)
+        let listH = min(CGFloat(actions.count) * 46.5, listMax)
+        listHeight?.constant = listH
+        let height = reactH + listH + 4
         var y = anchor.maxY + 8
         if y + height > safe.maxY - 8 { y = anchor.minY - height - 8 }
         y = max(safe.minY + 8, min(y, safe.maxY - height - 8))
@@ -389,7 +435,14 @@ final class Linia2MessageMenuViewController: UIViewController {
     private func openFullList() {
         let picker = Linia2EmojiPickerViewController()
         picker.onPick = { [weak self] e in
-            self?.dismiss(animated: false) { self?.onReact?(e) }
+            // Закрыть и список эмодзи, и само меню.
+            guard let self = self else { return }
+            let react = self.onReact
+            if let host = self.presentingViewController {
+                host.dismiss(animated: true) { react?(e) }
+            } else {
+                self.dismiss(animated: false) { react?(e) }
+            }
         }
         present(picker, animated: true)
     }
@@ -422,7 +475,22 @@ final class Linia2MessageMenuViewController: UIViewController {
 
     @objc private func close(_ g: UITapGestureRecognizer) {
         let p = g.location(in: view)
-        if !column.frame.contains(p) { dismiss(animated: true) }
+        if view.hitTest(p, with: nil) is UIButton { return }   // кнопки (в т.ч. фон-«закрыть») обрабатывают сами
+        // Вне пилюли реакций и списка действий (а не всей колонки) — закрыть.
+        let boxes = [reactBox, listHolder].compactMap { $0 }.filter { $0.window != nil }
+        if !boxes.contains(where: { $0.convert($0.bounds, to: view).contains(p) }) && presentedViewController == nil {
+            dismiss(animated: true)
+        }
+    }
+
+    @objc private func swipedDown(_ g: UISwipeGestureRecognizer) {
+        guard presentedViewController == nil else { return }
+        dismiss(animated: true)
+    }
+
+    override func accessibilityPerformEscape() -> Bool {
+        dismiss(animated: true)
+        return true
     }
 }
 

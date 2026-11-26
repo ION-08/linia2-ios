@@ -66,7 +66,7 @@
 "Cancel" = "Отменить";
 
 /* Label for cancelled call */
-"cancelled" = "отменен";
+"cancelled" = "Отменён";
 
 /* Error message */
 "Cannot send email: functionality not accessible." = "Невозможно отправить емейл: функция недоступна.";
@@ -105,7 +105,7 @@
 "Confirming..." = "Проверка...";
 
 /* Label for initiated call */
-"connecting" = "соединяется";
+"connecting" = "Соединение…";
 
 /* Toast notification */
 "Connection to server lost." = "Свясь с сервером потеряна.";
@@ -215,7 +215,7 @@
 "Ignore" = "Игнорировать";
 
 /* Label for call in progress */
-"in progress" = "в процессе";
+"in progress" = "Идёт звонок";
 
 /* Label for incoming video/audio calls */
 "Incoming call" = "Входящий звонок";
@@ -499,3 +499,9 @@ Menu item: video call */
 /* Placeholder when no chats found */
 "You have no chats\n\n¯\\_(ツ)_/¯" = "Нет чатов\n\n¯\\_(ツ)_/¯";
 
+
+/* LINIA2: статусы звонков */
+"missed" = "Пропущенный";
+"busy" = "Занято";
+"declined" = "Отклонён";
+"disconnected" = "Не состоялся";

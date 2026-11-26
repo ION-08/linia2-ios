@@ -77,6 +77,7 @@
 		0ADDBC8B2249F617000BD00D /* ChatListViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ADDBC8A2249F617000BD00D /* ChatListViewCell.swift */; };
 		4C32CA11C0DE000000000002 /* Linia2CallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32CA11C0DE000000000001 /* Linia2CallTests.swift */; };
 		4C32B0A1C0DE000000000008 /* Linia2FeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE000000000007 /* Linia2FeatureTests.swift */; };
+		4C32B0A1C0DE00000000DE52 /* Linia2DesignShots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE00000000DE51 /* Linia2DesignShots.swift */; };
 		0AE21E4E28D21849008F486C /* TinodiosUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21E4D28D21849008F486C /* TinodiosUITests.swift */; };
 		0AE21E5028D21849008F486C /* TinodiosUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */; };
 		0AE50D4422156A250021F7B7 /* FindViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE50D4322156A250021F7B7 /* FindViewController.swift */; };
@@ -283,6 +284,7 @@
 		0AE21E4B28D21849008F486C /* TinodiosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TinodiosUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C32CA11C0DE000000000001 /* Linia2CallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2CallTests.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE000000000007 /* Linia2FeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2FeatureTests.swift; sourceTree = "<group>"; };
+		4C32B0A1C0DE00000000DE51 /* Linia2DesignShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2DesignShots.swift; sourceTree = "<group>"; };
 		0AE21E4D28D21849008F486C /* TinodiosUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinodiosUITests.swift; sourceTree = "<group>"; };
 		0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinodiosUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		0AE50D4322156A250021F7B7 /* FindViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindViewController.swift; sourceTree = "<group>"; };
@@ -603,6 +605,7 @@
 				0AE21E4D28D21849008F486C /* TinodiosUITests.swift */,
 				4C32CA11C0DE000000000001 /* Linia2CallTests.swift */,
 				4C32B0A1C0DE000000000007 /* Linia2FeatureTests.swift */,
+				4C32B0A1C0DE00000000DE51 /* Linia2DesignShots.swift */,
 				0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */,
 			);
 			path = TinodiosUITests;
@@ -1214,6 +1217,7 @@
 				0AE21E4E28D21849008F486C /* TinodiosUITests.swift in Sources */,
 				4C32CA11C0DE000000000002 /* Linia2CallTests.swift in Sources */,
 				4C32B0A1C0DE000000000008 /* Linia2FeatureTests.swift in Sources */,
+				4C32B0A1C0DE00000000DE52 /* Linia2DesignShots.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

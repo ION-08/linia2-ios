@@ -24,13 +24,13 @@ enum MediaRecorderError: LocalizedError, CustomStringConvertible {
         get {
             switch self {
             case .permissionDenyed:
-                return "Permission denyed"
+                return "Нет доступа к микрофону"
             case .unknownPermission:
-                return "Unknown permission"
+                return "Неизвестное разрешение"
             case .permissionRequested:
-                return "Permission requested"
+                return "Запрошено разрешение"
             case .cancelledByUser:
-                return "Cancelled by user"
+                return "Отменено"
             }
         }
     }

@@ -74,7 +74,7 @@ class CredentialsViewController: UIViewController {
             }, onFailure: { err in
                 Cache.log.error("Error validating credentials: %@", err.localizedDescription)
                 DispatchQueue.main.async {
-                    UiUtils.showToast(message: String(format: errorMsgTemplate, -1, "Invalid code"))
+                    UiUtils.showToast(message: String(format: errorMsgTemplate, -1, "Неверный код"))
                 }
                 return nil
             })

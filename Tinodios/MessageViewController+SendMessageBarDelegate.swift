@@ -59,6 +59,7 @@ extension MessageViewController: SendMessageBarDelegate {
                 UiUtils.showToast(message: "Голосовые сообщения временно отключены.", level: .info)
                 return
             }
+            Linia2Playback.shared.stopAll()   // LINIA2: запись голосового — воспроизведение стоп
             Cache.mediaRecorder.delegate = self
             Cache.mediaRecorder.start()
         case .stopAndSend:
@@ -79,6 +80,8 @@ extension MessageViewController: SendMessageBarDelegate {
             (self.inputAccessoryView as! SendMessageBar).audioPlaybackAction(.playbackReset)
         case .playbackStart:
             if let recordURL = Cache.mediaRecorder.recordFileURL {
+                Linia2Playback.shared.stopAll()   // LINIA2: прослушивание записи — остальное стоп
+                currentAudioPlayer?.stop()
                 currentAudioPlayer = VLCMediaPlayer()
                 currentAudioPlayer!.delegate = self
                 currentAudioPlayer!.media = VLCMedia(url: recordURL)
