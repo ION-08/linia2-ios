@@ -69,7 +69,10 @@ for kind, title in (("unit", "Юнит-тесты"), ("ui", "UI-тесты (XCUI
             why = "; ".join(dict.fromkeys(failures(tc)))[:300]
             rows.append(f"| {suite}.{name} | {status} | {why} |")
     lines.append(f"\n### {title}\n| Тест | Итог | Причина |\n|---|---|---|")
-    lines.extend(rows or ["| — | тестов не найдено | |"])
+    if not rows:
+        total["failed"] += 1
+        rows = ["| — | ❌ тестов не найдено (сборка тестов не прошла — см. лог) | |"]
+    lines.extend(rows)
 
 head = (f"## Итог тестов: прошло {total['passed']}, упало {total['failed']}, пропущено {total['skipped']}"
         + (f", нестабильных (прошли после перезапуска) {total['flaky']}" if total["flaky"] else ""))
