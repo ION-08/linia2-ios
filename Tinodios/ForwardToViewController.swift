@@ -31,6 +31,10 @@ class ForwardToViewController: FindViewController {
     var forwardedFrom: String!
     var forwardedPreview: Drafty!
 
+    /// LINIA2: пересылка не спрашивает доступ к Контактам — раньше первое «Переслать» открывало системный лист
+    /// «How do you want to share contacts?» поверх окна, и выбрать чат/«Избранное» было нельзя.
+    override var linia2SyncsContacts: Bool { false }
+
     // Use ForwardToInterator for the business logic.
     override func createDependencies() -> (FindBusinessLogic, FindPresentationLogic) {
         var sourceTopic = forwardedFrom!

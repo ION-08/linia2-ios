@@ -64,6 +64,10 @@ class FindViewController: UITableViewController, FindDisplayLogic {
         return (FindInteractor(), FindPresenter())
     }
 
+    /// LINIA2: запускать синхронизацию контактов телефона (и, значит, системный запрос доступа к Контактам).
+    /// Окну пересылки контакты телефона не нужны — оно показывает только свои чаты и «Избранное».
+    var linia2SyncsContacts: Bool { true }
+
     private func setup() {
         let viewController = self
         var (interactor, presenter) = createDependencies()
@@ -95,7 +99,7 @@ class FindViewController: UITableViewController, FindDisplayLogic {
         searchController.searchBar.delegate = self
         self.definesPresentationContext = true
 
-        if !Cache.isContactSynchronizerActive() {
+        if linia2SyncsContacts && !Cache.isContactSynchronizerActive() {
             Cache.synchronizeContactsPeriodically()
         }
         self.updateSearchBarPlaceholder(authStatus: ContactsSynchronizer.default.authStatus)
