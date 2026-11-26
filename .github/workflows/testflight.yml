@@ -7,13 +7,10 @@
 #   GOOGLE_SERVICE_INFO_PLIST_BASE64 — (необязательно) GoogleService-Info.plist для push через Firebase
 name: TestFlight
 
-# Автоматически: после успешного «UI tests» на push в main (юнит-тесты + XCUITest → сборка → TestFlight).
-# Вручную: workflow_dispatch (тогда UI-тест запускается внутри этого workflow).
+# ТОЛЬКО вручную (решение владельца 26.11.2026): промежуточные сборки в TestFlight не загружаются.
+# Одна загрузка — когда выполнены все задания и большой автотест (e2e) прошёл 2 раза подряд.
+# Перед сборкой внутри workflow снова прогоняются юнит-тесты + XCUITest; упал хоть один — загрузки нет.
 on:
-  workflow_run:
-    workflows: ["UI tests"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -36,7 +33,7 @@ jobs:
     # Сборка: тест прошёл / пропущен, либо тест упал без вылетов приложения (сбой шага симулятора).
     # Загрузка только если ВСЕ тесты (юнит + XCUITest) прошли: автоматически — после «UI tests» на push,
     # вручную — после тестов внутри этого workflow. Упал хоть один тест — сборки и загрузки нет.
-    if: ${{ always() && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') || (github.event_name == 'workflow_dispatch' && needs.uitest.result == 'success')) }}
+    if: ${{ always() && ((github.event_name == 'workflow_dispatch' && needs.uitest.result == 'success')) }}
     runs-on: macos-26
     timeout-minutes: 90
     env:

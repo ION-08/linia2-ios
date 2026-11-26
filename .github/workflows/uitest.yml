@@ -6,7 +6,7 @@
 name: UI tests
 
 # Автоматически на каждый push в main (репозиторий публичный — минуты бесплатные).
-# Если тест прошёл, workflow «TestFlight» сам собирает и загружает сборку (workflow_run).
+# Загрузка в TestFlight — только вручную (testflight.yml), когда выполнены все задания и e2e прошёл 2 раза подряд.
 on:
   push:
     branches: [main]

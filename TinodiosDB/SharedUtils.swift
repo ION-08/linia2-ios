@@ -287,7 +287,39 @@ public class SharedUtils {
     // LINIA2_FIXED_SERVER: адрес сервера зашит в приложение и не меняется пользователем.
     public static let kLinia2Host = "v2.chat-linia.site"
     static func getConnectionSettings() -> (hostName: String?, useTLS: Bool?) {
-        return (hostName: kLinia2Host, useTLS: true)
+        return (hostName: linia2ActiveHost, useTLS: true)
+    }
+
+    // LINIA2_FAILOVER: список адресов одного и того же сервера (servers.hosts из удалённых настроек).
+    // Хранится в общих настройках App Group — его видит и расширение уведомлений.
+    private static let kL2Hosts = "linia2.hosts"
+    private static let kL2Active = "linia2.activeHost"
+
+    public static func linia2IsValidHost(_ h: String) -> Bool {
+        h.count < 100 && h.range(of: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", options: .regularExpression) != nil
+    }
+
+    /// Адреса по приоритету; первый — основной. Без настроек — только встроенный.
+    public static var linia2Hosts: [String] {
+        var seen = Set<String>()
+        let list = (kAppDefaults.stringArray(forKey: kL2Hosts) ?? []).map { $0.lowercased() }
+            .filter { linia2IsValidHost($0) && seen.insert($0).inserted }
+        return list.isEmpty ? [kLinia2Host] : Array(list.prefix(10))
+    }
+
+    public static func linia2SetHosts(_ hosts: [String]) {
+        let clean = hosts.map { $0.lowercased() }.filter(linia2IsValidHost)
+        kAppDefaults.set(clean.isEmpty ? nil : clean, forKey: kL2Hosts)
+        if !linia2Hosts.contains(linia2ActiveHost) { linia2ActiveHost = linia2Hosts[0] }
+    }
+
+    /// Адрес, к которому подключаемся сейчас.
+    public static var linia2ActiveHost: String {
+        get {
+            let h = kAppDefaults.string(forKey: kL2Active) ?? ""
+            return linia2Hosts.contains(h) ? h : linia2Hosts[0]
+        }
+        set { kAppDefaults.set(newValue, forKey: kL2Active) }
     }
 
     static func setConnectionSettings(_ hostName: String?, _ useTLS: String?) {

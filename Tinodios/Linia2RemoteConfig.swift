@@ -8,6 +8,9 @@
 import UIKit
 import WebKit
 import ObjectiveC
+import Network
+import TinodeSDK
+import TinodiosDB
 
 final class Linia2Config {
     static let shared = Linia2Config()
@@ -38,6 +41,22 @@ final class Linia2Config {
         if let u = cacheURL, let d = try? Data(contentsOf: u), let obj = Self.validate(d) {
             data = obj
         }
+        applyHosts()
+    }
+
+    /// Адреса сервера (servers.hosts) → общие настройки для подключения и расширения уведомлений.
+    var serverHosts: [String]? {
+        guard let a = section("servers")["hosts"] as? [Any] else { return nil }
+        let h = a.compactMap { $0 as? String }.filter(SharedUtils.linia2IsValidHost)
+        return h.isEmpty ? nil : h
+    }
+    var probePath: String {
+        let p = section("servers")["probe"] as? String ?? ""
+        return p.hasPrefix("/") && p.count < 100 ? p : "/l2-version.json"
+    }
+    private func applyHosts() {
+        guard !testOverride || serverHosts != nil else { return }
+        if let h = serverHosts { SharedUtils.linia2SetHosts(h) }
     }
 
     /// Как часто перечитывать конфиг (live.pollSeconds, не чаще раза в минуту).
@@ -74,16 +93,29 @@ final class Linia2Config {
     func fetch() {
         if testOverride { return }
         lastFetch = Date()
-        guard let u = URL(string: url + "?t=\(Int(Date().timeIntervalSince1970))") else { return }
-        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 15)
+        // По очереди: активный адрес, затем остальные (резервные) — конфиг доступен, даже если основной заблокирован.
+        let active = SharedUtils.linia2ActiveHost
+        let hosts = [active] + SharedUtils.linia2Hosts.filter { $0 != active }
+        fetch(from: hosts)
+    }
+
+    private func fetch(from hosts: [String]) {
+        guard let host = hosts.first,
+              let u = URL(string: "https://\(host)/app-config.json?t=\(Int(Date().timeIntervalSince1970))") else { return }
+        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
         req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         URLSession.shared.dataTask(with: req) { [weak self] d, resp, _ in
-            guard let self = self, let d = d, (resp as? HTTPURLResponse)?.statusCode == 200, let obj = Self.validate(d) else { return }
+            guard let self = self else { return }
+            guard let d = d, (resp as? HTTPURLResponse)?.statusCode == 200, let obj = Self.validate(d) else {
+                if hosts.count > 1 { self.fetch(from: Array(hosts.dropFirst())) }
+                return
+            }
             self.queue.async {
                 let changed = (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) !=
                     (try? JSONSerialization.data(withJSONObject: self.data, options: [.sortedKeys]))
                 guard changed else { return }
                 self.data = obj
+                self.applyHosts()
                 if let cu = self.cacheURL {
                     try? FileManager.default.createDirectory(at: cu.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try? d.write(to: cu, options: .atomic)
@@ -482,5 +514,130 @@ extension Linia2Config {
     var welcomeImageURL: URL? {
         if let first = welcomeSlides.first { return first }
         return image("welcomeImageUrl")
+    }
+}
+
+
+// MARK: - Резервные адреса и статус соединения (LINIA2_FAILOVER)
+
+/// Следит за соединением: при таймауте/обрывах переключает на следующий адрес из servers.hosts,
+/// раз в минуту проверяет основной и возвращается на него. Пользователь видит только «Подключение…».
+final class Linia2Failover: TinodeEventListener {
+    static let shared = Linia2Failover()
+    private var failures: [Date] = []
+    private var attemptStarted: Date?
+    private var connected = false
+    private var timer: Timer?
+    private let monitor = NWPathMonitor()
+    private var networkOK = true
+    private var banner: UILabel?
+
+    func start() {
+        Cache.tinode.addListener(self)
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.networkOK = path.status == .satisfied
+                self?.updateBanner()
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "linia2.net"))
+        attemptStarted = Date()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    func onConnect(code: Int, reason: String, params: [String: JSONValue]?) {
+        DispatchQueue.main.async {
+            self.connected = true
+            self.failures.removeAll()
+            self.attemptStarted = nil
+            self.updateBanner()
+        }
+    }
+
+    func onDisconnect(byServer: Bool, code: URLSessionWebSocketTask.CloseCode, reason: String) {
+        DispatchQueue.main.async {
+            self.connected = false
+            let now = Date()
+            if self.attemptStarted == nil { self.attemptStarted = now }
+            self.failures.append(now)
+            self.failures = self.failures.filter { now.timeIntervalSince($0) < 60 }
+            if self.failures.count >= 3 { self.switchToNext("3 обрыва за минуту") }
+            self.updateBanner()
+        }
+    }
+
+    private var lastProbe = Date.distantPast
+    private func tick() {
+        updateBanner()
+        // Нет ответа дольше 8 с при живой сети — следующий адрес.
+        if !connected, networkOK, let t = attemptStarted, Date().timeIntervalSince(t) > 8, Cache.tinode.myUid != nil {
+            switchToNext("таймаут подключения")
+        }
+        // На резервном — раз в минуту проверяем основной.
+        let primary = SharedUtils.linia2Hosts[0]
+        if SharedUtils.linia2ActiveHost != primary, Date().timeIntervalSince(lastProbe) > 60 {
+            lastProbe = Date()
+            probe(primary) { [weak self] ok in if ok { self?.use(primary, why: "основной снова доступен") } }
+        }
+    }
+
+    private func probe(_ host: String, _ done: @escaping (Bool) -> Void) {
+        guard let u = URL(string: "https://\(host)\(Linia2Config.shared.probePath)?t=\(Int(Date().timeIntervalSince1970))") else { return done(false) }
+        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 5)
+        req.httpMethod = "GET"
+        URLSession.shared.dataTask(with: req) { _, r, e in
+            DispatchQueue.main.async { done(e == nil && (r as? HTTPURLResponse)?.statusCode == 200) }
+        }.resume()
+    }
+
+    private func switchToNext(_ why: String) {
+        let hosts = SharedUtils.linia2Hosts
+        guard hosts.count > 1 else { attemptStarted = Date(); return }
+        let i = hosts.firstIndex(of: SharedUtils.linia2ActiveHost) ?? 0
+        use(hosts[(i + 1) % hosts.count], why: why)
+    }
+
+    private func use(_ host: String, why: String) {
+        guard host != SharedUtils.linia2ActiveHost || !connected else { return }
+        Cache.log.info("Linia2: адрес сервера → %@ (%@)", host, why)
+        SharedUtils.linia2ActiveHost = host
+        failures.removeAll()
+        attemptStarted = Date()
+        Cache.tinode.linia2SwitchHost(to: host)
+    }
+
+    /// Плашка сверху: «Нет соединения» (нет сети) или «Подключение…» (сеть есть, сервер ещё не ответил).
+    private func updateBanner() {
+        let show = Cache.tinode.myUid != nil && !connected && (attemptStarted.map { Date().timeIntervalSince($0) > 2 } ?? true)
+        guard let window = Linia2Root.window else { return }
+        if !show { banner?.removeFromSuperview(); banner = nil; return }
+        let l = banner ?? {
+            let l = PaddedLabelL2()
+            l.font = L2.font(13, .semibold)
+            l.textColor = L2.textPrimary
+            l.backgroundColor = L2.surface2.withAlphaComponent(0.95)
+            l.layer.cornerRadius = 14
+            l.clipsToBounds = true
+            l.textAlignment = .center
+            l.accessibilityIdentifier = "l2.connection.status"
+            l.translatesAutoresizingMaskIntoConstraints = false
+            window.addSubview(l)
+            NSLayoutConstraint.activate([l.centerXAnchor.constraint(equalTo: window.centerXAnchor),
+                                         l.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 4),
+                                         l.heightAnchor.constraint(equalToConstant: 28)])
+            banner = l
+            return l
+        }()
+        l.text = networkOK ? L2T("l2.net.connecting", "Подключение…") : L2T("l2.net.offline", "Нет соединения")
+        window.bringSubviewToFront(l)
+    }
+}
+
+final class PaddedLabelL2: UILabel {
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.insetBy(dx: 14, dy: 0)) }
+    override var intrinsicContentSize: CGSize {
+        let s = super.intrinsicContentSize
+        return CGSize(width: s.width + 28, height: s.height)
     }
 }

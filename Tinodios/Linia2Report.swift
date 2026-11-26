@@ -247,8 +247,64 @@ extension TopicInfoViewController {
                 Linia2Moderation.confirmToggleBlock(from: self, topic: topic)
             })
         }
+        if Linia2Config.shared.feature("disappearing") {
+            let cur = Linia2Disappearing.ttl(for: name)
+            sheet.addAction(UIAlertAction(title: "Исчезающие сообщения: " + Linia2Disappearing.title(cur), style: .default) { [weak self] _ in
+                guard let self = self else { return }
+                Linia2Disappearing.choose(for: name, from: self, barItem: sender)
+            })
+        }
         sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
         Linia2Moderation.anchor(sheet, in: self, sourceView: nil, barItem: sender)
         present(sheet, animated: true)
+    }
+}
+
+
+// MARK: - Исчезающие сообщения (выбор в «⋯» информации о чате)
+
+enum Linia2Disappearing {
+    static let kHeader = "linia2-ttl"
+    static let options: [(Int, String)] = [(0, "Выкл."), (3600, "1 час"), (86400, "1 день"), (7 * 86400, "7 дней"), (30 * 86400, "30 дней")]
+
+    private static func key(_ topic: String) -> String { "linia2.ttl." + topic }
+
+    /// Срок жизни новых сообщений в этом чате (секунд) или nil — выключено.
+    static func ttl(for topic: String) -> Int? {
+        guard Linia2Config.shared.feature("disappearing") else { return nil }
+        let v = UserDefaults.standard.integer(forKey: key(topic))
+        return v > 0 ? v : nil
+    }
+
+    static func title(_ ttl: Int?) -> String { options.first { $0.0 == (ttl ?? 0) }?.1 ?? "Выкл." }
+
+    /// Сообщение с linia2-ttl, срок которого истёк.
+    static func isExpired(_ m: Message) -> Bool {
+        guard let head = m.head, let v = head[kHeader], let ts = m.ts else { return false }
+        var secs: Double = 0
+        switch v {
+        case .int(let i): secs = Double(i)
+        case .int64(let i): secs = Double(i)
+        case .double(let d): secs = d
+        case .string(let s): secs = Double(s) ?? 0
+        default: return false
+        }
+        return secs > 0 && Date().timeIntervalSince(ts) > secs
+    }
+
+    static func choose(for topic: String, from vc: UIViewController, barItem: UIBarButtonItem?) {
+        let sheet = UIAlertController(title: "Исчезающие сообщения",
+                                      message: "Новые сообщения в этом чате будут удаляться у всех через выбранное время.",
+                                      preferredStyle: .actionSheet)
+        let cur = ttl(for: topic) ?? 0
+        for (secs, name) in options {
+            sheet.addAction(UIAlertAction(title: (secs == cur ? "✓ " : "") + name, style: .default) { _ in
+                UserDefaults.standard.set(secs, forKey: key(topic))
+                UiUtils.showToast(message: secs == 0 ? "Исчезающие сообщения выключены" : "Новые сообщения исчезнут через " + name, level: .info)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        Linia2Moderation.anchor(sheet, in: vc, sourceView: nil, barItem: barItem)
+        vc.present(sheet, animated: true)
     }
 }

@@ -1035,6 +1035,19 @@ public class Tinode {
             return PromisedReply(error: error)
         }
     }
+    /// LINIA2_FAILOVER: сменить адрес сервера на лету (тот же сервер под другим доменом).
+    /// Вход по токену сохраняется — после подключения клиент войдёт заново автоматически.
+    public func linia2SwitchHost(to host: String) {
+        let changed: Bool = operationsQueue.sync {
+            guard host != hostName else { return false }
+            hostName = host
+            connection?.disconnect()
+            connection = nil
+            return true
+        }
+        if changed { _ = reconnectNow(interactively: true, reset: false) }
+    }
+
     public func disconnect() {
         operationsQueue.sync {
             // Remove auto-login data.

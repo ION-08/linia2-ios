@@ -36,6 +36,7 @@ extension MessageViewController {
         var visible: [StoredMessage] = []
         visible.reserveCapacity(all.count)
         for m in all {
+            if Linia2Disappearing.isExpired(m) { continue }   // истёкшие исчезающие сообщения не показываем
             if let head = m.head, case .string(let emoji)? = head[Self.kL2UnreactHeader],
                case .string(let target)? = head["reply"], let seq = Int(target) {
                 let from = m.from ?? ""

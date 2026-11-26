@@ -89,6 +89,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         SharedUtils.registerUserDefaults()
         // LINIA2: удалённые настройки (цвета, тексты, функции) — до применения темы.
         Linia2Config.shared.start()
+        DispatchQueue.main.async { Linia2Failover.shared.start() }   // LINIA2_FAILOVER: резервные адреса + «Подключение…»
         // LINIA2: тема и акцент.
         Linia2Theme.apply(to: window)
         // LINIA2: блокировка приложения PIN-кодом / Face ID.

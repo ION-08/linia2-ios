@@ -71,7 +71,7 @@ class NotificationService: UNNotificationServiceExtension {
                     }
                     tinode.disconnect()
                 }
-                senderName = user?.pub?.fn ?? NSLocalizedString("Unknown", comment: "Placeholder for missing user name")
+                senderName = user?.pub?.fn ?? "собеседника"
                 break
             case .grp:
                 let topic = store.topicGet(from: nil, withName: topicName) as? DefaultComTopic
@@ -81,13 +81,23 @@ class NotificationService: UNNotificationServiceExtension {
                 return
             }
 
+            // LINIA2: текст сообщения в уведомлении НЕ показываем (и сервер его не передаёт) —
+            // только «Новое сообщение от <имя>».
+            bestAttemptContent.subtitle = ""
             if action == "msg" {
-                bestAttemptContent.title = senderName
-                if topicType == .grp {
-                    bestAttemptContent.body = senderName + ": " + bestAttemptContent.body
+                if payload["webrtc"] as? String == "started" {
+                    bestAttemptContent.title = "Входящий звонок"
+                    bestAttemptContent.body = "Звонок от " + senderName
+                } else if topicType == .grp {
+                    let author = (store.userGet(uid: from) as? DefaultUser)?.pub?.fn
+                    bestAttemptContent.title = senderName
+                    bestAttemptContent.body = author != nil ? "Новое сообщение от " + author! : "Новое сообщение"
+                } else {
+                    bestAttemptContent.title = "Линия 2.0"
+                    bestAttemptContent.body = "Новое сообщение от " + senderName
                 }
             } else if action == "sub" {
-                bestAttemptContent.title = NSLocalizedString("New chat", comment: "Push notification title")
+                bestAttemptContent.title = "Новый чат"
                 bestAttemptContent.body = senderName
             }
         } else {

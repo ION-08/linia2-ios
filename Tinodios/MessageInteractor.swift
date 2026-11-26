@@ -363,6 +363,12 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
                 editedSeq = replaceSeq
             }
         }
+        // LINIA2: исчезающие сообщения — срок жизни в заголовке, сервер удаляет истёкшие (CONTRACTS.md).
+        if editedSeq == 0, let ttl = Linia2Disappearing.ttl(for: topic.name) {
+            var h = head ?? [:]
+            h[Linia2Disappearing.kHeader] = .int(ttl)
+            head = h
+        }
         topic.publish(content: message, withExtraHeaders: head).then(
             onSuccess: { [weak self] _ in
                 self?.loadMessagesFromCache()
