@@ -404,6 +404,17 @@ class MessageViewController: UIViewController {
             collectionView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor)
         ])
 
+        // Дизайн: лента заканчивается над строкой ввода — пузыри не «срезаются» ровной линией, а мягко гаснут.
+        let fade = Linia2FadeEdgeView()
+        fade.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(fade)
+        NSLayoutConstraint.activate([
+            fade.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            fade.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            fade.bottomAnchor.constraint(equalTo: collectionView.bottomAnchor),
+            fade.heightAnchor.constraint(equalToConstant: 14),
+        ])
+
         // Setup "Go to latest message" button.
         let buttonGoToLatest = UIButton(type: .custom)
         buttonGoToLatest.backgroundColor = L2.surface2
@@ -1273,5 +1284,29 @@ extension MessageViewController: UICollectionViewDelegate {
         self.highlightCellAtPathAfterScroll = nil
         guard let cell = collectionView.cellForItem(at: path) as? MessageCell else { return }
         cell.highlightAnimated(withDuration: 4.0)
+    }
+}
+
+/// Градиент «прозрачный → фон» у нижнего края ленты (над строкой ввода).
+final class Linia2FadeEdgeView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        updateColors()
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    private func updateColors() {
+        let bg = L2.background.resolvedColor(with: traitCollection)
+        (layer as? CAGradientLayer)?.colors = [bg.withAlphaComponent(0).cgColor, bg.withAlphaComponent(0.95).cgColor]
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateColors()
     }
 }
