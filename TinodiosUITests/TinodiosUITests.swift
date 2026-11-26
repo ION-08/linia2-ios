@@ -928,4 +928,44 @@ final class TinodiosUITests: XCTestCase {
         wait(tab("l2.tab.chats"), "Чаты после перезапуска")
         screenshot("relaunch-ok")
     }
+
+    // MARK: - 9. Стабильность: быстрое переключение вкладок во время загрузки (вылет 5a)
+
+    func testS1_TabSwitchStress() {
+        ensureSomeUser()
+        // Перезапуск: подключение, вход и загрузка чатов/контактов/конфига идут параллельно с переключениями.
+        app.terminate()
+        launch()
+        if app.staticTexts["Введите PIN-код"].waitForExistence(timeout: 15) { enterPin() }
+        let ids = ["l2.tab.chats", "l2.tab.calls", "l2.tab.contacts", "l2.tab.settings"]
+        wait(tab(ids[0]), "вкладки сразу после входа", timeout: 30)
+        let tabs = ids.map { tab($0) }
+        var order: [Int] = []
+        for i in 0..<60 {
+            // Все вкладки по кругу, вперемешку с повторным нажатием той же вкладки и «назад» через одну.
+            order.append(i % 7 == 6 ? (order.last ?? 0) : (i % 2 == 0 ? (i / 2) % 4 : (3 - (i / 2) % 4)))
+        }
+        for (n, i) in order.enumerated() {
+            let t = tabs[i]
+            if t.exists && t.isHittable { t.tap() }
+            if n % 10 == 9 {
+                XCTAssertEqual(app.state, .runningForeground, "вылет после \(n + 1) переключений вкладок")
+                if app.state != .runningForeground { return }
+            }
+        }
+        XCTAssertEqual(app.state, .runningForeground, "вылет при быстром переключении вкладок")
+        screenshot("after-60-switches")
+        // Вкладки отвечают: каждая открывается и показывает своё содержимое.
+        tabs[1].tap()
+        XCTAssertTrue(labelContains("Звонки").waitForExistence(timeout: 10), "вкладка «Звонки» не отвечает")
+        tabs[2].tap()
+        wait(app.buttons["Добавить контакт"].firstMatch, "вкладка «Контакты» отвечает", timeout: 10)
+        tabs[3].tap()
+        wait(app.staticTexts["Внешний вид"].firstMatch, "вкладка «Настройки» отвечает", timeout: 10)
+        tabs[0].tap()
+        wait(app.buttons["Новый чат"].firstMatch, "вкладка «Чаты» отвечает", timeout: 10)
+        XCTAssertTrue(tabBarVisible, "нет нижнего меню после стресс-теста")
+        XCTAssertEqual(app.state, .runningForeground, "вылет после проверки вкладок")
+        screenshot("tabs-responsive")
+    }
 }

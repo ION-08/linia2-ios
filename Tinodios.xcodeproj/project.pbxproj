@@ -26,6 +26,7 @@
 		4E9B6D4E2D1136D729B8E4C4 /* Linia2Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9495154D6AB9C403D137D704 /* Linia2Theme.swift */; };
 		387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */; };
 		A8B8E15FA8E4A59F7FFF758B /* Linia2Turn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18572233191F3D4D0A49B213 /* Linia2Turn.swift */; };
+		6776A1BEBBD9582FF686DABE /* Linia2Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BC684DF14089B05276DFE9 /* Linia2Diagnostics.swift */; };
 		FC8D3A743D8C755A24A130A1 /* Linia2Registration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41FBEE60918E737D7D78F23F /* Linia2Registration.swift */; };
 		0A0016E721E7236900088188 /* MessageInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0016E621E7236900088188 /* MessageInteractor.swift */; };
 		0A0016E921E736CD00088188 /* MessagePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0016E821E736CD00088188 /* MessagePresenter.swift */; };
@@ -227,6 +228,7 @@
 		9495154D6AB9C403D137D704 /* Linia2Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Theme.swift; sourceTree = "<group>"; };
 		20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2AppLock.swift; sourceTree = "<group>"; };
 		18572233191F3D4D0A49B213 /* Linia2Turn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Turn.swift; sourceTree = "<group>"; };
+		56BC684DF14089B05276DFE9 /* Linia2Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Diagnostics.swift; sourceTree = "<group>"; };
 		41FBEE60918E737D7D78F23F /* Linia2Registration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Registration.swift; sourceTree = "<group>"; };
 		0A0016E621E7236900088188 /* MessageInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInteractor.swift; sourceTree = "<group>"; };
 		0A0016E821E736CD00088188 /* MessagePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagePresenter.swift; sourceTree = "<group>"; };
@@ -494,6 +496,7 @@
 				9495154D6AB9C403D137D704 /* Linia2Theme.swift */,
 				20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */,
 				18572233191F3D4D0A49B213 /* Linia2Turn.swift */,
+				56BC684DF14089B05276DFE9 /* Linia2Diagnostics.swift */,
 				41FBEE60918E737D7D78F23F /* Linia2Registration.swift */,
 				0A4E1D3122829C52006C0912 /* account */,
 				B027E5AC2789010C00A34C17 /* format */,
@@ -721,6 +724,7 @@
 				0ACE9E7A23813A1D006BE575 /* Embed Foundation Extensions */,
 				9F57E04FA7B9924948AFF5D2 /* [CP] Copy Pods Resources */,
 				E39DF56D400E4A17F40FBB09 /* [CP] Embed Pods Frameworks */,
+				895C9E8FDA4A49DC9B630685 /* Crashlytics dSYM upload */,
 			);
 			buildRules = (
 			);
@@ -863,6 +867,30 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		895C9E8FDA4A49DC9B630685 /* Crashlytics dSYM upload */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}",
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}",
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
+				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
+			);
+			name = "Crashlytics dSYM upload";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = ""${SRCROOT}/Scripts/crashlytics_upload.sh"\n";
+			showEnvVarsInLog = 0;
+		};
 		37009181C8B2B0198CE4CBBA /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -1067,6 +1095,7 @@
 				4E9B6D4E2D1136D729B8E4C4 /* Linia2Theme.swift in Sources */,
 				387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */,
 				A8B8E15FA8E4A59F7FFF758B /* Linia2Turn.swift in Sources */,
+				6776A1BEBBD9582FF686DABE /* Linia2Diagnostics.swift in Sources */,
 				FC8D3A743D8C755A24A130A1 /* Linia2Registration.swift in Sources */,
 				B008593C22741B8A002C5168 /* FullFormatter.swift in Sources */,
 				0A0380DA21B3CC8100A3FA0E /* ChatListViewController.swift in Sources */,

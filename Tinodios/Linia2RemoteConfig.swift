@@ -18,6 +18,13 @@ final class Linia2Config {
 
     private let url = "https://v2.chat-linia.site/app-config.json"
     private let queue = DispatchQueue(label: "info.codix.liniya2.config")
+    private static let queueKey = DispatchSpecificKey<Bool>()
+    /// LINIA2: чтение настроек из любого потока; если уже внутри очереди настроек — без queue.sync
+    /// (повторный вход в ту же очередь = мгновенный вылет, см. c2ec87a). Тексты (L2T/NSLocalizedString)
+    /// читаются отовсюду, поэтому защита общая, а не точечная.
+    private func read<T>(_ f: () -> T) -> T {
+        DispatchQueue.getSpecific(key: Self.queueKey) == true ? f() : queue.sync(execute: f)
+    }
     private var data: [String: Any] = [:]
     private var lastFetch = Date.distantPast
     private var timer: Timer?
@@ -31,6 +38,7 @@ final class Linia2Config {
     private let testOverride: Bool
 
     private init() {
+        queue.setSpecific(key: Self.queueKey, value: true)
         let env = ProcessInfo.processInfo.environment
         if ProcessInfo.processInfo.arguments.contains("-l2-uitest"), let raw = env["L2_CONFIG_OVERRIDE"] {
             testOverride = true
@@ -138,11 +146,11 @@ final class Linia2Config {
     }
 
     private func section(_ name: String) -> [String: Any] {
-        queue.sync { (data[name] as? [String: Any]) ?? [:] }
+        read { (data[name] as? [String: Any]) ?? [:] }
     }
 
     private func array(_ name: String) -> [Any]? {
-        queue.sync { data[name] as? [Any] }
+        read { data[name] as? [Any] }
     }
 
     private static func hex(_ any: Any?) -> UInt32? {
@@ -300,7 +308,7 @@ final class Linia2Config {
     }
 
     var bannedWords: [String] {
-        queue.sync { (data["bannedWords"] as? [String]) ?? [] }.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+        read { (data["bannedWords"] as? [String]) ?? [] }.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
     }
 
     /// Первое запрещённое слово в тексте (без учёта регистра) или nil.

@@ -121,8 +121,21 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Linia2.xcarchive" \
             OTHER_CODE_SIGN_FLAGS="--keychain $LINIA2_KEYCHAIN" \
+            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
             2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E 'error:|ARCHIVE (SUCCEEDED|FAILED)' || true
           test -d "$RUNNER_TEMP/Linia2.xcarchive" || { grep -E 'error:' "$RUNNER_TEMP/archive.log" | head -40; exit 1; }
+
+      - name: dSYM → Firebase Crashlytics
+        # Только при настоящем Firebase-конфиге; ошибка загрузки символов не останавливает выпуск.
+        env:
+          GSI: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          if [ -z "$GSI" ]; then echo "Crashlytics: секрет GOOGLE_SERVICE_INFO_PLIST_BASE64 не задан — пропуск"; exit 0; fi
+          DSYMS="$RUNNER_TEMP/Linia2.xcarchive/dSYMs"
+          ls "$DSYMS" || { echo "::warning::dSYM в архиве не найдены"; exit 0; }
+          Pods/FirebaseCrashlytics/upload-symbols -gsp GoogleService-Info.plist -p ios "$DSYMS" \
+            && echo "dSYM загружены в Crashlytics" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning::Не удалось загрузить dSYM в Crashlytics"
 
       - name: Пробный прогон — остановка перед загрузкой
         if: ${{ inputs.dry_run }}

@@ -101,6 +101,7 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
     private var items: [Linia2CallItem] = []
     private var lastHeaderWidth: CGFloat = 0
     private var loadGeneration = 0
+    private var configObserver: NSObjectProtocol?
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -156,7 +157,7 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
             s.addArrangedSubview(emptyLinkButton)
         }
         installGuestButtons()
-        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+        configObserver = NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
             self?.installGuestButtons()
         }
 
@@ -167,6 +168,7 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
     }
 
     deinit {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -253,7 +255,8 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let cell = tableView.dequeueReusableCell(withIdentifier: Linia2CallCell.reuseId, for: indexPath) as? Linia2CallCell else { return UITableViewCell() }
+        guard indexPath.row < items.count,
+              let cell = tableView.dequeueReusableCell(withIdentifier: Linia2CallCell.reuseId, for: indexPath) as? Linia2CallCell else { return UITableViewCell() }
         let item = items[indexPath.row]
         let t = topic(item.topicName)
         cell.configure(item: item, pub: t?.pub, timeText: Linia2CallsViewController.timeText(item.date))
@@ -267,6 +270,7 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        guard indexPath.row < items.count else { return }
         let item = items[indexPath.row]
         L2.haptic()
         if item.guest != nil {

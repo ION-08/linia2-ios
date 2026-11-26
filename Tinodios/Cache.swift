@@ -34,7 +34,8 @@ class Cache {
             Cache.shared.timer.suspend()
             tinode.remoteAllListeners()
             tinode.logout()
-            if UiUtils.firebaseAvailable { Messaging.messaging().deleteToken { error in
+            Linia2Push.shared.forget()
+            if Linia2Firebase.configured { Messaging.messaging().deleteToken { error in
                 Cache.log.debug("Failed to delete FCM token: %@", error.debugDescription)
             } }
             Cache.shared.tinodeInstance = nil
@@ -55,19 +56,24 @@ class Cache {
         // TODO: fix tsan false positive.
         // TSAN fires because one thread may read |tinode| variable
         // while another thread may be writing it below in the critical section.
-        if tinodeInstance == nil {
-            queue.sync {
-                if tinodeInstance == nil {
-                    tinodeInstance = SharedUtils.createTinode()
-                    DispatchQueue.main.async {
-                        self.tinodeInstance?.addListener((UIApplication.shared.delegate as! AppDelegate).callListener)
-                    }
-                    // Tell contacts synchronizer to attempt to synchronize contacts.
-                    ContactsSynchronizer.default.appBecameActive()
-                }
+        // LINIA2: экземпляр берётся в локальную переменную — раньше `return tinodeInstance!` мог упасть,
+        // если выход из аккаунта (invalidate) обнулял его между проверкой и возвратом.
+        if let t = tinodeInstance { return t }
+        return queue.sync {
+            if let t = tinodeInstance { return t }
+            let t = SharedUtils.createTinode()
+            tinodeInstance = t
+            // Слушатели, которые должны жить на каждом экземпляре Tinode (после выхода/входа — новый экземпляр,
+            // а invalidate() снимает всех слушателей). Добавляем сразу — вход может завершиться раньше main.async.
+            t.addListener(Linia2Push.shared)
+            t.addListener(Linia2Failover.shared)
+            DispatchQueue.main.async {
+                (UIApplication.shared.delegate as? AppDelegate).map { t.addListener($0.callListener) }
             }
+            // Tell contacts synchronizer to attempt to synchronize contacts.
+            ContactsSynchronizer.default.appBecameActive()
+            return t
         }
-        return tinodeInstance!
     }
 
     private func getLargeFileHelper(withIdentifier identifier: String?) -> LargeFileHelper {

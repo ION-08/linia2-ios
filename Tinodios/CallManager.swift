@@ -122,6 +122,7 @@ class CallManager {
         self.callInProgress = call
         CallManager.activateAudioSession(withSpeaker: !isAudioOnly)
         Cache.log.info("Starting outgoing call (uuid: %@) on topic: %@", call.uuid.uuidString, topicName)
+        L2Log.event("l2_call_start", ["dir": "out", "kind": isAudioOnly ? "audio" : "video", "chat": L2Log.topicKind(topicName)])
         if CallManager.useCallKit {
             let action = CXStartCallAction(call: call.uuid, handle: CXHandle(type: .generic, value: topicName))
             action.isVideo = !isAudioOnly
@@ -220,6 +221,7 @@ class CallManager {
         callDelegate.reportIncomingCall(uuid: uuid, topic: topicName, handle: senderName, audioOnly: audioOnly) { err in
             if err == nil {
                 Cache.log.info("Reporting incoming call (uuid: %@) on topic: %@, seq: %d", self.callInProgress?.uuid.uuidString ?? "missing", topicName, seq)
+                L2Log.event("l2_call_start", ["dir": "in", "kind": audioOnly ? "audio" : "video", "chat": L2Log.topicKind(topicName)])
                 if needGuestInfo {
                     DispatchQueue.main.async {
                         Linia2GuestLinks.callInfo(seq: seq) { i in
@@ -303,6 +305,7 @@ extension CallManager: CallManagerImpl {
         guard let call = self.callInProgress else { return false }
 
         Cache.log.info("Accepting call: topic=%@, seq=%d", call.topic, call.seq)
+        L2Log.event("l2_call_answer", ["kind": call.audioOnly ? "audio" : "video"])
         self.timer?.invalidate()
         self.timer = nil
         self.callInProgress?.accepted = true
@@ -315,6 +318,8 @@ extension CallManager: CallManagerImpl {
     func completeCallInProgress(reportToSystem: Bool, reportToPeer: Bool) {
         guard let call = self.callInProgress else { return }
         Cache.log.info("Completing call: topic=%@, seq=%d", call.topic, call.seq)
+        L2Log.event("l2_call_end", ["kind": call.audioOnly ? "audio" : "video", "accepted": call.accepted ? 1 : 0,
+                                    "dir": call.from == Cache.tinode.myUid ? "out" : "in", "by_me": reportToPeer ? 1 : 0])
         self.callInProgress = nil
         self.timer?.invalidate()
         self.timer = nil

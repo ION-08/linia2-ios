@@ -83,6 +83,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         Cache.log.info("App launched with options: %@", launchOptions ?? [:])
+        // LINIA2: Firebase (Crashlytics/Analytics/FCM) — первым делом, чтобы ловить и ранние вылеты.
+        // Делегаты уведомлений — до конца didFinishLaunching (иначе теряется нажатие на push при холодном старте).
+        Linia2Firebase.configureIfNeeded()
+        UNUserNotificationCenter.current().delegate = self
+        if Linia2Firebase.configured { Messaging.messaging().delegate = self }
+        L2Log.event("l2_app_start", ["push_launch": launchOptions?[.remoteNotification] != nil ? 1 : 0])
         if SharedUtils.isFirstLaunch {
             Cache.log.info("First time launch. Setting up...")
             SharedUtils.isFirstLaunch = false
@@ -135,6 +141,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
+    // LINIA2: APNs-токен → FCM (явно, не полагаясь на подмену методов Firebase).
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        L2Log.event("l2_push_token", ["kind": "apns", "bytes": deviceToken.count])
+        guard Linia2Firebase.configured else { return }
+        Messaging.messaging().apnsToken = deviceToken
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        L2Log.event("l2_push_token_error", ["kind": "apns", "code": (error as NSError).code])
+    }
+
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
         backgroundSessionCompletionHandler = completionHandler
         // Instantiate large file helper.
@@ -173,6 +190,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         let state = application.applicationState
+        L2Log.event("l2_push_received", ["what": (userInfo["what"] as? String) ?? (userInfo["l2cfg"] != nil ? "cfg" : "msg"),
+                                         "state": state == .active ? "fg" : (state == .background ? "bg" : "inactive"),
+                                         "call": userInfo["webrtc"] != nil ? 1 : 0])
         // LINIA2: тихий push «конфиг обновлён» (тема FCM linia2-config) — перечитать удалённые настройки.
         if Linia2Config.handlePush(userInfo) {
             completionHandler(.newData)
@@ -204,6 +224,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 // Read notification.
                 if let seq = Int(userInfo["seq"] as? String ?? ""), seq > 0 {
                     completionHandler(SharedUtils.updateRead(using: Cache.tinode, for: topicName, seq: seq))
+                } else {
+                    completionHandler(.failed)   // обработчик обязан быть вызван всегда
                 }
             } else {
                 Cache.log.error("Invalid 'what' value ['%@'] in push notification for topic '%@'", what!, topicName)
@@ -266,10 +288,15 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let userInfo = notification.request.content.userInfo
         let what = userInfo["what"] as? String
+        L2Log.event("l2_push_received", ["what": what ?? "msg", "state": "fg", "call": userInfo["webrtc"] != nil ? 1 : 0])
         // Only handling "msg" notifications. New subscriptions ("sub" notifications) in the foreground
         // will be handled automatically by Tinode SDK.
+        // LINIA2: completionHandler обязателен на любом пути (раньше для "sub" и т.п. не вызывался).
         guard let topicName = userInfo["topic"] as? String, !topicName.isEmpty,
-            what == nil || what == "msg", let seq = Int(userInfo["seq"] as? String ?? "") else { return }
+            what == nil || what == "msg", let seq = Int(userInfo["seq"] as? String ?? "") else {
+            completionHandler([])
+            return
+        }
 
         if let messageVC = UiUtils.topViewController(rootViewController: (UIApplication.shared.delegate as! AppDelegate).window?.rootViewController) as? MessageViewController, messageVC.topicName == topicName {
             // We are already in the correct topic. Do not present the notification.
@@ -287,7 +314,8 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     // User tapped on notification.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         let userInfo = response.notification.request.content.userInfo
-        Cache.log.info("User tapped on notification %@", userInfo)
+        Cache.log.info("User tapped on notification")
+        L2Log.event("l2_push_opened", ["what": (userInfo["what"] as? String) ?? "msg"])
         defer { completionHandler() }
         guard let topicName = userInfo["topic"] as? String, !topicName.isEmpty else { return }
         let tinode = Cache.tinode
@@ -308,9 +336,10 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
 extension AppDelegate: MessagingDelegate {
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         // Update token. Send to the app server.
-        guard let token = fcmToken else { return }
-        Cache.log.info("Setting FCM token: %@", token)
-        Cache.tinode.setDeviceToken(token: token)
+        // LINIA2: сохраняем и отправляем сейчас (если есть соединение) и после каждого входа — см. Linia2Push.
+        guard let token = fcmToken, !token.isEmpty else { return }
+        Cache.log.info("FCM token received")
+        Linia2Push.shared.didReceive(fcmToken: token)
     }
 }
 
@@ -318,12 +347,14 @@ extension AppDelegate: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
         Cache.log.info("PK token received")
+        L2Log.event("l2_push_token", ["kind": "voip", "bytes": credentials.token.count])
         // LINIA2: VoIP-токен — на наш сервер (linia2-auth), он шлёт VoIP push напрямую в APNs.
         Linia2Voip.shared.update(token: credentials.token)
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         Cache.log.info("PK must invalidate token")
+        L2Log.event("l2_push_token_invalidated", ["kind": "voip"])
         Linia2Voip.shared.invalidate()
     }
 
@@ -343,6 +374,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         let seq = Int(data["seq"] as? String ?? "") ?? (data["seq"] as? Int) ?? Int(data["replace"] as? String ?? "") ?? 0
         let audioOnly = (data["aonly"] as? Bool) ?? ((data["aonly"] as? String) == "true")
         let name = data["name"] as? String
+        L2Log.event("l2_voip_push", ["event": callState.isEmpty ? "none" : callState, "has_seq": seq > 0 ? 1 : 0])
         Cache.callManager.handleVoipPush(event: callState, topic: topicName, from: data["xfrom"] as? String, seq: seq,
                                          audioOnly: audioOnly, callerName: (name?.isEmpty ?? true) ? nil : name, completion: completion)
         // Подключиться к серверу (если приложение было закрыто) — дальше звонок идёт как обычно.

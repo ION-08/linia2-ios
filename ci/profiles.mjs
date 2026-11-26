@@ -61,6 +61,12 @@ for (const { bundle, name } of PROFILES) {
   const groups = /application-groups<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(content.toString('latin1'));
   console.log(`профиль «${name}» ${a.uuid}; app groups: ${groups ? groups[1].replace(/\s+/g, ' ').trim() || '(пусто)' : '(нет)'}`);
   if (!groups || !groups[1].includes('group.info.codix.liniya2.db')) missing.push(bundle);
+  // Push: в профиле App Store должно быть aps-environment = production (иначе APNs/FCM не доставят уведомления).
+  if (bundle === 'info.codix.liniya2') {
+    const aps = /aps-environment<\/key>\s*<string>([^<]*)<\/string>/.exec(content.toString('latin1'));
+    console.log(`push (aps-environment): ${aps ? aps[1] : '(нет — включите Push Notifications у App ID)'}`);
+    if (!aps || aps[1] !== 'production') console.log('::warning::В профиле нет aps-environment=production — push на iPhone приходить не будут.');
+  }
 }
 if (missing.length) {
   console.log(`::error::App Group group.info.codix.liniya2.db не привязана к: ${missing.join(', ')}. ` +

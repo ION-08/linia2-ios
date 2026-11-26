@@ -249,9 +249,24 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     /// Порядок и видимость пунктов — из удалённых настроек (menus.settings). «Выйти» показывается всегда.
     static let kDefaultSettingsMenu = ["profile", "notifications", "privacy", "appearance", "about"]
     private var settingsIds: [String] { Linia2Config.shared.menu("settings") ?? Self.kDefaultSettingsMenu }
-    private var showProfile: Bool { settingsIds.contains("profile") }
+    /// LINIA2: таблица работает со «снимком» пунктов, обновляемым только вместе с reloadData. Раньше меню
+    /// вычислялось при каждом обращении: если удалённый конфиг менялся между numberOfRows и cellForRow
+    /// (загрузка при старте + быстрая смена вкладок), menu[indexPath.row] выходил за границы → вылет.
+    private var showProfile = true
+    private var menu: [Linia2GroupedTableViewController.Row] = []
+    private var configObserver: NSObjectProtocol?
 
-    private var menu: [Linia2GroupedTableViewController.Row] {
+    private func reloadTable() {
+        showProfile = settingsIds.contains("profile")
+        menu = buildMenu()
+        tableView.reloadData()
+    }
+
+    deinit {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
+    }
+
+    private func buildMenu() -> [Linia2GroupedTableViewController.Row] {
         var out: [Linia2GroupedTableViewController.Row] = []
         for id in settingsIds {
             switch id {
@@ -319,9 +334,10 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
         header = L2TableHeader([L2Header(title: Linia2Config.shared.tabs.first { $0.id == "settings" }?.title ?? L2T("l2.tab.settings", "Настройки"))])
         header?.install(in: tableView)
         headerWidth = tableView.bounds.width
-        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.tableView.reloadData()
+        configObserver = NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.reloadTable()
         }
+        reloadTable()
     }
 
     override func viewDidLayoutSubviews() {
@@ -341,7 +357,7 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
             listener = l
             Cache.tinode.addListener(l)
         }
-        tableView.reloadData()
+        reloadTable()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -355,6 +371,10 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
 
     private func reloadProfile() {
         guard isViewLoaded else { return }
+        // Частичное обновление — только если число строк не менялось (иначе NSInternalInconsistencyException).
+        guard tableView.numberOfSections == Sec.allCases.count,
+              tableView.numberOfRows(inSection: Sec.profile.rawValue) == (showProfile ? 1 : 0),
+              viewIfLoaded?.window != nil else { reloadTable(); return }
         tableView.reloadSections(IndexSet(integer: Sec.profile.rawValue), with: .none)
     }
 
@@ -403,8 +423,9 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
             cell.accessibilityIdentifier = "l2.settings.profile"
             return cell
         case .menu:
+            guard indexPath.row < menu.count,
+                  let cell = tableView.dequeueReusableCell(withIdentifier: L2MenuCell.reuseId, for: indexPath) as? L2MenuCell else { return UITableViewCell() }
             let row = menu[indexPath.row]
-            guard let cell = tableView.dequeueReusableCell(withIdentifier: L2MenuCell.reuseId, for: indexPath) as? L2MenuCell else { return UITableViewCell() }
             cell.configure(symbol: row.symbol, color: row.color, title: row.title, subtitle: row.subtitle)
             return cell
         default:
@@ -439,7 +460,7 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
         tableView.deselectRow(at: indexPath, animated: true)
         switch Sec(rawValue: indexPath.section) {
         case .profile: openProfileEditor()
-        case .menu: menu[indexPath.row].action()
+        case .menu: if indexPath.row < menu.count { menu[indexPath.row].action() }
         case .logout: confirmLogout()
         case .none: break
         }

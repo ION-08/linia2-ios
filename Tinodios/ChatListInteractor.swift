@@ -93,19 +93,45 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
     private var meListener: MeListener?
     private var meTopic: DefaultMeTopic?
     private var tinodeEventListener: ChatEventListener?
+    /// LINIA2: подписка на me уже идёт — не запускать вторую (viewDidAppear при каждом переключении вкладок
+    /// во время загрузки создавал по новому DefaultMeTopic и подписке).
+    private var meAttachInProgress = false
 
     func attachToMeTopic() {
-        let tinode = Cache.tinode
-        guard meTopic == nil || !meTopic!.attached else {
+        // LINIA2: вызывается и с главного потока (viewDidAppear), и из потока сети (onLogin) — состояние
+        // интерактора меняем только на главном.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.attachToMeTopic() }
             return
         }
+        let tinode = Cache.tinode
+        guard !meAttachInProgress, meTopic == nil || !meTopic!.attached else {
+            return
+        }
+        if let me = tinode.getMeTopic(), me.attached {
+            me.listener = self.meListener
+            meTopic = me
+            loadAndPresentTopics()
+            return
+        }
+        meAttachInProgress = true
+        // Страховка: если ответ так и не пришёл (обрыв связи), разрешить новую попытку.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.meAttachInProgress = false }
 
-        UiUtils.attachToMeTopic(meListener: self.meListener)?.then(
+        guard let promise = UiUtils.attachToMeTopic(meListener: self.meListener) else {
+            meAttachInProgress = false
+            return
+        }
+        promise.then(
             onSuccess: { [weak self] _ in
-                self?.loadAndPresentTopics()
-                self?.meTopic = tinode.getMeTopic()
+                DispatchQueue.main.async {
+                    self?.meAttachInProgress = false
+                    self?.meTopic = tinode.getMeTopic()
+                    self?.loadAndPresentTopics()
+                }
                 return nil
             }, onFailure: { [weak self] err in
+                DispatchQueue.main.async { self?.meAttachInProgress = false }
                 if let e = err as? TinodeError, case .serverResponseError(let code, _, _) = e {
                     if code == 401 || code==403 || code == 404 {
                         self?.router?.routeToLogin()
@@ -146,6 +172,12 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
         return Utils.fetchTopics(archived: archived)
     }
     func loadAndPresentTopics() {
+        // LINIA2: вызывается из потока сети (pres/sub от me) и с главного (viewDidAppear) одновременно —
+        // запись в self.topics из двух потоков приводила к вылету при быстрой смене вкладок во время загрузки.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.loadAndPresentTopics() }
+            return
+        }
         self.topics = self.getTopics(archived: false)
         self.archivedTopics = self.getTopics(archived: true)
         self.presenter?.presentTopics(
@@ -157,7 +189,7 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
     }
 
     func deleteTopic(_ name: String) {
-        let topic = Cache.tinode.getTopic(topicName: name) as! DefaultComTopic
+        guard let topic = Cache.tinode.getTopic(topicName: name) as? DefaultComTopic else { return }
         topic.delete(hard: true).then(
             onSuccess: { [weak self] _ in
                 self?.loadAndPresentTopics()
@@ -168,7 +200,7 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
     }
 
     func changeArchivedStatus(forTopic name: String, archived: Bool) {
-        let topic = Cache.tinode.getTopic(topicName: name) as! DefaultComTopic
+        guard let topic = Cache.tinode.getTopic(topicName: name) as? DefaultComTopic else { return }
         topic.updateArchived(archived: archived)?.then(
             onSuccess: { [weak self] _ in
                 self?.loadAndPresentTopics()

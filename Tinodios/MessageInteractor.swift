@@ -169,6 +169,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         tinode.addListener(self.tinodeEventListener!)
         self.topic = tinode.getTopic(topicName: topicName) as? DefaultComTopic
         self.pagesToLoad = 1
+        L2Log.event("l2_chat_open", ["chat": L2Log.topicKind(topicName)])
 
         self.presenter?.updateTitleBar(pub: self.topic?.pub, online: (topic?.isChannel ?? false) ? nil : self.topic?.online, deleted: topic?.deleted ?? true)
 
@@ -391,6 +392,9 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
             for (k, v) in burn { h[k] = v }
             head = h
         }
+        // Без текста: только тип чата и вид (новое/ответ/пересылка/правка).
+        L2Log.event("l2_msg_send", ["chat": L2Log.topicKind(topic.name),
+                                    "mode": editedSeq > 0 ? "edit" : (head?["reply"] != nil ? "reply" : (head?["forwarded"] != nil ? "fwd" : "new"))])
         topic.publish(content: message, withExtraHeaders: head).then(
             onSuccess: { [weak self] _ in
                 self?.loadMessagesFromCache()
@@ -611,7 +615,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         // Must be called on main thread.
         guard let topicName = topicName else { return nil }
         var result: MessageInteractor?
-        DispatchQueue.main.sync {
+        let find: () -> Void = {
             guard let navVC = Linia2Root.chatsNavigator() else {
                 return
             }
@@ -622,6 +626,8 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
                 }
             }
         }
+        // LINIA2: main.sync с главного потока — мгновенный вылет (deadlock-ловушка libdispatch).
+        if Thread.isMainThread { find() } else { DispatchQueue.main.sync(execute: find) }
         return result
     }
 

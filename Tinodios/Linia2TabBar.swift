@@ -11,6 +11,7 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
     private let bar = Linia2FloatingBar()
     private var barBottom: NSLayoutConstraint!
     private(set) var chatsNavigator: UINavigationController!
+    private var configObserver: NSObjectProtocol?
 
     /// Высота, которую экраны вкладок должны оставлять снизу под меню.
     static let reservedBottom: CGFloat = 96
@@ -52,18 +53,35 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
         bar.onSelect = { [weak self] i in self?.selectTab(Tab(rawValue: i) ?? .chats) }
         bar.select(selectedIndex)
         // Вкладки (порядок, названия, видимость, иконки) — из удалённых настроек, применяются без перезапуска.
-        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+        configObserver = NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             self.bar.rebuild()
             if !self.bar.hasTab(self.selectedIndex) { self.selectTab(.chats) } else { self.bar.select(self.selectedIndex) }
         }
     }
 
+    deinit {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
+    }
+
+    /// LINIA2: безопасное переключение вкладок (быстрые нажатия, во время загрузки и анимаций):
+    /// только с главного потока, только на существующий контроллер, «вернуться к началу» — не во время
+    /// перехода в навигаторе (popToRoot посреди push/pop ломал стек и ронял приложение).
     func selectTab(_ tab: Tab) {
-        if selectedIndex == tab.rawValue, let nav = selectedViewController as? UINavigationController {
-            nav.popToRootViewController(animated: true)
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.selectTab(tab) }
+            return
         }
-        selectedIndex = tab.rawValue
+        guard let vcs = viewControllers, tab.rawValue < vcs.count else { return }
+        if selectedIndex == tab.rawValue, let nav = selectedViewController as? UINavigationController {
+            if nav.transitionCoordinator == nil, nav.presentedViewController == nil, nav.viewControllers.count > 1 {
+                nav.popToRootViewController(animated: true)
+            }
+        } else if selectedIndex != tab.rawValue {
+            // Клавиатура/поиск предыдущей вкладки не должны «переезжать» и держать первый отвечающий.
+            selectedViewController?.view.endEditing(true)
+            selectedIndex = tab.rawValue
+        }
         bar.select(tab.rawValue)
         updateBarVisibility(animated: false)
     }

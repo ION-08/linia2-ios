@@ -72,7 +72,7 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
 
     private func toggleFooter(visible: Bool) {
         let count = numArchivedTopics > 9 ? "9+" : String(numArchivedTopics)
-        let button = tableView.tableFooterView!.subviews[0] as! UIButton
+        guard let button = archivedChatsFooter?.subviews.first as? UIButton else { return }
         button.setTitle(String(format: NSLocalizedString("Archived Chats (%@)", comment: "Button to open chat archive"), count), for: .normal)
         archivedChatsFooter!.isHidden = !visible
         tableView.tableFooterView = archivedChatsFooter
@@ -154,14 +154,17 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
         self.linia2All = topics
         self.topics = linia2Filtered(topics)
         self.archivedTopics = archivedTopics
-        self.rowIndex = Dictionary(uniqueKeysWithValues: self.topics.enumerated().map { (index, topic) in (topic.name, index) })
+        // LINIA2: без падения на повторяющемся имени топика (uniqueKeysWithValues — fatal error на дубликате).
+        self.rowIndex = Dictionary(self.topics.enumerated().map { (index, topic) in (topic.name, index) }, uniquingKeysWith: { a, _ in a })
         self.tableView!.reloadData()
         self.toggleFooter(visible: self.numArchivedTopics > 0)
     }
 
     func updateChat(_ name: String) {
         assert(Thread.isMainThread)
-        guard let position = rowIndex[name] else { return }
+        // LINIA2: строка должна существовать в таблице (иначе NSInternalInconsistencyException).
+        guard let position = rowIndex[name], position < topics.count,
+              position < self.tableView!.numberOfRows(inSection: 0) else { return }
         self.tableView!.reloadRows(at: [IndexPath(item: position, section: 0)], with: .none)
         self.toggleFooter(visible: self.numArchivedTopics > 0)
     }
@@ -169,8 +172,11 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
     func deleteChat(_ name: String) {
         assert(Thread.isMainThread)
         linia2All.removeAll { $0.name == name }
-        guard let position = rowIndex[name] else { return }
+        guard let position = rowIndex[name], position < topics.count, topics[position].name == name else { return }
         self.topics.remove(at: position)
+        // LINIA2: индексы после удалённой строки сдвинулись — пересобрать (раньше updateChat потом обращался
+        // к несуществующей строке и приложение падало).
+        self.rowIndex = Dictionary(self.topics.enumerated().map { ($0.element.name, $0.offset) }, uniquingKeysWith: { a, _ in a })
         self.tableView!.deleteRows(at: [IndexPath(item: position, section: 0)], with: .fade)
         self.toggleFooter(visible: self.numArchivedTopics > 0)
     }

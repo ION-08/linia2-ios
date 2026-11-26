@@ -176,24 +176,25 @@ class UiUtils {
         return dict["LINIA2_STUB"] == nil && dict["GOOGLE_APP_ID"] != nil
     }
 
+    /// LINIA2: разрешение на уведомления → registerForRemoteNotifications (APNs-токен → FCM, см. AppDelegate)
+    /// → FCM-токен → сервер Tinode (Linia2Push: при каждом запуске, при обновлении токена и после каждого входа).
     private static func setUpPushNotifications() {
         let application = UIApplication.shared
-        let appDelegate = application.delegate as! AppDelegate
-        guard UiUtils.firebaseAvailable else { return }
+        guard let appDelegate = application.delegate as? AppDelegate else { return }
+        Linia2Firebase.configureIfNeeded()   // обычно уже вызван в didFinishLaunching
+        guard Linia2Firebase.configured else { return }
         guard !appDelegate.pushNotificationsConfigured else {
             Messaging.messaging().token { (token, error) in
                 if let error = error {
                     Cache.log.debug("Error fetching FCM registration token: %@", error.localizedDescription)
                 } else if let token = token {
-                    Cache.log.info("setUpPushNotifications - device token: %@.", token)
-                    Cache.tinode.setDeviceToken(token: token)
+                    Cache.log.info("setUpPushNotifications - FCM token refreshed")
+                    Linia2Push.shared.didReceive(fcmToken: token)
                 }
             }
             return
         }
 
-        // Configure FCM.
-        FirebaseApp.configure()
         Messaging.messaging().delegate = appDelegate
         // LINIA2: подписка на тему изменений удалённых настроек (админка шлёт тихий push после «Применить»).
         Messaging.messaging().subscribe(toTopic: "linia2-config") { err in
@@ -202,12 +203,14 @@ class UiUtils {
         UNUserNotificationCenter.current().delegate = appDelegate
 
         let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
-        UNUserNotificationCenter.current().requestAuthorization(
-            options: authOptions,
-            completionHandler: {_, _ in })
+        UNUserNotificationCenter.current().requestAuthorization(options: authOptions) { granted, error in
+            L2Log.event("l2_push_permission", ["granted": granted ? 1 : 0, "error": error != nil ? 1 : 0])
+        }
 
         application.registerForRemoteNotifications()
         appDelegate.pushNotificationsConfigured = true
+        // Токен мог прийти ещё до входа — повторить отправку (Linia2Push сам дождётся соединения).
+        Linia2Push.shared.send()
     }
 
     public static func attachToMeTopic(meListener: DefaultMeTopic.Listener?) -> PromisedReply<ServerMessage>? {
