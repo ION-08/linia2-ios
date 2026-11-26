@@ -9,7 +9,7 @@
 //
 //  Удалённые настройки (app-config.json; нет поля — значение по умолчанию):
 //   features.chatFloatingHeader, features.chatSearch, features.chatPattern, features.chatFloatingInput,
-//   features.savedMessages — по умолчанию true;
+//   features.savedMessages — по умолчанию true; features.chatBackTitle — «‹ Назад» с подписью (по умолчанию false: круглая «‹»);
 //   chatHeader.buttons — кнопки справа по порядку, из "call", "video", "burn", "search", "more"
 //     (по умолчанию ["call","video","burn","search"]; "more" — «⋮» только если сервер явно указал;
 //      📞/📹/⏱ показываются, только если доступны в этом чате);
@@ -155,9 +155,10 @@ extension MessageViewController {
         let g = L2GlassView(insets: UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4))
         let b = UIButton(type: .system)
         b.setImage(L2.symbol("chevron.left", 16, .semibold), for: .normal)
-        // Дизайн: на экранах уже 428 pt подпись «Назад» отнимала место у имени («Диз…», на SE — «‹ …»).
-        // Там кнопка — круглая «‹» 38×38 (подпись остаётся для VoiceOver), на Pro Max — «‹ Назад».
-        let compact = UIScreen.main.bounds.width < 428
+        // Дизайн: подпись «Назад» отнимала место у имени («Диз…» даже на Pro Max, на SE — «‹ …»).
+        // Кнопка — круглая «‹» 38×38, как в iOS 26 / Telegram; подпись «Назад» остаётся для VoiceOver и тестов.
+        // Вернуть текст на широких экранах: features.chatBackTitle = true в app-config.
+        let compact = (Linia2Config.shared.section("features")["chatBackTitle"] as? Bool) != true
         if !compact { b.setTitle(" " + L2T("l2.chat.back", "Назад"), for: .normal) }
         b.titleLabel?.font = L2.font(16, .medium)
         b.tintColor = L2.accent
