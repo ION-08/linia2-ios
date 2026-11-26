@@ -267,14 +267,22 @@ extension MessageViewController {
         navBarAvatarView.linia2StyleIndicator()
         linia2SetStatus(online)
 
+        // Справа налево: ⋮, ⏱ самоуничтожение, 📹 видео, 📞 аудио (на экране: 📞 📹 ⏱ ⋮).
         var items: [UIBarButtonItem] = []
         let more = UIBarButtonItem(image: L2.symbol("ellipsis", 18, .semibold), style: .plain,
                                    target: self, action: #selector(linia2TitleTapped))
         more.accessibilityLabel = "Информация о чате"
+        more.accessibilityIdentifier = "l2.chat.more"
         items.append(more)
+        if let burn = linia2BurnBarButton() {
+            items.append(burn)
+        }
         if let t = topic, t.callsAllowed, Linia2Config.shared.feature("calls") {
+            if Linia2Config.shared.feature("videoCalls") {
+                items.append(navBarVideoBtn)
+            }
             navBarCallBtn.image = L2.symbol("phone", 20, .regular)
-            navBarCallBtn.accessibilityLabel = "Позвонить"
+            navBarCallBtn.accessibilityLabel = "Аудиозвонок"
             items.append(navBarCallBtn)
         }
         navigationItem.setRightBarButtonItems(items, animated: false)

@@ -71,11 +71,29 @@ struct UploadDef {
     var preview: Data?
     var previewMime: String?
     var previewOutOfBand: Bool = false
+    // LINIA2: видео-кружок (data.round = true) и дополнительные заголовки (срок хранения).
+    var round: Bool = false
+    var extraHead: [String: JSONValue]? = nil
 }
 
 class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, MessageDataStore {
     private static let kMessagesPerPage = 24
     private var linia2HistoryRequested = false
+    /// LINIA2: заголовки для следующего sendMessage (кружок: linia2-ttl).
+    var linia2NextHead: [String: JSONValue]?
+
+    /// LINIA2: исчезающие сообщения + самоуничтожение + дополнительные заголовки.
+    static func linia2MergeHead(_ head: [String: JSONValue]?, topic: String, extra: [String: JSONValue]?) -> [String: JSONValue]? {
+        var h = head ?? [:]
+        if let ttl = Linia2Disappearing.ttl(for: topic) { h[Linia2Disappearing.kHeader] = .int(ttl) }
+        for (k, v) in Linia2Burn.extraHead(topic: topic) ?? [:] { h[k] = v }
+        for (k, v) in extra ?? [:] {
+            // Срок хранения: из двух (кружок и автоудаление чата) — меньший.
+            if k == Linia2Disappearing.kHeader, case .int(let a)? = h[k], case .int(let b) = v { h[k] = .int(min(a, b)); continue }
+            h[k] = v
+        }
+        return h.isEmpty ? head : h
+    }
 
     public enum AttachmentType: Int {
         case audio // Audio record
@@ -364,9 +382,13 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
             }
         }
         // LINIA2: исчезающие сообщения — срок жизни в заголовке, сервер удаляет истёкшие (CONTRACTS.md).
-        if editedSeq == 0, let ttl = Linia2Disappearing.ttl(for: topic.name) {
-            var h = head ?? [:]
-            h[Linia2Disappearing.kHeader] = .int(ttl)
+        let extra = self.linia2NextHead
+        self.linia2NextHead = nil
+        if editedSeq == 0 {
+            head = MessageInteractor.linia2MergeHead(head, topic: topic.name, extra: extra)
+        } else if let burn = Linia2Burn.extraHead(topic: topic.name) {
+            var h = head ?? [:]   // правка в режиме самоуничтожения — тоже с linia2-burn
+            for (k, v) in burn { h[k] = v }
             head = h
         }
         topic.publish(content: message, withExtraHeaders: head).then(
@@ -672,6 +694,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
             draft = MessageInteractor.draftyImage(caption: def.caption, filename: filename, refurl: ref, mimeType: mimeType, data: data, width: Int(def.width!), height: Int(def.height!), size: def.data.count)
         case .video:
             draft = MessageInteractor.draftyVideo(caption: def.caption, mime: mimeType, refurl: ref, duration: def.duration!, width: Int(def.width!), height: Int(def.height!), fname: filename, size: def.data.count, preMime: def.previewMime, preview: def.preview, previewUrl: nil)
+            if def.round { draft = Linia2Round.markRound(draft) }
             previewData = def.preview
         }
 
@@ -681,6 +704,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         }
 
         guard let content = draft else { return }
+        head = MessageInteractor.linia2MergeHead(head, topic: topic.name, extra: def.extraHead)
         // Dismiss reply.
         self.dismissPendingMessage()
         self.presenter?.dismissPendingMessagePreviewBar()
@@ -765,6 +789,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
                         previewUrl = URL(string: ctrl.getStringParam(for: "url") ?? "")
                     }
                     draft = MessageInteractor.draftyVideo(caption: def.caption, mime: mimeType, refurl: srvUrl, duration: def.duration!, width: Int(def.width!), height: Int(def.height!), fname: filename, size: def.data.count, preMime: def.previewMime, preview: previewData, previewUrl: previewUrl)
+                    if def.round { draft = Linia2Round.markRound(draft) }
                 }
                 if let r = replyToCopy, let d = draft {
                     draft = r.append(d)
@@ -825,7 +850,7 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         } else {
             ref = nil
         }
-        let content = try? Drafty(plainText: " ").insertVideo(at: 0, mime: mime, bits: nil, refurl: ref, duration: duration, width: width, height: height, fname: fname, size: size, preMime: "image/png", preview: preview, previewRef: previewUrl)
+        let content = try? Drafty(plainText: " ").insertVideo(at: 0, mime: mime, bits: nil, refurl: ref, duration: duration, width: width, height: height, fname: fname, size: size, preMime: preMime ?? "image/png", preview: preview, previewRef: previewUrl)
         if let caption = caption, !caption.isEmpty {
             _ = content?.appendLineBreak().append(Drafty(plainText: caption))
         }

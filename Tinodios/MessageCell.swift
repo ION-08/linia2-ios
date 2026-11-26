@@ -30,6 +30,8 @@ protocol MessageCellDelegate: AnyObject {
     func didEndMediaPlayback(in cell: MessageCell, audioPlayer: VLCMediaPlayer)
     /// Seek operation completed.
     func didSeekMedia(in cell: MessageCell, audioPlayer: VLCMediaPlayer, pos: Float)
+    /// LINIA2: нажатие на время и галочки своего сообщения — «Информация о доставке».
+    func linia2DidTapDelivery(in cell: MessageCell)
 }
 
 // Optional date, avatar, sender name, message bubble: content, delivery marker, timestamp.
@@ -138,6 +140,18 @@ class MessageCell: UICollectionViewCell {
 
     var progressView = ProgressView()
 
+    /// LINIA2: тёмная полупрозрачная пилюля под временем и галочками своих сообщений.
+    var linia2MetaPill: UIView = {
+        let v = UIView()
+        v.backgroundColor = UIColor.black.withAlphaComponent(0x40 / 255.0)
+        v.isUserInteractionEnabled = false
+        v.isHidden = true
+        return v
+    }()
+
+    /// LINIA2: видео-кружок поверх содержимого (Linia2RoundVideo.swift).
+    var linia2Round: Linia2RoundVideoView?
+
     /// The `MessageCellDelegate` for the cell.
     weak var delegate: MessageCellDelegate?
 
@@ -146,6 +160,7 @@ class MessageCell: UICollectionViewCell {
         contentView.addSubview(senderNameLabel)
         contentView.addSubview(containerView)
         containerView.addSubview(content)
+        containerView.addSubview(linia2MetaPill)
         containerView.addSubview(timestampLabel)
         containerView.addSubview(deliveryMarker)
         containerView.addSubview(editedMarker)
@@ -170,6 +185,12 @@ class MessageCell: UICollectionViewCell {
         deliveryMarker.image = nil
         avatarView.image = nil
         progressView.isHidden = true
+        linia2MetaPill.isHidden = true
+        linia2Round?.stop()
+        linia2Round?.leftLabel.removeFromSuperview()
+        linia2Round?.removeFromSuperview()
+        linia2Round = nil
+        content.isHidden = false
 
         isDeleted = false
 
@@ -189,6 +210,16 @@ class MessageCell: UICollectionViewCell {
         }
 
         let touchLocation = gesture.location(in: self)
+
+        // LINIA2: кружок — звук вкл/выкл; галочки своего сообщения — «Информация».
+        if let r = linia2Round, r.superview != nil, r.frame.contains(convert(touchLocation, to: r.superview)) {
+            r.toggleSound()
+            return
+        }
+        if !linia2MetaPill.isHidden, linia2MetaPill.frame.insetBy(dx: -8, dy: -8).contains(convert(touchLocation, to: containerView)) {
+            delegate?.linia2DidTapDelivery(in: self)
+            return
+        }
 
         switch true {
         case progressView.cancelButton.frame.contains(convert(touchLocation, to: progressView)):

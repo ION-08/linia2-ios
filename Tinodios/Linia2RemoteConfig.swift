@@ -255,6 +255,12 @@ final class Linia2Config {
         return u
     }
 
+    /// Число из раздела (например, roundVideo.ttlDays); nil — нет или не число.
+    func number(_ sectionName: String, _ key: String) -> Double? {
+        guard let v = section(sectionName)[key] as? NSNumber, CFGetTypeID(v) != CFBooleanGetTypeID() else { return nil }
+        return v.doubleValue
+    }
+
     /// Встроенная функция включена? По умолчанию — да.
     func feature(_ name: String) -> Bool {
         (section("features")[name] as? Bool) ?? true

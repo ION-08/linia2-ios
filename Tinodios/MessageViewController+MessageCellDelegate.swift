@@ -134,6 +134,10 @@ extension MessageViewController: MessageCellDelegate {
             if !isFromCurrentSender(message: msg) && !topic.isSlfType {
                 menuItems.append(MessageMenuItem(title: "Пожаловаться", action: #selector(linia2ReportMessage(sender:)), seqId: cell.seqId))
             }
+            // LINIA2: «Информация» о доставке своего сообщения (Linia2Receipts.swift).
+            if isFromCurrentSender(message: msg) && !topic.isSlfType && linia2ReceiptInfoEnabled {
+                menuItems.append(MessageMenuItem(title: "Информация", action: #selector(linia2ShowReceiptInfo(sender:)), seqId: cell.seqId))
+            }
             if isFromCurrentSender(message: msg), let content = msg.content {
                 // Only allow editing messages which don't contain certain entity types.
                 var canEdit = true

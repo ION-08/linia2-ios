@@ -668,6 +668,7 @@ class CallViewController: UIViewController {
     private var lastStats: (lost: Double, received: Double)?
     private var lastStatsPoor = false
     private var micDenied = false
+    private var linia2MicObserver = false
     private var cameraDenied = false
     let stateLabel = UILabel()
     let flipButton = UIButton(type: .system)
@@ -758,11 +759,11 @@ class CallViewController: UIViewController {
                 switch result {
                 case .ok:
                     break
-                case .micDenied:
-                    // Звонок не обрываем: собеседник вас не слышит, пока не разрешите микрофон.
+                case .micUndetermined, .micDenied:
+                    // Звонок не обрываем: можно слушать; собеседник вас не слышит, пока не разрешите микрофон.
                     Cache.log.error("No permission to access microphone")
                     self.micDenied = true
-                    self.linia2PermissionHint("Нет доступа к микрофону — собеседник вас не слышит. Разрешите доступ в Настройках iPhone.")
+                    self.linia2ShowMicCard(denied: result == .micDenied)
                 case .cameraDenied:
                     // Видео без своей камеры: собеседника видно, вас — нет.
                     Cache.log.error("No permission to access camera")
@@ -874,6 +875,8 @@ class CallViewController: UIViewController {
         Cache.tinode.addListener(self.listener)
         // Prevent screen from dimming/going to sleep.
         UIApplication.shared.isIdleTimerDisabled = true
+        // LINIA2: аудиозвонок у уха — экран гаснет (датчик приближения).
+        UIDevice.current.isProximityMonitoringEnabled = self.isAudioOnlyCall
 
         if let topic = self.topic {
             if !topic.attached {
@@ -921,24 +924,164 @@ class CallViewController: UIViewController {
 
     private enum PermissionsCheckResult {
         case ok
+        case micUndetermined
         case micDenied
         case cameraDenied
     }
 
     private func permissionsCheck(completion: @escaping (PermissionsCheckResult) -> Void) {
-        self.checkMicPermissions { success in
-            guard success else {
-                completion(.micDenied)
-                return
-            }
-            if self.isAudioOnlyCall {
-                completion(.ok)
-                return
-            }
-            self.checkCameraPermissions { success in
+        // LINIA2: разрешение уже есть — не спрашиваем; не спрашивали — свой экран «Разрешить микрофон»;
+        // запрещено — инструкция «Настройки → Линия 2.0 → Микрофон».
+        let mic = AVAudioSession.sharedInstance().recordPermission
+        let micResult: PermissionsCheckResult = mic == .granted ? .ok : (mic == .undetermined ? .micUndetermined : .micDenied)
+        if self.isAudioOnlyCall {
+            completion(micResult)
+            return
+        }
+        self.checkCameraPermissions { success in
+            if micResult != .ok {
+                if !success { self.cameraDenied = true }
+                completion(micResult)
+            } else {
                 completion(success ? .ok : .cameraDenied)
             }
         }
+    }
+
+    // MARK: LINIA2: доступ к микрофону во время звонка
+
+    private static let kMicCardTag = 0x4C324D43
+    private static let kMicPillTag = 0x4C324D50
+
+    /// Карточка: «Разрешить микрофон» (не спрашивали) или «Открыть настройки» / «Проверить снова» (запрещено).
+    func linia2ShowMicCard(denied: Bool) {
+        view.viewWithTag(Self.kMicCardTag)?.removeFromSuperview()
+        linia2ShowMicPill()
+        let card = UIView()
+        card.tag = Self.kMicCardTag
+        card.backgroundColor = L2.hex(0x1B2133, 0.97)
+        card.layer.cornerRadius = 20
+        card.accessibilityIdentifier = "l2.call.micCard"
+        let icon = UIImageView(image: L2.symbol(denied ? "mic.slash.fill" : "mic.fill", 30, .semibold))
+        icon.tintColor = denied ? L2.danger : L2.accent
+        icon.contentMode = .center
+        let title = UILabel()
+        title.numberOfLines = 0
+        title.textAlignment = .center
+        title.font = L2.font(17, .semibold)
+        title.textColor = .white
+        title.text = denied ? L2T("l2.call.micDeniedTitle", "Доступ к микрофону запрещён")
+                            : L2T("l2.call.micAsk", "Разрешите доступ к микрофону, чтобы собеседник вас слышал")
+        let text = UILabel()
+        text.numberOfLines = 0
+        text.textAlignment = .center
+        text.font = L2.font(15)
+        text.textColor = UIColor.white.withAlphaComponent(0.75)
+        text.text = denied ? L2T("l2.call.micDeniedText", "Откройте Настройки → Линия 2.0 → Микрофон и включите доступ.") : nil
+        text.isHidden = !denied
+        var buttons: [UIView] = []
+        if denied {
+            let open = L2Button(L2T("l2.call.openSettings", "Открыть настройки"))
+            open.accessibilityIdentifier = "l2.call.micSettings"
+            open.addAction(UIAction { _ in
+                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+            }, for: .touchUpInside)
+            let check = L2Button(L2T("l2.call.checkAgain", "Проверить снова"), kind: .secondary)
+            check.accessibilityIdentifier = "l2.call.micCheck"
+            check.addAction(UIAction { [weak self] _ in self?.linia2RecheckMic(toast: true) }, for: .touchUpInside)
+            buttons = [open, check]
+        } else {
+            let allow = L2Button(L2T("l2.call.micAllow", "Разрешить микрофон"), symbol: "mic.fill")
+            allow.accessibilityIdentifier = "l2.call.micAllow"
+            allow.addAction(UIAction { [weak self] _ in
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    DispatchQueue.main.async {
+                        if granted { self?.linia2MicGranted() } else { self?.linia2ShowMicCard(denied: true) }
+                    }
+                }
+            }, for: .touchUpInside)
+            buttons = [allow]
+        }
+        let listen = UIButton(type: .system)
+        listen.setTitle(L2T("l2.call.listenOnly", "Только слушать"), for: .normal)
+        listen.setTitleColor(UIColor.white.withAlphaComponent(0.8), for: .normal)
+        listen.titleLabel?.font = L2.font(15, .medium)
+        listen.accessibilityIdentifier = "l2.call.micListen"
+        listen.addAction(UIAction { [weak card] _ in card?.removeFromSuperview() }, for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [icon, title, text] + buttons + [listen])
+        stack.axis = .vertical
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+        card.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(card)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
+            card.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -20),
+            card.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            card.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+        ])
+        if denied && !linia2MicObserver {
+            linia2MicObserver = true
+            observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.linia2RecheckMic(toast: false)
+            })
+        }
+    }
+
+    /// Плашка «Вас не слышно — разрешите микрофон» (нажатие — снова карточка).
+    private func linia2ShowMicPill() {
+        guard view.viewWithTag(Self.kMicPillTag) == nil else { return }
+        let pill = UIButton(type: .system)
+        pill.tag = Self.kMicPillTag
+        pill.setTitle("🎙 " + L2T("l2.call.micPill", "Вас не слышно — разрешите микрофон"), for: .normal)
+        pill.titleLabel?.numberOfLines = 0
+        pill.titleLabel?.textAlignment = .center
+        pill.titleLabel?.font = L2.font(14, .medium)
+        pill.setTitleColor(.white, for: .normal)
+        pill.backgroundColor = L2.hex(0xB5462F, 0.92)
+        pill.layer.cornerRadius = 14
+        pill.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+        pill.accessibilityIdentifier = "l2.call.micPill"
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        pill.addAction(UIAction { [weak self] _ in
+            self?.linia2ShowMicCard(denied: AVAudioSession.sharedInstance().recordPermission == .denied)
+        }, for: .touchUpInside)
+        view.addSubview(pill)
+        NSLayoutConstraint.activate([
+            pill.topAnchor.constraint(equalTo: stateLabel.bottomAnchor, constant: 14),
+            pill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            pill.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
+        ])
+    }
+
+    private func linia2RecheckMic(toast: Bool) {
+        guard micDenied, !closed else { return }
+        if AVAudioSession.sharedInstance().recordPermission == .granted {
+            linia2MicGranted()
+        } else if toast {
+            UiUtils.showToast(message: L2T("l2.call.micStillDenied", "Доступа к микрофону всё ещё нет"), level: .info)
+        }
+    }
+
+    /// Разрешили посреди звонка: включить запись звука.
+    private func linia2MicGranted() {
+        micDenied = false
+        view.viewWithTag(Self.kMicCardTag)?.removeFromSuperview()
+        view.viewWithTag(Self.kMicPillTag)?.removeFromSuperview()
+        CallManager.audioSessionChange { s in
+            try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+            if s.useManualAudio && s.isAudioEnabled {
+                s.isAudioEnabled = false   // перезапуск аудиомодуля WebRTC — теперь с микрофоном
+                s.isAudioEnabled = true
+            }
+            try? s.overrideOutputAudioPort(self.audioOutput)
+        }
+        if !isHeld { webRTCClient.setAudioEnabled(!isMuted) }
+        linia2UpdateButtons()
     }
 
     @objc func handleRouteChange(notification: Notification) {
@@ -995,6 +1138,7 @@ class CallViewController: UIViewController {
     func stopMedia() {
         // Allow screen dimming/going to sleep.
         UIApplication.shared.isIdleTimerDisabled = false
+        UIDevice.current.isProximityMonitoringEnabled = false
 
         if #available(iOS 15.0, *), let pip = self.pip as? Linia2CallPiP {
             webRTCClient.removeRemoteRenderer(pip.renderer)

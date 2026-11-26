@@ -196,6 +196,8 @@ jobs:
           set -o pipefail
           export TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN"
           export TEST_RUNNER_L2_WEB_PEER="${L2_WEB_PEER:-0}"
+          # Собеседник B управляется из теста (TinodiosUITestsFeatures: прочтение, кружок обратно).
+          export TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
           export TEST_RUNNER_L2_CODE="$L2_CODE" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" \
                  TEST_RUNNER_L2_REG_LOGIN="$L2_REG_LOGIN" TEST_RUNNER_L2_REG_PASSWORD="$L2_REG_PASSWORD" \
                  TEST_RUNNER_L2_REVIEW_LOGIN="${{ secrets.L2_REVIEW_LOGIN }}" TEST_RUNNER_L2_REVIEW_PASSWORD="${{ secrets.L2_REVIEW_PASSWORD }}"

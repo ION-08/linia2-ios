@@ -100,12 +100,14 @@ extension MessageViewController: MessageDisplayLogic {
     func reloadAllMessages() {
         assert(Thread.isMainThread)
         collectionView.reloadSections(IndexSet(integer: 0))
+        linia2ProcessBurn(messages.compactMap { $0 as? StoredMessage })   // прочитали — удалить сообщения режима
     }
 
     func displayChatMessages(messages: [StoredMessage], _ scrollToMostRecentMessage: Bool) {
         assert(Thread.isMainThread)
         guard collectionView != nil else { return }
         let oldData = self.messages
+        linia2ProcessBurn(messages)   // LINIA2: самоуничтожение (Linia2Burn.swift)
         let newData: [StoredMessage] = linia2ExtractReactions(messages)
 
         // Both empty: no change.
@@ -194,6 +196,7 @@ extension MessageViewController: MessageDisplayLogic {
         let hiIdUpper = hiId + 1
         let rowIds = (loId..<hiIdUpper).map { self.messageSeqIdIndex[$0] }.filter { $0 != nil }
         self.collectionView.reloadItems(at: rowIds.map { IndexPath(item: $0!, section: 0) })
+        linia2ProcessBurn(messages.compactMap { $0 as? StoredMessage })   // прочитали — удалить сообщения режима
     }
 
     func updateProgress(forMsgId msgId: Int64, progress: Float) {

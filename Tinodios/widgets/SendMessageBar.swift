@@ -60,7 +60,8 @@ class SendMessageBar: UIView {
         // Initial input text weight.
         static let kInitialInputFieldHeight: CGFloat = 40
 
-        static var kSendButtonImageWave: UIImage { L2.circleIcon("mic.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent) }
+        static var kSendButtonImageWave: UIImage { SendMessageBar.linia2CameraMode ? kSendButtonImageCamera : L2.circleIcon("mic.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent) }
+        static var kSendButtonImageCamera: UIImage { L2.circleIcon("video.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent, symbolSize: 13) }
         static var kSendButtonImageWavePressed: UIImage { L2.circleIcon("mic.fill", diameter: 54, fill: L2.accent, tint: L2.onAccent) }
         static var kSendButtonImageArrow: UIImage { L2.circleIcon("paperplane.fill", diameter: 32, fill: L2.accent, tint: L2.onAccent, symbolSize: 14) }
         static var kSendButtonImageEditCheck: UIImage? { L2.circleIcon("checkmark", diameter: 32, fill: L2.accent, tint: L2.onAccent) }
@@ -115,6 +116,12 @@ class SendMessageBar: UIView {
 
     // MARK: Properties
     private var audioLocked: Bool = false
+    /// LINIA2: кнопка записи — камера (видео-кружок) вместо микрофона; переключается нажатием.
+    static var linia2CameraMode: Bool {
+        get { Linia2Round.cameraMode }
+        set { Linia2Round.cameraMode = newValue }
+    }
+    private var linia2RoundCancelled = false
 
     private var pendingPreviewAction: PendingPreviewAction = .none
     public var pendingPreviewText: NSAttributedString? {
@@ -162,6 +169,22 @@ class SendMessageBar: UIView {
             delegate?.sendMessageBar(sendText: msg)
             inputField.text = nil
             textViewDidChange(inputField)
+        } else if Linia2Round.featureOn && pendingPreviewAction != .edit {
+            // LINIA2: нажатие без текста — микрофон ⇄ камера (кружок).
+            SendMessageBar.linia2CameraMode.toggle()
+            linia2UpdateRecordButton()
+            L2.haptic()
+        }
+    }
+
+    func linia2UpdateRecordButton() {
+        let cam = SendMessageBar.linia2CameraMode
+        sendButton.accessibilityValue = cam ? "камера" : "микрофон"
+        if inputField.actualText.isEmpty && !audioLocked {
+            sendButton.setImage(Constants.kSendButtonImageWave, for: .normal)
+            sendButton.accessibilityLabel = cam ? "Записать кружок" : "Записать голосовое"
+        } else {
+            sendButton.accessibilityLabel = "Отправить"
         }
     }
 
@@ -193,6 +216,30 @@ class SendMessageBar: UIView {
             // Cancel long press.
             sender.isEnabled = false
             sender.isEnabled = true
+            return
+        }
+
+        // LINIA2: режим камеры — удержание записывает видео-кружок, смахивание влево — отмена.
+        if SendMessageBar.linia2CameraMode && Linia2Round.featureOn {
+            let vc = delegate as? MessageViewController
+            switch sender.state {
+            case .began:
+                linia2RoundCancelled = false
+                self.sendButtonLocation = sender.location(in: self)
+                vc?.linia2RoundGesture(.began, cancel: false)
+            case .changed:
+                if !linia2RoundCancelled, sender.location(in: self).x - sendButtonLocation.x < -90 {
+                    linia2RoundCancelled = true
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    vc?.linia2RoundGesture(.changed, cancel: true)
+                }
+            case .ended:
+                vc?.linia2RoundGesture(.ended, cancel: linia2RoundCancelled)
+            case .cancelled, .failed:
+                vc?.linia2RoundGesture(.cancelled, cancel: true)
+            default:
+                break
+            }
             return
         }
 
@@ -374,6 +421,7 @@ class SendMessageBar: UIView {
 
         showAudioBar(.hidden)
         linia2Style(container: self)
+        linia2UpdateRecordButton()
     }
 
     // MARK: - Subviews handling
@@ -523,6 +571,7 @@ extension SendMessageBar: UITextViewDelegate {
             inputFieldHeight.constant = Constants.kInitialInputFieldHeight
 
             self.sendButton.setImage(Constants.kSendButtonImageWave, for: .normal)
+            linia2UpdateRecordButton()
         } else {
             let size = CGSize(width: frame.width - Constants.inputFieldInsetLeading - Constants.inputFieldInsetTrailing, height: .greatestFiniteMagnitude)
             let fittingSize = inputField.sizeThatFits(size)
@@ -531,6 +580,7 @@ extension SendMessageBar: UITextViewDelegate {
             }
 
             self.sendButton.setImage(self.sendButtonTextImage, for: .normal)
+            linia2UpdateRecordButton()
         }
     }
 }

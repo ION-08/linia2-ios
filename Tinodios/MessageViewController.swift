@@ -168,6 +168,14 @@ class MessageViewController: UIViewController {
         return b
     }()
 
+    /// LINIA2: отдельная кнопка видеозвонка в шапке.
+    lazy var navBarVideoBtn: UIBarButtonItem = {
+        let b = UIBarButtonItem(image: L2.symbol("video", 19, .regular), style: .plain, target: self, action: #selector(navBarVideoCallTapped(sender:)))
+        b.accessibilityIdentifier = "l2.chat.video"
+        b.accessibilityLabel = "Видеозвонок"
+        return b
+    }()
+
     /// Pointer to the view holding messages.
     weak var collectionView: MessageView!
     private var collectionViewBottomAnchor: NSLayoutConstraint!
@@ -214,6 +222,11 @@ class MessageViewController: UIViewController {
     var pinnedSelectionIndex: Int = 0
 
     var isInitialLayout = true
+
+    // LINIA2: подпись «Самоуничтожение включено» над полем ввода (Linia2Burn.swift).
+    var linia2BurnLabel: UILabel?
+    var linia2BurnLabelBottom: NSLayoutConstraint?
+    var linia2LastScreenshotNote: Date?
 
     // Highlight this cell when scroll finishes (after the user tapped on a quote or a pinned message).
     var highlightCellAtPathAfterScroll: IndexPath?
@@ -264,6 +277,10 @@ class MessageViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(self.deviceRotated),
             name: UIDevice.orientationDidChangeNotification, object: nil)
+        // LINIA2: снимок экрана в режиме самоуничтожения.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(self.linia2DidTakeScreenshot),
+            name: UIApplication.userDidTakeScreenshotNotification, object: nil)
     }
     private func removeAppStateObservers() {
         NotificationCenter.default.removeObserver(
@@ -428,6 +445,7 @@ class MessageViewController: UIViewController {
 
         self.collectionViewBottomAnchor.constant = -(inputAccessoryView?.frame.height ?? 0)
         self.goToLatestButtonBottomAnchor.constant = -(inputAccessoryView?.frame.height ?? 0) - 16
+        self.linia2BurnLabelBottom?.constant = -(inputAccessoryView?.frame.height ?? 0) - 4
 
         // Otherwise setting contentInset after viewDidAppear will be animated.
         if isInitialLayout {
@@ -455,6 +473,7 @@ class MessageViewController: UIViewController {
         super.viewDidAppear(animated)
         navigationController?.interactivePopGestureRecognizer?.isEnabled = true
         linia2ScheduleHistoryCheck()
+        linia2UpdateBurnUI()
 
         collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: sendMessageBar.frame.height, right: 0)
 
@@ -619,27 +638,15 @@ class MessageViewController: UIViewController {
         }
     }
 
+    /// LINIA2: 📞 — сразу аудиозвонок, 📹 — сразу видеозвонок (без промежуточного меню).
     @objc func navBarCallTapped(sender: UIMenuController) {
-        switch self.topicType {
-        case .p2p:
-            let alert = UIAlertController(title: NSLocalizedString("Call", comment: "Menu title for selecting type of call"), message: nil, preferredStyle: .actionSheet)
-            alert.modalPresentationStyle = .popover
-            alert.addAction(UIAlertAction(title: NSLocalizedString("Audio-only", comment: "Menu item: audio-only call"), style: .default, handler: { audioCall in
-                self.performSegue(withIdentifier: "Messages2Call", sender: Constants.kAudioOnlyCall)
-            }))
-            if Linia2Config.shared.feature("videoCalls") {   // LINIA2: выключатель видеозвонков
-            alert.addAction(UIAlertAction(title: NSLocalizedString("Video", comment: "Menu item: video call"), style: .default, handler: { videoCall in
-                self.performSegue(withIdentifier: "Messages2Call", sender: Constants.kVideoCall)
-            }))
-            }
-            alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Alert action"), style: .cancel, handler: nil))
-            if let presentation = alert.popoverPresentationController {
-                presentation.barButtonItem = navBarCallBtn
-            }
-            self.present(alert, animated: true, completion: nil)
-        default:
-            break
-        }
+        guard self.topicType == .p2p else { return }
+        self.performSegue(withIdentifier: "Messages2Call", sender: Constants.kAudioOnlyCall)
+    }
+
+    @objc func navBarVideoCallTapped(sender: UIBarButtonItem) {
+        guard self.topicType == .p2p, Linia2Config.shared.feature("videoCalls") else { return }
+        self.performSegue(withIdentifier: "Messages2Call", sender: Constants.kVideoCall)
     }
 }
 
@@ -723,6 +730,8 @@ extension MessageViewController: UICollectionViewDataSource {
         // Draw the bubble
         bubbleDecorator(for: message, at: indexPath)(cell.containerView)
         linia2RenderReactions(cell: cell, message: message)
+        linia2LayoutMetaPill(cell: cell, message: message)
+        linia2RenderRound(cell: cell, message: message)
 
         return cell
     }
@@ -741,6 +750,10 @@ extension MessageViewController: UICollectionViewDataSource {
                 cell.containerView.backgroundColor = Constants.kDeletedMessageBubbleColorLight
             }
             cell.content.textColor = Constants.kDeletedMessageTextColor
+        } else if linia2IsServiceMessage(message) {
+            // LINIA2: системная строка по центру.
+            cell.containerView.backgroundColor = L2.surface.withAlphaComponent(0.85)
+            cell.content.textColor = L2.textSecondary
         } else if isFromCurrentSender(message: message) {
             if traitCollection.userInterfaceStyle == .dark {
                 cell.containerView.backgroundColor = Constants.kOutgoingBubbleColorDark
@@ -762,7 +775,10 @@ extension MessageViewController: UICollectionViewDataSource {
         cell.content.font = Constants.kContentFont
 
         let storedMessage = message as! StoredMessage
-        if let attributedText = storedMessage.cachedContent {
+        if let t = linia2ServiceText(message) {
+            // LINIA2: свой переключатель самоуничтожения — «Вы включили …».
+            cell.content.attributedText = NSAttributedString(string: t + Constants.kOutgoingMetadataCarveout, attributes: [.font: Constants.kContentFont, .foregroundColor: L2.textSecondary])
+        } else if let attributedText = storedMessage.cachedContent {
             let carveout = (isFromCurrentSender(message: message) ? Constants.kOutgoingMetadataCarveout : Constants.kIncomingMetadataCarveout)
             let text = NSMutableAttributedString(attributedString: attributedText)
             text.append(NSAttributedString(string: carveout, attributes: [.font: Constants.kContentFont]))
@@ -782,8 +798,9 @@ extension MessageViewController: UICollectionViewDataSource {
             }
         }
         let markerTextColor = isFromCurrentSender(message: message) ? UIColor.white.withAlphaComponent(0.75) : L2.textSecondary
-        if let ts = message.ts {
-            cell.timestampLabel.text = RelativeDateFormatter.shared.timeOnly(from: ts)
+        if let ts = message.ts, !linia2IsServiceMessage(message) {
+            // LINIA2: 🔥 — сообщение в режиме самоуничтожения.
+            cell.timestampLabel.text = (Linia2Burn.isBurnMessage(message) ? "🔥" : "") + RelativeDateFormatter.shared.timeOnly(from: ts)
             cell.timestampLabel.textColor = markerTextColor
         }
         cell.editedMarker.text = editedMarkerText(forMessage: message)
@@ -824,7 +841,7 @@ extension MessageViewController: UICollectionViewDataSource {
     }
 
     func deliveryMarker(for message: Message) -> (UIImage, UIColor)? {
-        guard isFromCurrentSender(message: message), let topic = topic else { return nil }
+        guard isFromCurrentSender(message: message), !linia2IsServiceMessage(message), let topic = topic else { return nil }
         // LINIA2: флаг отметок «доставлено/прочитано» (features.readReceipts).
         guard Linia2Config.shared.feature("readReceipts") else { return nil }
         return UiUtils.deliveryMarkerIcon(for: message, in: topic)
@@ -833,7 +850,7 @@ extension MessageViewController: UICollectionViewDataSource {
     // Returns closure which adds message bubble mask to the supplied UIView.
     func bubbleDecorator(for message: Message, at indexPath: IndexPath) -> (UIView) -> Void {
         let isIncoming = !isFromCurrentSender(message: message)
-        let isDeleted = message.isDeleted
+        let isDeleted = message.isDeleted || linia2IsServiceMessage(message)
 
         let breakBefore = !isPreviousMessageSameSender(at: indexPath) || !isPreviousMessageSameDate(at: indexPath)
         let breakAfter = !isNextMessageSameSender(at: indexPath) || !isNextMessageSameDate(at: indexPath)
@@ -894,7 +911,7 @@ extension MessageViewController {
 
     // Should avatars be shown at all for any message?
     func avatarsVisible(message: Message) -> Bool {
-        return (topic?.isGrpType ?? false) && !(topic?.isChannel ?? false) && !isFromCurrentSender(message: message)
+        return (topic?.isGrpType ?? false) && !(topic?.isChannel ?? false) && !isFromCurrentSender(message: message) && !linia2IsServiceMessage(message)
     }
 
     // Show avatar in the given message
@@ -942,8 +959,10 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // The message set has avatars.
         let hasAvatars = avatarsVisible(message: message)
         let isDeleted = message.isDeleted
+        // LINIA2: служебные строки (самоуничтожение, скриншот) — по центру, как «удалено».
+        let isCentered = isDeleted || linia2IsServiceMessage(message)
         // This message has an avatar.
-        let isAvatarVisible = !isDeleted && shouldShowAvatar(for: message, at: indexPath)
+        let isAvatarVisible = !isCentered && shouldShowAvatar(for: message, at: indexPath)
         // This message has been edited.
         let isEdited = message.isEdited
 
@@ -979,25 +998,25 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // isDeleted ? center container : else
         // isFromCurrent Sender ? Flush container right : flush left.
         let originX =
-            isDeleted ? (collectionView.bounds.width - containerSize.width) / 2 :
+            isCentered ? (collectionView.bounds.width - containerSize.width) / 2 :
             isOutgoing ? cellSize.width - avatarPadding - containerSize.width - containerPadding.right : avatarPadding + containerPadding.left
         attr.containerFrame = CGRect(origin: CGPoint(x: originX, y: newDateLabelHeight + containerPadding.top), size: containerSize)
 
         // Content: RichTextLabel.
         let contentInset =
-            isDeleted ? Constants.kDeletedMessageContentInset :
+            isCentered ? Constants.kDeletedMessageContentInset :
             isOutgoing ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
         attr.contentFrame = CGRect(x: contentInset.left, y: contentInset.top, width: attr.containerFrame.width - contentInset.left - contentInset.right, height: attr.containerFrame.height - contentInset.top - contentInset.bottom - (showUploadProgress ? Constants.kProgressViewHeight : 0))
 
         var rightEdge = CGPoint(x: attr.containerFrame.width - Constants.kDeliveryMarkerPadding, y: attr.containerFrame.height - Constants.kDeliveryMarkerSize)
-        if isOutgoing {
+        if isOutgoing && !isCentered {
             rightEdge.x -= Constants.kDeliveryMarkerSize
             attr.deliveryMarkerFrame = CGRect(x: rightEdge.x, y: rightEdge.y, width: Constants.kDeliveryMarkerSize, height: Constants.kDeliveryMarkerSize)
         } else {
             attr.deliveryMarkerFrame = .zero
         }
 
-        attr.timestampFrame = !message.isDeleted ? CGRect(x: rightEdge.x - Constants.kTimestampWidth - Constants.kTimestampPadding, y: rightEdge.y, width: Constants.kTimestampWidth, height: Constants.kDeliveryMarkerSize) : .zero
+        attr.timestampFrame = !isCentered ? CGRect(x: rightEdge.x - Constants.kTimestampWidth - Constants.kTimestampPadding, y: rightEdge.y, width: Constants.kTimestampWidth, height: Constants.kDeliveryMarkerSize) : .zero
 
         if isEdited {
             let x = attr.timestampFrame.origin != .zero ? attr.timestampFrame.origin.x - Constants.kEditedMarkerWidth - Constants.kEditedMarkerPadding : rightEdge.x
@@ -1083,8 +1102,11 @@ extension MessageViewController: MessageViewLayoutDelegate {
     /// Calculate size of the view which holds message content.
     func calcContainerSize(for message: Message, avatarsVisible: Bool, progressVisible: Bool) -> CGSize {
         let maxWidth = calcMaxContentWidth(for: message, avatarsVisible: avatarsVisible)
+        if !message.isDeleted && linia2IsRound(message) {   // LINIA2: видео-кружок
+            return linia2RoundContainerSize(maxWidth: maxWidth, progressVisible: progressVisible)
+        }
         let insets =
-            message.isDeleted ? Constants.kDeletedMessageContentInset :
+            (message.isDeleted || linia2IsServiceMessage(message)) ? Constants.kDeletedMessageContentInset :
             isFromCurrentSender(message: message) ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
 
         var size = calcContentSize(for: message, maxWidth: maxWidth)
@@ -1116,7 +1138,9 @@ extension MessageViewController: MessageViewLayoutDelegate {
         }
 
         let storedMessage = message as! StoredMessage
-        if let content = storedMessage.attributedContent(fitIn: CGSize(width: maxWidth, height: collectionView.frame.height * 0.66), withDefaultAttributes: [.font: Constants.kContentFont, .foregroundColor: textColor]) {
+        if let t = linia2ServiceText(message) {
+            attributedText.append(NSAttributedString(string: t, attributes: [.font: Constants.kContentFont, .foregroundColor: textColor]))
+        } else if let content = storedMessage.attributedContent(fitIn: CGSize(width: maxWidth, height: collectionView.frame.height * 0.66), withDefaultAttributes: [.font: Constants.kContentFont, .foregroundColor: textColor]) {
             attributedText.append(content)
         } else {
             attributedText.append(NSAttributedString(string: "none", attributes: [.font: Constants.kContentFont]))

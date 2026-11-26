@@ -142,6 +142,17 @@ class Linia2CallTestBase: XCTestCase {
 
     /// Позвонить из открытого чата.
     func startCall(video: Bool) {
+        // Отдельные кнопки 📞 / 📹 в шапке — звонок начинается сразу.
+        let direct = app.buttons[video ? "l2.chat.video" : "l2.chat.call"].firstMatch
+        if direct.waitForExistence(timeout: 5) {
+            direct.tap()
+            dismissSpringboardAlerts()
+            let allowMic = any("l2.call.micAllow")
+            if allowMic.waitForExistence(timeout: 3) { allowMic.tap(); sleep(1); dismissSpringboardAlerts() }
+            wait(any("l2.call.state"), "экран звонка", timeout: 20)
+            screenshot(video ? "video-dialing" : "audio-dialing")
+            return
+        }
         let call = app.buttons["l2.chat.call"].firstMatch.exists ? app.buttons["l2.chat.call"].firstMatch : app.navigationBars.buttons["Позвонить"].firstMatch
         wait(call, "кнопка звонка в шапке чата").tap()
         let item = video ? (app.buttons["Видео"].firstMatch.exists ? app.buttons["Видео"].firstMatch : app.buttons["Video"].firstMatch)

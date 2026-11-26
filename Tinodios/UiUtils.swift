@@ -744,24 +744,18 @@ class UiUtils {
     }
 
     public static func deliveryMarkerIcon(for message: Message, in topic: DefaultComTopic) -> (UIImage, UIColor) {
-        let iconName: String
-        // LINIA2: ✓ серая — отправлено, ✓✓ серые — доставлено, ✓✓ красные — прочитано (colors.readReceipt, по умолчанию #FF1F3D).
-        var tint: UIColor = UIColor.white.withAlphaComponent(0.62)
-
+        // LINIA2: ✓ — отправлено, ✓✓ светло-серые — доставлено, ✓✓ цвета colors.readReceipt (#FF1F3D) — прочитано.
+        // Галочки рисуются линией ~2.4 pt (16 pt), под ними — тёмная полупрозрачная пилюля (MessageViewController).
         if message.isPending {
-            iconName = "in-progress-30"
-        } else {
-            if topic.msgReadCount(seq: message.seqId) > 0 {
-                iconName = "done-all-30"
-                tint = L2.hex(Linia2Config.shared.color("readReceipt") ?? 0xFF1F3D)
-            } else if topic.msgRecvCount(seq: message.seqId) > 0 {
-                iconName = "done-all-30"
-            } else {
-                iconName = "done-30"
-            }
+            return (L2Checks.pending, UIColor(white: 0.88, alpha: 0.9))
         }
-
-        return (UIImage(named: iconName)!, tint)
+        if topic.msgReadCount(seq: message.seqId) > 0 {
+            return (L2Checks.double, L2.hex(Linia2Config.shared.color("readReceipt") ?? 0xFF1F3D))
+        }
+        if topic.msgRecvCount(seq: message.seqId) > 0 {
+            return (L2Checks.double, UIColor(white: 0.88, alpha: 0.95))
+        }
+        return (L2Checks.single, UIColor(white: 0.88, alpha: 0.95))
     }
 
     // Returns a shortened version of the file name.

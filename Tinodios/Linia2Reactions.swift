@@ -143,7 +143,8 @@ extension MessageViewController {
         guard let topic = topic else { return }
         L2.haptic()
         let remove = linia2MyReactions[seq]?[emoji] != nil
-        let head: [String: JSONValue] = ["reply": .string(String(seq)), (remove ? Self.kL2UnreactHeader : Self.kL2ReactHeader): .string(emoji)]
+        var head: [String: JSONValue] = ["reply": .string(String(seq)), (remove ? Self.kL2UnreactHeader : Self.kL2ReactHeader): .string(emoji)]
+        for (k, v) in Linia2Burn.extraHead(topic: topic.name) ?? [:] { head[k] = v }   // режим самоуничтожения
         topic.publish(content: Drafty(content: emoji), withExtraHeaders: head).thenCatch { err in
             Cache.log.error("Linia2: реакция не отправлена: %@", err.localizedDescription)
             DispatchQueue.main.async { UiUtils.showToast(message: remove ? "Не удалось снять реакцию" : "Не удалось отправить реакцию") }
@@ -574,12 +575,14 @@ extension MessageViewController {
             "delete": [(#selector(deleteMessageSoft(sender:)), L2T("l2.menu.delete", "Удалить у меня"), "trash", true, "delete")],
             "deleteAll": [(#selector(deleteMessageHard(sender:)), L2T("l2.menu.deleteAll", "Удалить у всех"), "trash.fill", true, "delete")],
             "report": [(#selector(linia2ReportMessage(sender:)), L2T("l2.menu.report", "Пожаловаться"), "exclamationmark.bubble", true, "")],
+            "info": [(#selector(linia2ShowReceiptInfo(sender:)), L2T("l2.msg.info", "Информация"), "info.circle", false, "readInfo")],
         ]
         let available = Set(items.map { $0.action })
         // Время на изменение своего сообщения.
         var editAllowed = true
         if let win = cfg.editWindowSeconds, let ts = cell.timeStamp, Date().timeIntervalSince(ts) > win { editAllowed = false }
-        let order = cfg.menu("message") ?? Self.kL2DefaultMessageMenu
+        var order = cfg.menu("message") ?? Self.kL2DefaultMessageMenu
+        if !order.contains("info") { order.append("info") }   // «Информация» — в конец, если её нет в списке
         var actions: [Linia2MenuAction] = []
         var used = Set<String>()
         for id in order where !used.contains(id) {

@@ -884,8 +884,10 @@ final class TinodiosUITests: XCTestCase {
         let call = app.buttons["l2.chat.call"].firstMatch.exists ? app.buttons["l2.chat.call"].firstMatch : app.navigationBars.buttons["Позвонить"].firstMatch
         wait(call, "кнопка звонка в шапке чата").tap()
         let audio = app.buttons["Только звук"].firstMatch
-        if audio.waitForExistence(timeout: 5) { audio.tap() }
+        if audio.waitForExistence(timeout: 2) { audio.tap() }   // старое меню выбора; теперь 📞 звонит сразу
         dismissSpringboardAlerts()   // разрешение на микрофон
+        let allowMic = any("l2.call.micAllow")   // свой экран «Разрешить микрофон» (доступ ещё не спрашивали)
+        if allowMic.waitForExistence(timeout: 4) { allowMic.tap(); sleep(1); dismissSpringboardAlerts() }
         let state = any("l2.call.state")
         wait(state, "экран звонка", timeout: 20)
         screenshot("call-dialing")
