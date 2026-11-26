@@ -45,7 +45,21 @@ enum Linia2API {
 enum Linia2Auth {
     /// Вход по логину и паролю. Колбэк на главном потоке: nil — успех, иначе текст ошибки.
     static func login(_ login: String, _ password: String, completion: @escaping (String?) -> Void) {
+        attemptLogin(login, password, retriesLeft: 2, completion: completion)
+    }
+
+    /// Сразу после «Выйти» соединение ещё закрывается, и первая попытка входа падает сетевой ошибкой
+    /// («Нет связи с сервером»), хотя сеть есть. Ошибку соединения (не ответ сервера) повторяем
+    /// с новым соединением через 1 с, до двух раз; неверный пароль и прочие ответы сервера — сразу.
+    private static func attemptLogin(_ login: String, _ password: String, retriesLeft: Int, completion: @escaping (String?) -> Void) {
         let tinode = Cache.tinode
+        let retry: () -> Bool = {
+            guard retriesLeft > 0 else { return false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                attemptLogin(login, password, retriesLeft: retriesLeft - 1, completion: completion)
+            }
+            return true
+        }
         do {
             try tinode.connectDefault(inBackground: false)?
                 .thenApply({ _ in tinode.loginBasic(uname: login, password: password) })
@@ -58,17 +72,23 @@ enum Linia2Auth {
                     return nil
                 }, onFailure: { err in
                     var msg = Linia2API.networkError
+                    var serverAnswered = false
                     if let e = err as? TinodeError, case .serverResponseError(let code, _, _) = e {
+                        serverAnswered = true
                         msg = (code == 401 || code == 403)
                             ? "Неверный логин или пароль. После 5 ошибок вход блокируется на 15 минут."
                             : "Ошибка входа (\(code)). Попробуйте ещё раз."
                     }
                     Cache.invalidate()
-                    DispatchQueue.main.async { completion(msg) }
+                    DispatchQueue.main.async {
+                        if !serverAnswered && retry() { return }
+                        completion(msg)
+                    }
                     return nil
                 })
         } catch {
             tinode.logout()
+            if retry() { return }
             completion(Linia2API.networkError)
         }
     }
