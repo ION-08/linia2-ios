@@ -152,6 +152,7 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
         let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidActivate(audioSession)
         rtc.isAudioEnabled = true
+        Linia2CallCenter.shared.active?.diag?.add(["type": "audio", "state": "activated"])
         DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallAudioActivated, object: nil) }
     }
 
@@ -159,6 +160,7 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
         let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidDeactivate(audioSession)
         rtc.isAudioEnabled = false
+        Linia2CallCenter.shared.active?.diag?.add(["type": "audio", "state": "deactivated"])
     }
 }
 

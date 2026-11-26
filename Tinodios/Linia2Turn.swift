@@ -11,7 +11,7 @@ import WebRTC
 final class Linia2Turn {
     static let shared = Linia2Turn()
 
-    private struct Server {
+    private struct Server: Codable {
         let urls: [String]
         let username: String
         let credential: String
@@ -21,6 +21,18 @@ final class Linia2Turn {
     private var servers: [Server] = []
     private var validUntil = Date.distantPast
     private var inFlight = false
+    private let kCache = "linia2.turn.cache"
+
+    private struct Stored: Codable { let servers: [Server]; let validUntil: Date }
+
+    private init() {
+        // LINIA2: кэш на диске (TTL сервера, обычно 12 ч) — при холодном старте от входящего звонка TURN уже есть.
+        if let d = UserDefaults.standard.data(forKey: kCache), let st = try? JSONDecoder().decode(Stored.self, from: d),
+           st.validUntil.timeIntervalSinceNow > 600 {
+            servers = st.servers
+            validUntil = st.validUntil
+        }
+    }
 
     /// Обновляет данные в фоне, если их нет или скоро истекут.
     func prefetch() {
@@ -28,7 +40,14 @@ final class Linia2Turn {
     }
 
     /// Возвращает TURN-серверы для звонка; при необходимости ждёт ответа сервера (не дольше `timeout`).
-    func iceServers(timeout: TimeInterval = 4) -> [RTCIceServer] {
+    /// LINIA2: если в кэше есть действующие — сразу, без ожидания (раньше главный поток ждал до 4 с при каждом
+    /// создании соединения — отсюда задержка ответа на offer); ожидание — только когда кэша нет совсем.
+    func iceServers(timeout: TimeInterval = 1.5) -> [RTCIceServer] {
+        let cached: [Server] = queue.sync { validUntil.timeIntervalSinceNow > 60 ? servers : [] }
+        if !cached.isEmpty {
+            if validUntil.timeIntervalSinceNow < 3600 { prefetch() }
+            return cached.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+        }
         let sem = DispatchSemaphore(value: 0)
         var result: [Server] = []
         queue.async {
@@ -75,6 +94,9 @@ final class Linia2Turn {
                 if !parsed.isEmpty {
                     self.servers = parsed
                     self.validUntil = Date().addingTimeInterval(ttl > 0 ? ttl : 3600)
+                    if let d = try? JSONEncoder().encode(Stored(servers: parsed, validUntil: self.validUntil)) {
+                        UserDefaults.standard.set(d, forKey: self.kCache)
+                    }
                 }
                 completion?(self.servers)
             }

@@ -7,7 +7,9 @@
 //  В журнал событий НЕ пишутся персональные данные: ни тексты сообщений, ни логины, ни имена, ни топики.
 //
 
+import AVFoundation
 import Foundation
+import WebRTC
 import FirebaseCore
 import FirebaseCrashlytics
 import FirebaseAnalytics
@@ -104,5 +106,129 @@ final class Linia2Push: TinodeEventListener {
         L2Log.event("l2_login", ["code": code])
         send()
         Linia2Voip.shared.register()
+        Linia2Turn.shared.prefetch()
+    }
+}
+
+// MARK: - Диагностика звонка → сервер (POST /invite/api/call-diag), формат как у веба (l2Diag в linia2.js)
+
+/// Только технические данные соединения: ICE, тип кандидатов, протокол, аудиотрек, уровень, байты, RTT, потери.
+/// Содержимое разговора не передаётся. Отчёты копятся и отправляются пачками (каждые 5 с и в конце звонка).
+final class Linia2CallDiag {
+    let sid = "i" + String(Int(Date().timeIntervalSince1970 * 1000), radix: 36) + String(Int.random(in: 0..<1_000_000), radix: 36)
+    private let topic: String
+    private let seqProvider: () -> Int
+    private var seq = 0
+    private weak var client: WebRTCClient?
+    private var events: [[String: Any]] = []
+    private var timer: Timer?
+    private var ended = false
+    private let started = Date()
+
+    init(topic: String, seq: @escaping () -> Int, client: WebRTCClient) {
+        self.topic = topic
+        self.seqProvider = seq
+        self.client = client
+    }
+
+    /// Только с главного потока.
+    func start(_ info: [String: Any]) {
+        var ev = info
+        ev["type"] = "start"
+        add(ev)
+        flush()
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.sample() }
+    }
+
+    /// Событие (с любого потока).
+    func add(_ ev: [String: Any]) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.add(ev) }
+            return
+        }
+        guard !ended || (ev["type"] as? String) == "end" else { return }
+        var e = ev
+        e["t"] = Int(Date().timeIntervalSince1970 * 1000)
+        e["ms"] = Int(Date().timeIntervalSince(started) * 1000)   // от начала звонка на устройстве
+        events.append(e)
+        let s = seqProvider()
+        if s > 0 { seq = s }
+        if events.count >= 40 { flush() }
+    }
+
+    func end(_ reason: String) {
+        guard !ended else { return }
+        timer?.invalidate()
+        timer = nil
+        add(["type": "end", "reason": reason])
+        ended = true
+        flush()
+    }
+
+    private func sample() {
+        guard !ended, let client = client else { return }
+        let rtc = RTCAudioSession.sharedInstance()
+        let rtcState: [String: Any] = ["rtcAudio": rtc.isAudioEnabled ? 1 : 0, "rtcActive": rtc.isActive ? 1 : 0,
+                                       "atrack": client.hasLocalAudioTrack, "aon": client.isAudioEnabled,
+                                       "route": AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none"]
+        client.statistics { report in
+            var ev: [String: Any] = ["type": "stats", "arx": 0, "atx": 0, "vrx": 0, "vtx": 0, "alevel": 0.0]
+            var arx = 0.0, atx = 0.0, vrx = 0.0, vtx = 0.0
+            var cands: [String: [String: NSObject]] = [:]
+            var pair: [String: NSObject]?
+            for (id, st) in report.statistics {
+                let v = st.values
+                let kind = (v["kind"] as? String) ?? (v["mediaType"] as? String) ?? ""
+                func num(_ k: String) -> Double { (v[k] as? NSNumber)?.doubleValue ?? 0 }
+                switch st.type {
+                case "candidate-pair":
+                    if (v["state"] as? String) == "succeeded", (v["nominated"] as? NSNumber)?.boolValue ?? false { pair = v }
+                case "local-candidate", "remote-candidate":
+                    cands[id] = v
+                case "inbound-rtp":
+                    if kind == "audio" {
+                        arx += num("bytesReceived")
+                        if v["audioLevel"] != nil { ev["alevel"] = num("audioLevel") }
+                        ev["lost"] = Int(num("packetsLost"))
+                    } else if kind == "video" { vrx += num("bytesReceived") }
+                case "outbound-rtp":
+                    if kind == "audio" { atx += num("bytesSent") } else if kind == "video" { vtx += num("bytesSent") }
+                case "media-source":
+                    if kind == "audio", v["audioLevel"] != nil { ev["llevel"] = num("audioLevel") }
+                default: break
+                }
+            }
+            ev["arx"] = Int(arx); ev["atx"] = Int(atx); ev["vrx"] = Int(vrx); ev["vtx"] = Int(vtx)
+            if let p = pair {
+                let l = cands[(p["localCandidateId"] as? String) ?? ""] ?? [:]
+                let r = cands[(p["remoteCandidateId"] as? String) ?? ""] ?? [:]
+                ev["lt"] = (l["candidateType"] as? String) ?? "?"
+                ev["rt"] = (r["candidateType"] as? String) ?? "?"
+                ev["proto"] = (l["protocol"] as? String) ?? ""
+                if let rtt = (p["currentRoundTripTime"] as? NSNumber)?.doubleValue { ev["rtt"] = Int(rtt * 1000) }
+            }
+            for (k, v) in rtcState { ev[k] = v }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                ev["ice"] = client.iceStateName
+                self.add(ev)
+                self.flush()
+            }
+        }
+    }
+
+    private func flush() {
+        guard !events.isEmpty, let token = Cache.tinode.authToken, !token.isEmpty,
+              let url = URL(string: Linia2API.base + "call-diag") else { return }
+        let batch = Array(events.prefix(60))
+        events.removeFirst(batch.count)
+        let body: [String: Any] = ["sid": sid, "topic": topic, "seq": seq, "client": "ios", "events": batch]
+        guard JSONSerialization.isValidJSONObject(body), let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        req.httpBody = data
+        URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
     }
 }

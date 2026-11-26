@@ -146,6 +146,8 @@ protocol WebRTCClientDelegate: AnyObject {
     func toggleRemoteVideo(remoteLive: Bool)
     // Returns true is the call is originated as audio only.
     var isAudioOnlyCall: Bool { get }
+    /// LINIA2: мы звоним (первый offer создаём сами, не дожидаясь negotiationneeded).
+    var linia2IsCaller: Bool { get }
 }
 
 /// TinodeVideoCallDelegate
@@ -183,6 +185,12 @@ class WebRTCClient: NSObject {
 
     private var localAudioTrack: RTCAudioTrack?
 
+    /// LINIA2: первый offer уже создан (звонящий) / ответ собеседника применён — дальше разрешена перенастройка.
+    private(set) var initialOfferSent = false
+    private var remoteAnswerApplied = false
+    /// Диагностика звонка (события ICE/соединения/треков) — см. Linia2CallDiag.
+    var onDiagEvent: (([String: Any]) -> Void)?
+
     private var remoteIceCandidatesCacheQueue = DispatchQueue(label: "co.tinode.webrtc.ice-candidates-queue")
     private var remoteIceCandidatesCache: [RTCIceCandidate] = []
 
@@ -200,6 +208,8 @@ class WebRTCClient: NSObject {
 
     // LINIA2: явные состояния (для CallKit «Выключить звук» и удержания).
     var isAudioEnabled: Bool { localAudioTrack?.isEnabled ?? false }
+    var hasLocalAudioTrack: Bool { localAudioTrack != nil }
+    var iceStateName: String { localPeer.map { WebRTCClient.iceName($0.iceConnectionState) } ?? "none" }
     func setAudioEnabled(_ on: Bool) { localAudioTrack?.isEnabled = on }
     func setVideoEnabled(_ on: Bool) { localVideoTrack?.isEnabled = on }
     var isVideoTrackEnabled: Bool { localVideoTrack?.isEnabled ?? false }
@@ -257,7 +267,16 @@ class WebRTCClient: NSObject {
         }
     }
 
+    var hasPeerConnection: Bool { localPeer != nil }
+
     func createPeerConnection(withDataChannel dataChannel: Bool) -> Bool {
+        // LINIA2: повторный вызов (соединение создано заранее, при «Принять») — используем готовое.
+        if localPeer != nil { return true }
+        // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
+        guard let audioTrack = self.localAudioTrack, let videoTrack = self.localVideoTrack else {
+            Cache.log.error("WebRTCClient - no local tracks (call already closed?)")
+            return false
+        }
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let config = generateRTCConfig() else {
             Cache.log.info("WebRTCClient - missing configuration. Quitting.")
@@ -270,18 +289,30 @@ class WebRTCClient: NSObject {
             return false
         }
 
+        // LINIA2: сначала медиа, потом канал данных. Раньше канал создавался первым: negotiationneeded
+        // приходил (в потоке signaling), пока поток ещё не добавлен, senders были пусты — и offer не
+        // создавался вовсе (веб принимал звонок и ждал offer, звонок обрывался по таймауту).
+        let stream = WebRTCClient.factory.mediaStream(withStreamId: "ARDAMS")
+        stream.addAudioTrack(audioTrack)
+        stream.addVideoTrack(videoTrack)
+        localPeer!.add(stream)
+
         if dataChannel {
             let chanConfig = RTCDataChannelConfiguration()
             chanConfig.isOrdered = true
             self.localDataChannel = localPeer!.dataChannel(forLabel: "events", configuration: chanConfig)
             self.localDataChannel?.delegate = self
         }
-
-        let stream = WebRTCClient.factory.mediaStream(withStreamId: "ARDAMS")
-        stream.addAudioTrack(self.localAudioTrack!)
-        stream.addVideoTrack(self.localVideoTrack!)
-        localPeer!.add(stream)
+        onDiagEvent?(["type": "pc", "iceServers": config.iceServers.count,
+                      "turn": config.iceServers.contains { $0.urlStrings.contains { $0.hasPrefix("turn") } }])
         return true
+    }
+
+    /// LINIA2: первый offer звонящего — сразу после создания соединения (не ждём negotiationneeded).
+    func makeInitialOffer() {
+        guard !initialOfferSent, let pc = localPeer else { return }
+        initialOfferSent = true
+        offer(pc)
     }
 
     func offer(_ peerConnection: RTCPeerConnection) {
@@ -341,6 +372,8 @@ class WebRTCClient: NSObject {
     }
 
     func disconnect() {
+        initialOfferSent = false
+        remoteAnswerApplied = false
         localPeer?.close()
         localPeer = nil
 
@@ -386,9 +419,13 @@ extension WebRTCClient {
     // TODO: ICE/WebRTC config should be obtained from the server.
     private func generateRTCConfig() -> RTCConfiguration? {
         let tinode = Cache.tinode
-        guard let iceConfig = tinode.getServerParam(for: "iceServers")?.asArray() else {
-            Cache.log.error("WebRTCClient.generateRTCConfig: Missing/invalid iceServers server parameter")
-            return nil
+        // LINIA2: без параметра iceServers от сервера (ещё не пришёл {ctrl} после входа) звонок не обрываем —
+        // соединяемся через наш TURN (Linia2Turn) и публичный STUN.
+        var iceConfig = tinode.getServerParam(for: "iceServers")?.asArray() ?? []
+        if iceConfig.isEmpty {
+            Cache.log.error("WebRTCClient.generateRTCConfig: Missing/invalid iceServers server parameter — TURN/STUN fallback")
+            onDiagEvent?(["type": "error", "where": "iceServersParam"])
+            iceConfig = [.dict(["urls": .array([.string("stun:stun.l.google.com:19302")])])]
         }
 
         let config = RTCConfiguration()
@@ -405,7 +442,7 @@ extension WebRTCClient {
 
         for v in iceConfig {
             guard let vals = v.asDict() else {
-                return nil
+                continue
             }
             if let urls = vals["urls"]?.asArray() {
                 let iceStrings = urls.compactMap { $0.asString() }
@@ -484,6 +521,7 @@ extension WebRTCClient {
                 self.delegate?.closeCall()
                 return
             }
+            self.remoteAnswerApplied = true
             self.delegate?.markConnectionSetupComplete()
         })
     }
@@ -503,6 +541,8 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
         Cache.log.info("WebRTCClient: Received remote stream %@", stream)
+        onDiagEvent?(["type": "track", "kind": stream.videoTracks.isEmpty ? "audio" : "audio+video",
+                      "audio": stream.audioTracks.count, "video": stream.videoTracks.count])
         self.delegate?.handleRemoteStream(self, receivedStream: stream)
     }
 
@@ -511,14 +551,25 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
     }
 
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
-        guard (self.delegate?.canSendOffer() ?? false) && !peerConnection.senders.isEmpty else {
-            return
+        // LINIA2: решение принимаем на главном потоке (там же создаются соединение и первый offer).
+        DispatchQueue.main.async {
+            guard self.localPeer === peerConnection, peerConnection.signalingState == .stable,
+                  let d = self.delegate, d.canSendOffer(), !peerConnection.senders.isEmpty else { return }
+            if d.linia2IsCaller {
+                if !self.initialOfferSent {
+                    self.makeInitialOffer()
+                    return
+                }
+                // Перенастройка — только после того, как первый обмен offer/answer завершён.
+                guard self.remoteAnswerApplied else { return }
+            }
+            Cache.log.info("WebRTCClient: negotiating connection")
+            self.offer(peerConnection)
         }
-        Cache.log.info("WebRTCClient: negotiating connection")
-        self.offer(peerConnection)
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+        onDiagEvent?(["type": "ice", "state": Self.iceName(newState)])
         switch newState {
         case .closed:
             fallthrough
@@ -532,6 +583,25 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
             DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallUnstable, object: nil) }
         default:
             break
+        }
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        let names: [RTCPeerConnectionState: String] = [.new: "new", .connecting: "connecting", .connected: "connected",
+                                                       .disconnected: "disconnected", .failed: "failed", .closed: "closed"]
+        onDiagEvent?(["type": "conn", "state": names[newState] ?? "\(newState.rawValue)"])
+    }
+
+    static func iceName(_ s: RTCIceConnectionState) -> String {
+        switch s {
+        case .new: return "new"
+        case .checking: return "checking"
+        case .connected: return "connected"
+        case .completed: return "completed"
+        case .failed: return "failed"
+        case .disconnected: return "disconnected"
+        case .closed: return "closed"
+        default: return "\(s.rawValue)"
         }
     }
 
@@ -678,6 +748,8 @@ class CallViewController: UIViewController {
     private var captions: [UIButton: UILabel] = [:]
     private var routePicker: UIView?
     private var pip: AnyObject?
+    /// LINIA2: диагностика звонка на сервер (/invite/api/call-diag).
+    private(set) var diag: Linia2CallDiag?
 
     class InfoListener: TinodeEventListener {
         private weak var delegate: TinodeVideoCallDelegate?
@@ -758,6 +830,16 @@ class CallViewController: UIViewController {
         guard !started, !closed else { return }
         started = true
         loadViewIfNeeded()
+        let d = Linia2CallDiag(topic: topic?.name ?? "", seq: { [weak self] in self?.callSeqId ?? 0 }, client: webRTCClient)
+        diag = d
+        webRTCClient.onDiagEvent = { [weak d] ev in d?.add(ev) }
+        let st = UIApplication.shared.applicationState
+        d.start(["dir": callDirection == .outgoing ? "out" : "in", "audioOnly": isAudioOnlyCall,
+                 "app": st == .active ? "active" : (st == .background ? "background" : "inactive"),
+                 "mic": AVAudioSession.sharedInstance().recordPermission == .granted ? "granted" : "no",
+                 "connected": Cache.tinode.isConnected, "attached": topic?.attached ?? false,
+                 "rtcAudio": RTCAudioSession.sharedInstance().isAudioEnabled,
+                 "ua": "iOS " + UIDevice.current.systemVersion])
         self.permissionsCheck { result in
             DispatchQueue.main.async {
                 switch result {
@@ -1183,6 +1265,7 @@ class CallViewController: UIViewController {
         }
         guard !closed else { return }
         closed = true
+        diag?.end(connectedAt != nil ? "connected" : "not-connected")
         playSoundEffect(nil)
         uiTimer?.invalidate()
         uiTimer = nil
@@ -1232,7 +1315,13 @@ class CallViewController: UIViewController {
             },
             onFailure: UiUtils.ToastFailureHandler)
         case .incoming:
+            // LINIA2: соединение (ICE-серверы, микрофон) готовим ДО «accept» — offer собеседника приходит
+            // через доли секунды и обрабатывается сразу (раньше pc и TURN создавались только по приходу offer).
+            if !self.webRTCClient.createPeerConnection(withDataChannel: false) {
+                Cache.log.error("CallVC.handleCallInvite - early createPeerConnection failed, will retry on offer")
+            }
             // The callee (we) has accepted the call. Notify the caller.
+            diag?.add(["type": "accept-sent"])
             self.topic?.videoCall(event: "accept", seq: self.callSeqId)
             if !self.isAudioOnlyCall {
                 DispatchQueue.main.async {
@@ -1348,6 +1437,8 @@ extension CallViewController: WebRTCClientDelegate {
         return self.callDirection != .incoming || self.callInitialSetupComplete
     }
 
+    var linia2IsCaller: Bool { callDirection == .outgoing }
+
     func enableMediaControls() {
         DispatchQueue.main.async {
             self.micToggleButton.isEnabled = true
@@ -1386,12 +1477,17 @@ extension CallViewController: TinodeVideoCallDelegate {
         if !self.isAudioOnlyCall {
             self.linia2SetAvatarVisible(false)
         }
+        guard !closed else { return }
+        diag?.add(["type": "accepted"])
         // The callee has informed us (the caller) of the call acceptance.
         guard self.webRTCClient.createPeerConnection(withDataChannel: true) else {
             Cache.log.error("CallVC.handleAcceptedMsg - createPeerConnection failed")
+            diag?.add(["type": "error", "where": "createPeerConnection"])
             self.handleCallClose()
             return
         }
+        // LINIA2: offer — сразу, не полагаясь на negotiationneeded (см. WebRTCClient.createPeerConnection).
+        self.webRTCClient.makeInitialOffer()
     }
 
     func handleOfferMsg(with payload: JSONValue?) {
@@ -1401,7 +1497,10 @@ extension CallViewController: TinodeVideoCallDelegate {
             self.handleCallClose()
             return
         }
+        guard !closed else { return }
+        diag?.add(["type": "offer"])
         // Data channel should be created by the peer. Not creating one.
+        // LINIA2: обычно соединение уже создано при «Принять» (handleCallInvite) — тогда ответ мгновенный.
         guard self.webRTCClient.createPeerConnection(withDataChannel: false) else {
             Cache.log.error("CallVC.handleOfferMsg - createPeerConnection failed")
             self.handleCallClose()

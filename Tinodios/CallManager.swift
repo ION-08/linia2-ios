@@ -181,6 +181,8 @@ class CallManager {
         }
 
         self.callInProgress = Call(uuid: uuid, topic: topicName, from: fromUid, seq: seq, audioOnly: audioOnly)
+        // LINIA2: TURN заранее — к моменту «Принять» данные уже в кэше, ответ на offer без ожидания.
+        Linia2Turn.shared.prefetch()
         let tinode = Cache.tinode
         let user: DefaultUser? = tinode.getUser(with: fromUid)
         var senderName = user?.pub?.fn ?? callerName ?? NSLocalizedString("Unknown", comment: "Placeholder for missing user name")

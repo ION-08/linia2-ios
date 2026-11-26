@@ -380,6 +380,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         // Подключиться к серверу (если приложение было закрыто) — дальше звонок идёт как обычно.
         if callState == MsgServerData.WebRTC.kStarted.rawValue {
             // При холодном старте подключение уже запускает didFinishLaunching; здесь — если приложение было в фоне.
+            Linia2Turn.shared.prefetch()   // LINIA2: TURN заранее, до «Принять»
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 let tinode = Cache.tinode
                 if !tinode.isConnected {
