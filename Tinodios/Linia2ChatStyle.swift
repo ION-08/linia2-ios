@@ -188,6 +188,16 @@ extension ChatListViewCell {
         if let t = title.text { title.text = linia2NameWithoutLeadingEmoji(t) }
         title.textColor = L2.textPrimary
         subtitle.textColor = L2.textSecondary
+        // Без превью (нового чата ещё нет сообщений) имя — по центру строки, а не над серединой
+        // (xib: низ имени = центр − 1, ниже — превью; пустое превью оставляло имя выше аватара).
+        let noPreview = (subtitle.attributedText?.string ?? subtitle.text ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        subtitle.isHidden = noPreview
+        if let c = contentView.constraints.first(where: {
+            ($0.firstItem as? UIView) === title && $0.firstAttribute == .bottom && $0.secondAttribute == .centerY
+        }) {
+            c.constant = noPreview ? (title.font.lineHeight / 2).rounded(.up) : -1
+        }
         if let att = subtitle.attributedText, att.length > 0 {
             let m = NSMutableAttributedString(attributedString: att)
             m.addAttribute(.foregroundColor, value: L2.textSecondary, range: NSRange(location: 0, length: m.length))
