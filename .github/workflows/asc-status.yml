@@ -1,0 +1,62 @@
+# Проверка сборки в App Store Connect: ждёт обработку (Processing → VALID) и добавляет сборку во внутреннюю группу «Команда».
+# Запуск вручную: gh workflow run asc-status.yml -f build=<номер>. Ничего не собирает и не загружает.
+name: ASC status
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Номер сборки (CFBundleVersion)"
+        required: true
+      group:
+        description: "Группа TestFlight"
+        default: "Команда"
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Обработка и группа
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUILD: ${{ inputs.build }}
+          GROUP: ${{ inputs.group }}
+        run: |
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/k.p8"; chmod 600 "$RUNNER_TEMP/k.p8"
+          cat > "$RUNNER_TEMP/asc.mjs" <<'JS'
+          import crypto from 'node:crypto'; import fs from 'node:fs';
+          const e = process.env, key = fs.readFileSync(process.argv[2]);
+          function tok() { const n = Math.floor(Date.now() / 1000), b = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+            const h = b({ alg: 'ES256', kid: e.ASC_KEY_ID, typ: 'JWT' }), p = b({ iss: e.ASC_ISSUER_ID, iat: n, exp: n + 900, aud: 'appstoreconnect-v1' });
+            return h + '.' + p + '.' + crypto.sign('sha256', Buffer.from(h + '.' + p), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url'); }
+          async function api(path, opt = {}) { const r = await fetch('https://api.appstoreconnect.apple.com' + path, { ...opt, headers: { Authorization: 'Bearer ' + tok(), 'Content-Type': 'application/json' } });
+            const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, j, t }; }
+          const sum = s => { console.log(s); fs.appendFileSync(e.GITHUB_STEP_SUMMARY, s + '\n'); };
+          const app = (await api('/v1/apps?filter[bundleId]=info.codix.liniya2')).j.data[0];
+          let b = null;
+          for (let i = 0; i < 70; i++) {
+            const r = await api(`/v1/builds?filter[app]=${app.id}&filter[version]=${e.BUILD}&fields[builds]=version,processingState,expired,usesNonExemptEncryption,uploadedDate`);
+            b = r.j?.data?.[0];
+            console.log(new Date().toISOString(), b ? `сборка ${e.BUILD}: ${b.attributes.processingState}` : `сборки ${e.BUILD} пока нет`);
+            if (b && b.attributes.processingState !== 'PROCESSING') break;
+            await new Promise(r => setTimeout(r, 60000));
+          }
+          if (!b) { sum(`❌ Сборка ${e.BUILD} не появилась в App Store Connect`); process.exit(1); }
+          sum(`Сборка ${e.BUILD}: обработка ${b.attributes.processingState}, шифрование: ${b.attributes.usesNonExemptEncryption}`);
+          if (b.attributes.processingState !== 'VALID') process.exit(1);
+          const bd = (await api(`/v1/builds/${b.id}/buildBetaDetail`)).j?.data;
+          if (bd) sum(`TestFlight: внутреннее тестирование ${bd.attributes.internalBuildState}, внешнее ${bd.attributes.externalBuildState}`);
+          const gs = (await api(`/v1/betaGroups?filter[app]=${app.id}&limit=50`)).j?.data || [];
+          sum('Группы: ' + gs.map(g => g.attributes.name + (g.attributes.isInternalGroup ? ' (внутр.)' : '')).join(', '));
+          const g = gs.find(x => x.attributes.name === e.GROUP);
+          if (!g) { sum(`❌ Группы «${e.GROUP}» нет`); process.exit(1); }
+          const add = await api(`/v1/betaGroups/${g.id}/relationships/builds`, { method: 'POST', body: JSON.stringify({ data: [{ type: 'builds', id: b.id }] }) });
+          sum(`Добавление в «${e.GROUP}»: HTTP ${add.s}${add.s >= 300 ? ' ' + add.t.slice(0, 300) : ''}`);
+          const inG = (await api(`/v1/betaGroups/${g.id}/builds?limit=50&fields[builds]=version`)).j?.data || [];
+          const ok = inG.some(x => x.id === b.id); sum(ok ? `✅ Сборка ${e.BUILD} доступна группе «${e.GROUP}»` : `❌ Сборки нет в группе «${e.GROUP}»`);
+          if (!ok) process.exit(1);
+          JS
+          rc=0; node "$RUNNER_TEMP/asc.mjs" "$RUNNER_TEMP/k.p8" || rc=$?; rm -f "$RUNNER_TEMP/k.p8"; exit $rc
