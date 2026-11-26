@@ -498,8 +498,11 @@ final class Linia2E2ETests: XCTestCase {
     private func incomingCallButton(_ accept: Bool, timeout: TimeInterval) -> XCUIElement? {
         let titles = accept ? ["Accept", "Принять", "Answer", "Ответить", "slide to answer"] : ["Decline", "Отклонить", "Reject"]
         let apps = [springboard(), XCUIApplication(bundleIdentifier: "com.apple.InCallService"), app!]
+        // Под -l2-uitest приложение показывает свой алерт «Входящий звонок» (id l2.call.incoming) вместо CallKit.
+        let own = app.alerts.buttons[accept ? "Принять" : "Отклонить"].firstMatch
         let end = Date().addingTimeInterval(timeout)
         repeat {
+            if own.exists { return own }
             for a in apps {
                 for t in titles {
                     let b = a.buttons[t].firstMatch
@@ -521,10 +524,36 @@ final class Linia2E2ETests: XCTestCase {
     private func waitCallScreen(_ timeout: TimeInterval = 30) throws {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
-            if hangUpButton().exists { return }
+            if hangUpButton().exists || any("l2.call.state").exists { return }
             usleep(300_000)
         }
         throw fail("не открылся экран звонка (нет кнопки «Завершить»)")
+    }
+
+    /// Текст состояния экрана звонка («Идёт звонок 00:05» / «Соединение…»).
+    private func callState() -> String {
+        let e = any("l2.call.state")
+        return e.exists ? e.label : ""
+    }
+
+    /// Ждать «Идёт звонок» (соединение установлено) — если приложение показывает состояние.
+    private func waitInCall(_ timeout: TimeInterval = 30) -> String {
+        let end = Date().addingTimeInterval(timeout)
+        var last = ""
+        while Date() < end {
+            last = callState()
+            if last.localizedCaseInsensitiveContains("идёт звонок") { return last }
+            usleep(500_000)
+        }
+        return last
+    }
+
+    /// Если экран показывает состояние — оно должно стать «Идёт звонок»; иначе (старая сборка) — только пометка.
+    private func inCallCheck() throws -> String {
+        let st = waitInCall(30)
+        if st.isEmpty { return "состояние звонка не показано (нет l2.call.state)" }
+        if !st.localizedCaseInsensitiveContains("идёт звонок") { throw fail("соединение не установлено: «\(st)»") }
+        return "iOS: «\(st)»"
     }
 
     private func micEnabled() -> Bool {
@@ -890,11 +919,12 @@ final class Linia2E2ETests: XCTestCase {
             screenshot("call-in-progress")
             c.sig("answered")
             sleep(4)
+            let st = try inCallCheck()
             let mic = micEnabled()
             try c.wait("connected", from: "web", 60)
             try c.wait("hungup", from: "web", 60)
             try waitCallClosed(25)
-            return "экран звонка открыт, кнопки звука \(mic ? "активны (SDP согласован)" : "не активны/не найдены"); звук/видео в симуляторе не проверяются"
+            return "\(st); экран звонка открыт, кнопки звука \(mic ? "активны (SDP согласован)" : "не активны/не найдены"); звук/видео в симуляторе не проверяются"
         }
         scenario("K02", "Звонок iPhone 1 → iPhone 2: принять, соединение, завершить", pair, timeout: 300) { c in
             try openChat(p2Match)
@@ -904,6 +934,7 @@ final class Linia2E2ETests: XCTestCase {
             c.sig("calling")
             try c.wait("answered", from: "iphone2", 90)
             sleep(6)
+            let st = try inCallCheck()
             let mic = micEnabled()
             screenshot("call-1-2")
             c.sig("talked")
@@ -912,7 +943,7 @@ final class Linia2E2ETests: XCTestCase {
             try waitCallClosed(20)
             c.sig("hungup")
             try c.wait("closed", from: "iphone2", 40)
-            return "сигнализация и экран звонка у обоих; кнопки звука \(mic ? "активны" : "не активны/не найдены"); ICE iPhone↔iPhone без веб-стороны не измерить"
+            return "\(st); сигнализация и экран звонка у обоих; кнопки звука \(mic ? "активны" : "не активны/не найдены"); ICE iPhone↔iPhone без веб-стороны не измерить"
         }
         scenario("K05", "Пропущенный звонок веб → iPhone 1 + вкладка «Звонки»", withWeb, timeout: 300) { c in
             try openChat(wName)
@@ -1373,13 +1404,14 @@ final class Linia2E2ETests: XCTestCase {
             c.sig("calling")
             try c.wait("connected", from: "web", 90)
             sleep(3)
+            let st = try inCallCheck()
             let mic = micEnabled()
             screenshot("call-2-web")
             hangUpIfInCall()
             try waitCallClosed(20)
             c.sig("hungup")
             try c.wait("ended", from: "web", 40)
-            return "кнопки звука \(mic ? "активны" : "не активны/не найдены")"
+            return "\(st); кнопки звука \(mic ? "активны" : "не активны/не найдены")"
         }
         scenario("K04", "Отклонённый звонок веб → iPhone 2 + вкладка «Звонки»", withWeb, timeout: 300) { c in
             try openChat(wName)

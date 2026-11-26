@@ -1,5 +1,5 @@
 # Большой автотест «как живые люди»: iPhone 1 + iPhone 2 (два симулятора, XCUITest) + Веб (Playwright, Chromium).
-# Один macOS-раннер: приложение собирается один раз (build-for-testing), два симулятора и браузер работают параллельно,
+# Один macOS-раннер (macos-15, Xcode 16 — среды iOS 18 уже установлены): приложение собирается один раз (build-for-testing), два симулятора и браузер работают параллельно,
 # шаги синхронизируются через «доску» e2e/board.mjs (http://127.0.0.1:8765). Сценарии — TinodiosUITests/Linia2E2ETests.swift
 # и e2e/web.mjs; нестабильный сценарий повторяется всеми участниками до 2 раз (видно в отчёте).
 # Отчёт — таблица в Summary; скриншоты, видео (при падениях), xcresult и логи — в артефакте e2e-results-N.
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   e2e:
     if: ${{ github.workflow != 'E2E' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]') }}
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 170
     env:
       API: https://v2.chat-linia.site/invite/api
@@ -34,7 +34,7 @@ jobs:
 
       - name: Xcode
         run: |
-          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1); sudo xcode-select -s "${XC:-/Applications/Xcode.app}"; xcodebuild -version
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | grep -v beta | sort -V | tail -1); sudo xcode-select -s "${XC:-/Applications/Xcode.app}"; xcodebuild -version
 
       - name: Подготовка (Firebase-конфиг, pods)
         env:
