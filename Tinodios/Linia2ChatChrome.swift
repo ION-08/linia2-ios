@@ -349,17 +349,18 @@ final class Linia2ChatSearch: NSObject, UITextFieldDelegate {
 
     func dismiss() {
         field.resignFirstResponder()
+        vc?.linia2Search = nil   // до раскладки: плашка «Закреплённое» снова видна
         UIView.animate(withDuration: 0.2, animations: {
             self.bar.alpha = 0
             self.setPinnedHidden(false)
         }, completion: { _ in self.bar.removeFromSuperview() })
-        vc?.linia2Search = nil
     }
 
     /// Дизайн: строка поиска встаёт на место плашки «Закреплённое» — плашку на время поиска прячем (не накладываются).
     private func setPinnedHidden(_ hidden: Bool) {
         guard let cv = vc?.collectionView else { return }
         for v in cv.visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader) { v.alpha = hidden ? 0 : 1 }
+        cv.collectionViewLayout.invalidateLayout()
     }
 
     @objc private func changed() {

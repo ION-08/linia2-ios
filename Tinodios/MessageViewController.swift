@@ -1000,6 +1000,8 @@ extension MessageViewController: MessageViewLayoutDelegate {
             // Дизайн: плашка с равными полями слева и справа (раньше прижималась к левому краю экрана).
             attr.frame = CGRect(origin: CGPoint(x: collectionView.layoutMargins.left, y: 0), size: CGSize(width: collectionView.frame.width - collectionView.layoutMargins.left - collectionView.layoutMargins.right, height: height))
             attr.zIndex = 1
+            // Дизайн: под строкой поиска плашку не показываем (alpha вида перетирается атрибутами раскладки).
+            attr.alpha = linia2Search == nil ? 1 : 0
             return
         } else if attr.representedElementCategory == .decorationView {
             // This should not happen.
