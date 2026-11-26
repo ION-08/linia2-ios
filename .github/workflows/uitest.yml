@@ -5,8 +5,11 @@
 # Секрет репозитория: CI_TOKEN (служебный доступ к /invite/api/ci/* на сервере).
 name: UI tests
 
-# Только вручную или из TestFlight — минуты macOS дорогие (x10). На коммиты не запускается.
+# Автоматически на каждый push в main (репозиторий публичный — минуты бесплатные).
+# Если тест прошёл, workflow «TestFlight» сам собирает и загружает сборку (workflow_run).
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   workflow_call:
     outputs:

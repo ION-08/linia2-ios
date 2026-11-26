@@ -7,7 +7,13 @@
 #   GOOGLE_SERVICE_INFO_PLIST_BASE64 — (необязательно) GoogleService-Info.plist для push через Firebase
 name: TestFlight
 
+# Автоматически: после успешного «UI tests» на push в main (проверка в симуляторе → сборка).
+# Вручную: workflow_dispatch (тогда UI-тест запускается внутри этого workflow).
 on:
+  workflow_run:
+    workflows: ["UI tests"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -24,14 +30,15 @@ concurrency:
 
 jobs:
   uitest:
-    if: ${{ !inputs.skip_uitest }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_uitest }}
     uses: ./.github/workflows/uitest.yml
     secrets: inherit
 
   build:
     needs: uitest
     # Сборка: тест прошёл / пропущен, либо тест упал без вылетов приложения (сбой шага симулятора).
-    if: ${{ always() && (needs.uitest.result == 'success' || needs.uitest.result == 'skipped' || (needs.uitest.result == 'failure' && needs.uitest.outputs.compiled == 'true' && needs.uitest.outputs.crashed == 'false')) }}
+    # Автоматически — только если UI-тест на push прошёл полностью.
+    if: ${{ always() && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') || (github.event_name == 'workflow_dispatch' && (needs.uitest.result == 'success' || needs.uitest.result == 'skipped' || (needs.uitest.result == 'failure' && needs.uitest.outputs.compiled == 'true' && needs.uitest.outputs.crashed == 'false')))) }}
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -39,6 +46,9 @@ jobs:
       BUNDLE_ID: info.codix.liniya2
     steps:
       - uses: actions/checkout@v4
+        with:
+          # тот же коммит, что прошёл UI-тест
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Выбор Xcode (последний 26.x)
         run: |
