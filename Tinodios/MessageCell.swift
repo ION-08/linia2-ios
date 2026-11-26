@@ -52,22 +52,17 @@ class MessageCell: UICollectionViewCell {
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
-        if traitCollection.userInterfaceStyle == .dark {
-            backgroundColor = .black
-        } else {
-            backgroundColor = .white
-        }
+        // LINIA2: строки прозрачные — под всеми сообщениями один общий фон чата.
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
         contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         setupSubviews()
     }
 
     public required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
-        if traitCollection.userInterfaceStyle == .dark {
-            backgroundColor = .black
-        } else {
-            backgroundColor = .white
-        }
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
         contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         setupSubviews()
     }
@@ -193,6 +188,8 @@ class MessageCell: UICollectionViewCell {
 
         content.text = nil
         content.attributedText = nil
+        content.textAlignment = .natural
+        content.accessibilityIdentifier = nil
         newDateLabel.text = nil
         senderNameLabel.text = nil
         timestampLabel.text = nil

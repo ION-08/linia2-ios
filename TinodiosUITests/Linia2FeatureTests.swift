@@ -477,7 +477,7 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         XCTAssertTrue(any("l2.chat.title").exists, "нет имени и статуса по центру шапки")
         XCTAssertTrue(labelContains(peerName).exists, "в шапке нет имени собеседника")
         XCTAssertTrue(any("l2.chat.search").exists, "нет 🔍 в шапке")
-        XCTAssertTrue(any("l2.chat.more").exists, "нет ⋮ в шапке")
+        XCTAssertFalse(any("l2.chat.more").exists, "«⋮» в шапке должен быть убран (действия — по нажатию на имя)")
         let title = any("l2.chat.title")
         XCTAssertLessThan(back.frame.maxX, title.frame.minX, "«Назад» не слева от имени")
         XCTAssertLessThan(title.frame.maxX, any("l2.chat.search").frame.minX, "🔍 не справа от имени")
@@ -551,5 +551,53 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         while Date() < end && fwd.count < 1 { usleep(500_000) }
         XCTAssertGreaterThanOrEqual(fwd.count, 1, "пересланное сообщение не появилось в «Избранном»")
         screenshot("saved-forwarded")
+    }
+
+    // MARK: - Экран переписки: шапка без «⋮», действия по имени, пузыри, системные плашки, русский текст
+
+    func testU1_ChatScreenLayout() throws {
+        openPeerChat()
+        let width = app.windows.firstMatch.frame.width
+        wait(any("l2.chat.title"), "имя и статус в шапке")
+        XCTAssertFalse(any("l2.chat.more").exists, "в шапке остался «⋮»")
+        XCTAssertTrue(any("l2.chat.search").exists, "нет 🔍 в шапке")
+        XCTAssertTrue(any("l2.chat.back").exists, "нет «‹ Назад»")
+
+        // Пузыри: своё длинное сообщение — не шире 80% экрана и не ближе 10 pt к правому краю.
+        let long = "Длинное " + Self.stamp + " " + String(repeating: "слово ", count: 40)
+        send(long)
+        let bubble = labelContains("Длинное " + Self.stamp)
+        XCTAssertLessThanOrEqual(bubble.frame.width, width * 0.8, "пузырь шире 80% экрана: \(bubble.frame.width) из \(width)")
+        XCTAssertLessThanOrEqual(bubble.frame.maxX, width - 10, "пузырь ближе 10 pt к краю экрана")
+        screenshot("chat-bubbles")
+
+        // Системная строка — компактная плашка по центру.
+        let (b, topic) = try peer()
+        b.publish(topic, content: peerName + " выключил(а) исчезающие сообщения", head: ["linia2-burnmode": "off"])
+        let svc = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'l2.service.'"))
+        let end = Date().addingTimeInterval(20)
+        while Date() < end && svc.count == 0 { usleep(300_000) }
+        if svc.count > 0 {
+            let pill = svc.element(boundBy: svc.count - 1)
+            XCTAssertLessThan(pill.frame.height, 44, "системная строка не компактная: \(pill.frame.height)")
+            XCTAssertLessThan(abs(pill.frame.midX - width / 2), 6, "системная строка не по центру")
+            screenshot("chat-service-pill")
+        } else {
+            XCTFail("нет системной строки об исчезающих сообщениях")
+        }
+        XCTAssertFalse(labelContains("missed").exists, "в чате английское «missed»")
+
+        // Действия бывшего «⋮» — по нажатию на имя: «Информация о чате» → «Пожаловаться», «Заблокировать».
+        any("l2.chat.title").tap()
+        let more = wait(any("l2.topicinfo.more"), "«Ещё» на экране информации о чате", timeout: 10)
+        screenshot("chat-info")
+        more.tap()
+        XCTAssertTrue(app.sheets.buttons["Пожаловаться"].firstMatch.waitForExistence(timeout: 5), "нет «Пожаловаться»")
+        XCTAssertTrue(app.sheets.buttons.matching(NSPredicate(format: "label ENDSWITH 'блокировать'")).firstMatch.exists, "нет «Заблокировать»")
+        app.sheets.buttons["Отмена"].firstMatch.tap()
+        sleep(1)
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        if back.exists { back.tap() }
+        wait(app.textViews["l2.chat.input"].firstMatch, "возврат в чат", timeout: 10)
     }
 }

@@ -9,7 +9,7 @@ import UIKit
 
 class PermissionsEditViewController: UIViewController, UITableViewDelegate, UITableViewDataSource {
     private static let kAllPermissions: [Character] = ["J", "R", "W", "P", "A", "S", "D", "O"]
-    private static let kPermissions: [Character: String] = ["J": "Join", "R": "Read", "W": "Write", "P": "Receive notifications", "A": "Approve new members", "S": "Invite new members", "D": "Delete messages", "O": "Full control (owner)"]
+    private static let kPermissions: [Character: String] = ["J": "Вступать", "R": "Читать", "W": "Писать", "P": "Получать уведомления", "A": "Одобрять новых участников", "S": "Приглашать участников", "D": "Удалять сообщения", "O": "Полный доступ (владелец)"]
 
     public typealias ChangeHandler = ((_ permissions: String) -> Void)
 

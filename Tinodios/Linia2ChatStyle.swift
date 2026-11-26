@@ -270,6 +270,7 @@ extension MessageViewController {
             glass.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
             glass.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(linia2TitleTapped)))
             glass.accessibilityIdentifier = "l2.chat.title"
+            glass.accessibilityHint = "Информация о чате: блокировка, жалоба, автоудаление"
             navigationItem.titleView = glass
             navigationItem.leftBarButtonItem = UIBarButtonItem(customView: linia2BackCapsule())
             linia2ApplyFloatingAppearance()
@@ -294,7 +295,7 @@ extension MessageViewController {
         linia2SetStatus(online)
 
         if Linia2Chrome.floatingHeader {
-            // Справа одна пилюля: 📞 📹 ⏱ 🔍 ⋮ (chatHeader.buttons).
+            // Справа одна пилюля: 📞 📹 ⏱ 🔍 (chatHeader.buttons); действия «⋮» — по нажатию на аватар/имя.
             let right = linia2RightCapsule().map { [UIBarButtonItem(customView: $0)] } ?? []
             navigationItem.setRightBarButtonItems(right, animated: false)
             if let row = (tv as? L2GlassView)?.content.arrangedSubviews.first as? UIStackView, navBarAvatarView.superview !== row {
@@ -304,13 +305,15 @@ extension MessageViewController {
             return
         }
 
-        // Справа налево: ⋮, ⏱ самоуничтожение, 📹 видео, 📞 аудио (на экране: 📞 📹 ⏱ ⋮).
+        // Справа налево: ⏱ самоуничтожение, 📹 видео, 📞 аудио (на экране: 📞 📹 ⏱); «⋮» — только если в chatHeader.buttons.
         var items: [UIBarButtonItem] = []
-        let more = UIBarButtonItem(image: L2.symbol("ellipsis", 18, .semibold), style: .plain,
-                                   target: self, action: #selector(linia2TitleTapped))
-        more.accessibilityLabel = "Информация о чате"
-        more.accessibilityIdentifier = "l2.chat.more"
-        items.append(more)
+        if Linia2Chrome.headerButtons.contains("more") {
+            let more = UIBarButtonItem(image: L2.symbol("ellipsis", 18, .semibold), style: .plain,
+                                       target: self, action: #selector(linia2TitleTapped))
+            more.accessibilityLabel = "Информация о чате"
+            more.accessibilityIdentifier = "l2.chat.more"
+            items.append(more)
+        }
         if let burn = linia2BurnBarButton() {
             items.append(burn)
         }

@@ -90,10 +90,10 @@ class MessageViewController: UIViewController {
         static let kSenderNameLabelHeight: CGFloat = 16
         static let kNewDateFont = UIFont.boldSystemFont(ofSize: 10)
         static let kNewDateLabelHeight: CGFloat = 24
-        // Vertical spacing between messages from the same user
-        static let kVerticalCellSpacing: CGFloat = 2
-        // Additional vertical spacing between messages from different users in P2P topics.
-        static let kAdditionalP2PVerticalCellSpacing: CGFloat = 4
+        // Vertical spacing between messages from the same user (LINIA2: 4–6 pt, как в Telegram)
+        static let kVerticalCellSpacing: CGFloat = 5
+        // Additional vertical spacing between messages from different users (LINIA2: итого 10–12 pt).
+        static let kAdditionalP2PVerticalCellSpacing: CGFloat = 6
         static let kMinimumCellWidth: CGFloat = 94
         static let kMinimumEditedCellWidth: CGFloat = 150
         // This is the space between the other side of the message and the edge of screen.
@@ -101,8 +101,13 @@ class MessageViewController: UIViewController {
         // outgoing between the message and the left edge.
         static let kFarSideHorizontalSpacing: CGFloat = 45
 
-        // Insets around collection view, i.e. main view padding
-        static let kCollectionViewInset = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 2)
+        // Insets around collection view, i.e. main view padding (LINIA2: пузырь в 11 pt от края экрана)
+        static let kCollectionViewInset = UIEdgeInsets(top: 0, left: 11, bottom: 0, right: 11)
+        // LINIA2: максимальная ширина пузыря — доля ширины экрана.
+        static let kMaxBubbleWidthFraction: CGFloat = 0.78
+        // LINIA2: системные строки (исчезающие сообщения, снимок экрана) — компактная плашка по центру.
+        static let kServiceContentInset = UIEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
+        static var kServiceFont: UIFont { UIFont.preferredFont(forTextStyle: .caption1) }
 
         // Insets for the message bubble relative to collectionView: bubble should not touch the sides of the screen.
         static let kIncomingContainerPadding = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: Constants.kFarSideHorizontalSpacing)
@@ -774,8 +779,8 @@ extension MessageViewController: UICollectionViewDataSource {
             }
             cell.content.textColor = Constants.kDeletedMessageTextColor
         } else if linia2IsServiceMessage(message) {
-            // LINIA2: системная строка по центру.
-            cell.containerView.backgroundColor = L2.surface.withAlphaComponent(0.85)
+            // LINIA2: системная строка — плашка по центру, как «Сегодня/Вчера».
+            cell.containerView.backgroundColor = L2.surface.withAlphaComponent(0.72)
             cell.content.textColor = L2.textSecondary
         } else if isFromCurrentSender(message: message) {
             if traitCollection.userInterfaceStyle == .dark {
@@ -800,7 +805,9 @@ extension MessageViewController: UICollectionViewDataSource {
         let storedMessage = message as! StoredMessage
         if let t = linia2ServiceText(message) {
             // LINIA2: свой переключатель самоуничтожения — «Вы включили …».
-            cell.content.attributedText = NSAttributedString(string: t + Constants.kOutgoingMetadataCarveout, attributes: [.font: Constants.kContentFont, .foregroundColor: L2.textSecondary])
+            cell.content.attributedText = NSAttributedString(string: t, attributes: [.font: Constants.kServiceFont, .foregroundColor: L2.textSecondary])
+            cell.content.textAlignment = .center
+            cell.content.accessibilityIdentifier = "l2.service.\(message.seqId)"
         } else if let attributedText = storedMessage.cachedContent {
             let carveout = (isFromCurrentSender(message: message) ? Constants.kOutgoingMetadataCarveout : Constants.kIncomingMetadataCarveout)
             let text = NSMutableAttributedString(attributedString: attributedText)
@@ -895,7 +902,14 @@ extension MessageViewController: UICollectionViewDataSource {
             style = .middle
         }
 
+        let isService = !message.isDeleted && linia2IsServiceMessage(message)
         return { view in
+            if isService {   // LINIA2: плашка-капсула
+                let mask = CAShapeLayer()
+                mask.path = UIBezierPath(roundedRect: view.bounds, cornerRadius: min(11, view.bounds.height / 2)).cgPath
+                view.layer.mask = mask
+                return
+            }
             let path = !isDeleted ?
                 MessageBubbleDecorator.draw(view.bounds, isIncoming: isIncoming, style: style) :
                 MessageBubbleDecorator.drawDeleted(view.bounds)
@@ -988,14 +1002,15 @@ extension MessageViewController: MessageViewLayoutDelegate {
         let hasAvatars = avatarsVisible(message: message)
         let isDeleted = message.isDeleted
         // LINIA2: служебные строки (самоуничтожение, скриншот) — по центру, как «удалено».
-        let isCentered = isDeleted || linia2IsServiceMessage(message)
+        let isService = linia2IsServiceMessage(message)
+        let isCentered = isDeleted || isService
         // This message has an avatar.
         let isAvatarVisible = !isCentered && shouldShowAvatar(for: message, at: indexPath)
         // This message has been edited.
         let isEdited = message.isEdited
 
         // Insets for the message bubble relative to collectionView: bubble should not touch the sides of the screen.
-        let containerPadding = isOutgoing ? Constants.kOutgoingContainerPadding : Constants.kIncomingContainerPadding
+        let containerPadding = linia2ContainerPadding(outgoing: isOutgoing)
 
         // Size of the message bubble.
         let showUploadProgress = shouldShowProgressBar(for: message)
@@ -1026,12 +1041,13 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // isDeleted ? center container : else
         // isFromCurrent Sender ? Flush container right : flush left.
         let originX =
-            isCentered ? (collectionView.bounds.width - containerSize.width) / 2 :
+            isCentered ? ((isDeleted ? collectionView.bounds.width : cellSize.width) - containerSize.width) / 2 :
             isOutgoing ? cellSize.width - avatarPadding - containerSize.width - containerPadding.right : avatarPadding + containerPadding.left
         attr.containerFrame = CGRect(origin: CGPoint(x: originX, y: newDateLabelHeight + containerPadding.top), size: containerSize)
 
         // Content: RichTextLabel.
         let contentInset =
+            isService && !isDeleted ? Constants.kServiceContentInset :
             isCentered ? Constants.kDeletedMessageContentInset :
             isOutgoing ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
         attr.contentFrame = CGRect(x: contentInset.left, y: contentInset.top, width: attr.containerFrame.width - contentInset.left - contentInset.right, height: attr.containerFrame.height - contentInset.top - contentInset.bottom - (showUploadProgress ? Constants.kProgressViewHeight : 0))
@@ -1087,6 +1103,13 @@ extension MessageViewController: MessageViewLayoutDelegate {
         return size
     }
 
+    /// LINIA2: отступ «дальней» стороны — пузырь не шире kMaxBubbleWidthFraction экрана.
+    func linia2ContainerPadding(outgoing: Bool) -> UIEdgeInsets {
+        let screen = collectionView?.bounds.width ?? UIScreen.main.bounds.width
+        let far = max(Constants.kFarSideHorizontalSpacing, calcCellWidth() - (screen * Constants.kMaxBubbleWidthFraction).rounded(.down))
+        return outgoing ? UIEdgeInsets(top: 0, left: far, bottom: 0, right: 0) : UIEdgeInsets(top: 0, left: 0, bottom: 0, right: far)
+    }
+
     func calcCellWidth() -> CGFloat {
         return collectionView.frame.width - collectionView.layoutMargins.left - collectionView.layoutMargins.right
     }
@@ -1107,7 +1130,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
         let height: CGFloat
         if isNewDateLabelVisible(at: indexPath) {
             height = Constants.kNewDateLabelHeight
-        } else if !(topic?.isGrpType ?? false) && !isPreviousMessageSameSender(at: indexPath) {
+        } else if !isPreviousMessageSameSender(at: indexPath) {
             height = Constants.kAdditionalP2PVerticalCellSpacing
         } else {
             height = 0
@@ -1122,7 +1145,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
 
         let avatarWidth = avatarsVisible ? Constants.kAvatarSize : 0
 
-        let padding = isFromCurrentSender(message: message) ? Constants.kOutgoingContainerPadding : Constants.kIncomingContainerPadding
+        let padding = linia2ContainerPadding(outgoing: isFromCurrentSender(message: message))
 
         return calcCellWidth() - avatarWidth - padding.left - padding.right - insets.left - insets.right
     }
@@ -1133,15 +1156,19 @@ extension MessageViewController: MessageViewLayoutDelegate {
         if !message.isDeleted && linia2IsRound(message) {   // LINIA2: видео-кружок
             return linia2RoundContainerSize(maxWidth: maxWidth, progressVisible: progressVisible)
         }
+        let isService = !message.isDeleted && linia2IsServiceMessage(message)
         let insets =
-            (message.isDeleted || linia2IsServiceMessage(message)) ? Constants.kDeletedMessageContentInset :
+            isService ? Constants.kServiceContentInset :
+            message.isDeleted ? Constants.kDeletedMessageContentInset :
             isFromCurrentSender(message: message) ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
 
         var size = calcContentSize(for: message, maxWidth: maxWidth)
 
         size.width += insets.left + insets.right
-        size.width = max(size.width,
-                         message.isEdited ? Constants.kMinimumEditedCellWidth : Constants.kMinimumCellWidth)
+        if !isService {
+            size.width = max(size.width,
+                             message.isEdited ? Constants.kMinimumEditedCellWidth : Constants.kMinimumCellWidth)
+        }
         size.height += insets.top + insets.bottom
         if progressVisible {
             size.height += Constants.kProgressViewHeight
@@ -1167,7 +1194,9 @@ extension MessageViewController: MessageViewLayoutDelegate {
 
         let storedMessage = message as! StoredMessage
         if let t = linia2ServiceText(message) {
-            attributedText.append(NSAttributedString(string: t, attributes: [.font: Constants.kContentFont, .foregroundColor: textColor]))
+            // LINIA2: компактная плашка — мелкий шрифт, без места под время.
+            let a = NSAttributedString(string: t, attributes: [.font: Constants.kServiceFont, .foregroundColor: textColor])
+            return textSizeHelper.computeSize(for: a, within: maxWidth)
         } else if let content = storedMessage.attributedContent(fitIn: CGSize(width: maxWidth, height: collectionView.frame.height * 0.66), withDefaultAttributes: [.font: Constants.kContentFont, .foregroundColor: textColor]) {
             attributedText.append(content)
         } else {

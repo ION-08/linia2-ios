@@ -18,7 +18,7 @@ enum ContentOptions {
     }
 
     var text: String {
-        return self == .messages ? "No messages here" : "No contacts here"
+        return self == .messages ? "Сообщений пока нет" : "Контактов пока нет"
     }
 }
 

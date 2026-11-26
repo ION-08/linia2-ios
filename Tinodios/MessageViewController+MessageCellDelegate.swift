@@ -249,7 +249,7 @@ extension MessageViewController: MessageCellDelegate {
             }, onFailure: { err in
                 DispatchQueue.main.async {
                     completion(nil)
-                    UiUtils.showToast(message: "Failed to create message preview: \(err)")
+                    UiUtils.showToast(message: "Не удалось подготовить сообщение: \(err)")
                 }
                 return nil
             })

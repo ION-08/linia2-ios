@@ -483,6 +483,14 @@ final class Linia2HTMLPageViewController: UIViewController, WKNavigationDelegate
 enum Linia2Texts {
     static let ru: [String: String] = [
         "Attachment": "Вложение",
+        // Статусы звонков в ленте и списке (ключи — состояния WebRTC сервера).
+        "missed": "Пропущенный",
+        "busy": "Занято",
+        "declined": "Отклонён",
+        "disconnected": "Не состоялся",
+        "cancelled": "Отменён",
+        "connecting": "Соединение…",
+        "in progress": "Идёт звонок",
         "Image / Video": "Фото или видео",
         "File": "Файл",
         "Cancel": "Отмена",

@@ -41,7 +41,7 @@ class CredentialsChangeViewController: UITableViewController {
     }
 
     private func loadData() {
-        self.title = "Change Credentials"
+        self.title = "Смена контакта"
         if let cred = currentCredential {
             switch cred.meth {
             case Credential.kMethEmail:
@@ -49,13 +49,13 @@ class CredentialsChangeViewController: UITableViewController {
                 if let newCred = newCred {
                     newEmailField.text = newCred
                 }
-                infoLabel.text = "We will send a message with confirmation code to the address above."
+                infoLabel.text = "Мы отправим письмо с кодом подтверждения на указанный адрес."
             case Credential.kMethPhone:
                 currentTelField.text = cred.val
                 if let newTel = newCred {
                     newTelField.text = newTel
                 }
-                infoLabel.text = "We will send an SMS with confirmation code to the number above."
+                infoLabel.text = "Мы отправим SMS с кодом подтверждения на указанный номер."
             default:
                 break
             }
