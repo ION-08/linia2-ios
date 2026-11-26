@@ -276,7 +276,7 @@ final class Linia2MessageMenuViewController: UIViewController {
 
         // Тёмная «пилюля» с эмодзи: первый ряд + «+».
         if !primary.isEmpty {
-            reactBox.backgroundColor = L2.hex(0x1B2133, 0.96)
+            reactBox.backgroundColor = L2.dyn(0x1B2133, 0xFFFFFF, 0.96, 0.98)   // Дизайн: в светлой теме — светлая подложка
             reactBox.layer.cornerRadius = 28
             reactBox.accessibilityIdentifier = "l2.menu.reactions"
             var items: [UIView] = primary.map { emojiButton($0) }
@@ -317,20 +317,31 @@ final class Linia2MessageMenuViewController: UIViewController {
         let list = UIStackView()
         list.axis = .vertical
         let listBox = UIView()
-        listBox.backgroundColor = L2.hex(0x1B2133, 0.96)
+        listBox.backgroundColor = L2.dyn(0x1B2133, 0xFFFFFF, 0.96, 0.98)   // Дизайн: в светлой теме тёмный текст был на тёмном
         listBox.layer.cornerRadius = 16
         listBox.clipsToBounds = true
         for (i, a) in actions.enumerated() {
             let b = UIButton(type: .system)
             b.contentHorizontalAlignment = .leading
             b.setTitle(a.title, for: .normal)
-            b.setImage(L2.symbol(a.symbol, 18, .medium), for: .normal)
             let color = a.destructive ? L2.danger : L2.textPrimary
             b.tintColor = color
             b.setTitleColor(color, for: .normal)
             b.titleLabel?.font = L2.font(16)
-            b.contentEdgeInsets = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
-            b.titleEdgeInsets = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: -12)
+            // Дизайн: значки в колонке фиксированной ширины 24 pt — подписи начинаются с одной линии
+            // (раньше текст сдвигался на ширину значка: «Изменить» левее «Копировать»).
+            let icon = UIImageView(image: L2.symbol(a.symbol, 18, .medium))
+            icon.tintColor = color
+            icon.contentMode = .center
+            icon.isUserInteractionEnabled = false
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            b.addSubview(icon)
+            NSLayoutConstraint.activate([
+                icon.leadingAnchor.constraint(equalTo: b.leadingAnchor, constant: 16),
+                icon.centerYAnchor.constraint(equalTo: b.centerYAnchor),
+                icon.widthAnchor.constraint(equalToConstant: 24),
+                icon.heightAnchor.constraint(equalToConstant: 24)])
+            b.contentEdgeInsets = UIEdgeInsets(top: 0, left: 16 + 24 + 12, bottom: 0, right: 16)
             b.heightAnchor.constraint(equalToConstant: 46).isActive = true
             b.accessibilityIdentifier = "l2.menu." + a.id
             b.accessibilityLabel = a.title
