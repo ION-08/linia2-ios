@@ -342,12 +342,7 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
             }
         }
 
-        // LINIA2: теги поиска (логин, слова имени и их начала) — обновляются тем же запросом, что и имя,
-        // чтобы человека находили по новому имени сразу (алгоритм совпадает с сервером, auth/l2tags.py).
-        if name != me.pub?.fn {
-            let merged = Linia2SearchTags.merge(existing: tags ?? me.tags ?? [], name: name)
-            if merged.sorted() != (me.tags ?? []).sorted() { tags = merged }
-        }
+        // LINIA2: теги поиска пересчитывает сервер при смене имени (Tinode не принимает от клиента теги без префикса).
 
         if pub == nil && tags == nil {
             UiUtils.showToast(message: "Изменений нет", level: .info)
