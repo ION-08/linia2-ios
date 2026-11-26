@@ -199,7 +199,13 @@ final class Linia2MessageMenuViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         modalTransitionStyle = .crossDissolve
+        // Строка состояния скрыта, пока открыто меню: иначе касание у верхнего края забирает система
+        // («прокрутить наверх») — фон-«закрыть» его не получал, меню оставалось открытым, и следующее
+        // долгое нажатие по сообщению попадало в фон меню (меню закрывалось, а не открывалось новое).
+        modalPresentationCapturesStatusBarAppearance = true
     }
+
+    override var prefersStatusBarHidden: Bool { true }
 
     required init?(coder: NSCoder) { return nil }
 
