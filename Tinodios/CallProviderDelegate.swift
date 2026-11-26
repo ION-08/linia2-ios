@@ -137,6 +137,18 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
 
     // Звук звонка: аудиосессию активирует CallKit — передаём её WebRTC.
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+        // LINIA2: сессию настраиваем здесь (CallKit активировал её сам): .playAndRecord + .voiceChat, без .defaultToSpeaker —
+        // аудиозвонок идёт в разговорный динамик (у уха), видеозвонок — в громкий. Кнопка «Динамик» меняет выход
+        // (overrideOutputAudioPort) — экран звонка повторяет свой выбор по .linia2CallAudioActivated.
+        let audioOnly = Cache.callManager.callInProgress?.audioOnly ?? true
+        do {
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+        } catch {
+            Cache.log.error("CallProviderDelegate: setCategory failed: %@", error.localizedDescription)
+        }
+        if !Linia2CallCenter.hasExternalOutput() {
+            try? audioSession.overrideOutputAudioPort(audioOnly ? .none : .speaker)
+        }
         let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidActivate(audioSession)
         rtc.isAudioEnabled = true

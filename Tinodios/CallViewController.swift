@@ -646,6 +646,8 @@ class CallViewController: UIViewController {
     var callInitialSetupComplete = false
     // Audio output destination (.none = default).
     var audioOutput: AVAudioSession.PortOverride = .none
+    /// LINIA2: датчик приближения должен быть включён (в симуляторе датчика нет — для автотестов).
+    var linia2ProximityWanted = false
     // Audio route change notification observer.
     var routeChangeObserver: NSObjectProtocol?
     // For playing sound effects.
@@ -739,11 +741,13 @@ class CallViewController: UIViewController {
         super.viewDidAppear(animated)
         linia2StartIfNeeded()
         linia2UpdateRoute()
+        linia2UpdateProximity()
         Linia2CallCenter.shared.refreshBanner()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        linia2UpdateProximity()   // свёрнут — экран не гасить
         // Свёрнут — показать плашку «Идёт звонок».
         Linia2CallCenter.shared.refreshBanner()
     }
@@ -804,10 +808,22 @@ class CallViewController: UIViewController {
     @IBAction func didToggleSpeaker(_ sender: Any) {
         let newOutput: AVAudioSession.PortOverride = self.audioOutput == .speaker ? .none : .speaker
         Cache.log.info("User requested overridde audio output port to %d", newOutput.rawValue)
+        // Выбор запоминаем сразу: если сессия ещё не активна (дозвон, CallKit), он применится в didActivate.
+        self.audioOutput = newOutput
         CallManager.audioSessionChange { session in
             try session.overrideOutputAudioPort(newOutput)
-            self.audioOutput = newOutput
         }
+        linia2UpdateRoute()
+        linia2UpdateProximity()
+    }
+
+    /// Датчик приближения (у уха экран гаснет): только аудиозвонок, разговорный динамик, без камеры и наушников,
+    /// экран звонка на виду. Иначе — выключен (громкая связь, видео, свёрнутый звонок, завершение).
+    func linia2UpdateProximity() {
+        let on = isAudioOnlyCall && started && !closed && audioOutput != .speaker && !cameraManager.isCapturing
+            && isViewLoaded && view.window != nil && !Linia2CallCenter.hasExternalOutput()
+        if UIDevice.current.isProximityMonitoringEnabled != on { UIDevice.current.isProximityMonitoringEnabled = on }
+        linia2ProximityWanted = on
         linia2UpdateRoute()
     }
 
@@ -831,6 +847,7 @@ class CallViewController: UIViewController {
                     self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventMuted)
                     self.videoToggleButton.isEnabled = true
                     self.linia2UpdateButtons()
+                    self.linia2UpdateProximity()
                 }
             }
         } else {
@@ -840,6 +857,7 @@ class CallViewController: UIViewController {
                     self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventUnmuted)
                     self.videoToggleButton.isEnabled = true
                     self.linia2UpdateButtons()
+                    self.linia2UpdateProximity()
                 }
             }
         }
@@ -876,7 +894,7 @@ class CallViewController: UIViewController {
         // Prevent screen from dimming/going to sleep.
         UIApplication.shared.isIdleTimerDisabled = true
         // LINIA2: аудиозвонок у уха — экран гаснет (датчик приближения).
-        UIDevice.current.isProximityMonitoringEnabled = self.isAudioOnlyCall
+        linia2UpdateProximity()
 
         if let topic = self.topic {
             if !topic.attached {
@@ -1104,7 +1122,10 @@ class CallViewController: UIViewController {
         default:
             Cache.log.debug("CallVC - audio route change: other - %@, reason: %d", value.description, reason.rawValue)
         }
-        DispatchQueue.main.async { self.linia2UpdateRoute() }
+        DispatchQueue.main.async {
+            self.linia2UpdateRoute()
+            self.linia2UpdateProximity()
+        }
     }
 
     func setupViews() {
@@ -1139,6 +1160,7 @@ class CallViewController: UIViewController {
         // Allow screen dimming/going to sleep.
         UIApplication.shared.isIdleTimerDisabled = false
         UIDevice.current.isProximityMonitoringEnabled = false
+        linia2ProximityWanted = false
 
         if #available(iOS 15.0, *), let pip = self.pip as? Linia2CallPiP {
             webRTCClient.removeRemoteRenderer(pip.renderer)
@@ -1594,6 +1616,8 @@ extension CallViewController {
         micToggleButton.accessibilityIdentifier = "l2.call.mic"
         videoToggleButton.accessibilityIdentifier = "l2.call.video"
         speakerToggleButton.accessibilityIdentifier = "l2.call.speaker"
+        // «Динамик» доступен сразу (и во время дозвона): переключение выхода не зависит от соединения.
+        speakerToggleButton.isEnabled = true
     }
 
     /// Круглая кнопка 72 pt с подписью.
@@ -1657,6 +1681,15 @@ extension CallViewController {
         linia2UpdateRoute()
     }
 
+    /// Громкий динамик? В симуляторе маршрут всегда «Speaker» — там верим выбранному выходу.
+    private func linia2BuiltInSpeakerOn(_ outputs: [AVAudioSession.Port]) -> Bool {
+        #if targetEnvironment(simulator)
+        return audioOutput == .speaker
+        #else
+        return outputs.contains(.builtInSpeaker) || (outputs.isEmpty && audioOutput == .speaker)
+        #endif
+    }
+
     /// Кнопка «Динамик»: при подключённых AirPods / Bluetooth / наушниках — системный выбор выхода.
     func linia2UpdateRoute() {
         guard isViewLoaded else { return }
@@ -1673,13 +1706,13 @@ extension CallViewController {
             symbol = "headphones"; caption = "Аудио"
         } else if outputs.contains(.carAudio) {
             symbol = "car.fill"; caption = "Аудио"
-        } else if outputs.contains(.builtInSpeaker) || (outputs.isEmpty && audioOutput == .speaker) {
+        } else if linia2BuiltInSpeakerOn(outputs) {
             symbol = "speaker.wave.3.fill"; caption = external ? "Аудио" : "Динамик"; on = !external
         } else {
             symbol = "speaker.wave.1.fill"; caption = external ? "Аудио" : "Динамик"
         }
         linia2Style(speakerToggleButton, symbol: UIImage(systemName: symbol) != nil ? symbol : "speaker.wave.2.fill", on: on, enabled: speakerToggleButton.isEnabled)
-        speakerToggleButton.accessibilityValue = on ? "включён" : "выключен"
+        speakerToggleButton.accessibilityValue = (on ? "включён" : "выключен") + (linia2ProximityWanted ? " · датчик приближения" : "")
         captions[speakerToggleButton]?.text = caption
     }
 

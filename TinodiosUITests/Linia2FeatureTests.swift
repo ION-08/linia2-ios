@@ -347,4 +347,41 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         let kh = b.datas.last(where: { ($0["content"] as? String) == keep })?["head"] as? [String: Any]
         XCTAssertNil(kh?["linia2-burn"], "после выключения сообщение всё ещё с linia2-burn")
     }
+
+    // MARK: - Звонок: разговорный динамик по умолчанию, кнопка «Динамик», датчик приближения
+
+    private func speakerValue() -> String { (any("l2.call.speaker").value as? String) ?? "" }
+
+    private func waitSpeaker(_ prefix: String, _ what: String) {
+        let end = Date().addingTimeInterval(8)
+        while Date() < end && !speakerValue().hasPrefix(prefix) { usleep(300_000) }
+        XCTAssertTrue(speakerValue().hasPrefix(prefix), "\(what): «Динамик» = «\(speakerValue())», ожидалось «\(prefix)…»")
+    }
+
+    func testF5_CallSpeakerDefaults() {
+        openPeerChat()
+        // Аудиозвонок: у уха (динамик выкл.), датчик приближения включён.
+        startCall(video: false)
+        wait(any("l2.call.speaker"), "кнопка «Динамик»")
+        waitSpeaker("выключен", "аудио по умолчанию")
+        XCTAssertTrue(speakerValue().contains("датчик приближения"), "аудиозвонок: датчик приближения не включён (\(speakerValue()))")
+        screenshot("call-audio-earpiece")
+        any("l2.call.speaker").tap()
+        waitSpeaker("включён", "после нажатия «Динамик»")
+        XCTAssertFalse(speakerValue().contains("датчик приближения"), "громкая связь: датчик приближения должен выключиться")
+        screenshot("call-audio-speaker")
+        any("l2.call.speaker").tap()
+        waitSpeaker("выключен", "повторное нажатие «Динамик»")
+        XCTAssertTrue(speakerValue().contains("датчик приближения"), "у уха снова: датчик приближения не включился")
+        hangUp("аудио (динамик)")
+        sleep(3)
+
+        // Видеозвонок: громкий динамик по умолчанию, датчик выключен.
+        startCall(video: true)
+        wait(any("l2.call.speaker"), "кнопка «Динамик» (видео)")
+        waitSpeaker("включён", "видео по умолчанию")
+        XCTAssertFalse(speakerValue().contains("датчик приближения"), "видеозвонок: датчик приближения должен быть выключен")
+        screenshot("call-video-speaker")
+        hangUp("видео (динамик)")
+    }
 }
