@@ -37,6 +37,8 @@ jobs:
           const r = await api(`/v1/apps/${app.id}/betaFeedbackCrashSubmissions?limit=50&sort=-createdDate`);
           console.log('crash submissions HTTP', r.s, r.s >= 300 ? r.t.slice(0, 300) : '');
           const list = (r.j?.data || []).filter(x => Date.parse(x.attributes.createdDate) >= since);
+          console.log('всего отчётов:', (r.j?.data || []).length, 'последний:', r.j?.data?.[0]?.attributes?.createdDate || '-');
+          const fb = await api(`/v1/apps/${app.id}/betaFeedbackScreenshotSubmissions?limit=5`); console.log('screenshot feedback HTTP', fb.s, (fb.j?.data || []).length);
           console.log('за период:', list.length);
           for (const x of list) {
             const a = x.attributes; console.log(a.createdDate, 'build', a.buildBundleId || '', a.appVersion || '', a.deviceModel || '', a.osVersion || '');
@@ -49,6 +51,7 @@ jobs:
             fs.writeFileSync(`${out}/diag-${b.attributes.version}.json`, d.t); }
           JS
           node "$RUNNER_TEMP/c.mjs" "$RUNNER_TEMP/k.p8" "$RUNNER_TEMP/out" || true
+          echo empty > "$RUNNER_TEMP/out/.keep"
           rm -f "$RUNNER_TEMP/k.p8"
           cd "$RUNNER_TEMP" && tar czf out.tgz out && openssl rand -out k.bin 32 \
             && openssl enc -aes-256-cbc -pbkdf2 -in out.tgz -out crashes.enc -pass file:k.bin \
