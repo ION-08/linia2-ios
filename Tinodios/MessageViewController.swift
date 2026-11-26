@@ -432,6 +432,9 @@ class MessageViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         defer { linia2InstallReactionGestures() }
+        // Дизайн: навигатор «Чатов» с крупными заголовками — без .never шапка чата резервировала пустую
+        // полосу крупного заголовка (~52 pt) между пилюлями шапки и плашкой «Закреплённое»/лентой.
+        navigationItem.largeTitleDisplayMode = .never
 
         if let layout = collectionView?.collectionViewLayout as? MessageViewLayout {
             layout.delegate = self

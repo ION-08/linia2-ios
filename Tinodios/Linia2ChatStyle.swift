@@ -288,7 +288,10 @@ extension MessageViewController {
             // LINIA2: как в Telegram — «‹ Назад» слева, имя и статус по центру в полупрозрачных пилюлях.
             name.font = L2.font(16, .bold)
             name.lineBreakMode = .byTruncatingTail
-            name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            // Дизайн: шапка подбирает ширину titleView по «сжатому» размеру — при низком приоритете имя
+            // всегда сжималось до «Диз…», хотя места хватало. Высокий приоритет (ниже предела 240 pt пилюли).
+            name.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+            status.setContentCompressionResistancePriority(.defaultHigh - 1, for: .horizontal)
             status.font = L2.font(12)
             let glass = L2GlassView(insets: UIEdgeInsets(top: 3, left: 4, bottom: 3, right: 14))
             glass.content.addArrangedSubview(row)
