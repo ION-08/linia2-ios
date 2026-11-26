@@ -155,7 +155,10 @@ extension MessageViewController {
         let g = L2GlassView(insets: UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4))
         let b = UIButton(type: .system)
         b.setImage(L2.symbol("chevron.left", 16, .semibold), for: .normal)
-        b.setTitle(" " + L2T("l2.chat.back", "Назад"), for: .normal)
+        // Дизайн: на экранах уже 428 pt подпись «Назад» отнимала место у имени («Диз…», на SE — «‹ …»).
+        // Там кнопка — круглая «‹» 38×38 (подпись остаётся для VoiceOver), на Pro Max — «‹ Назад».
+        let compact = UIScreen.main.bounds.width < 428
+        if !compact { b.setTitle(" " + L2T("l2.chat.back", "Назад"), for: .normal) }
         b.titleLabel?.font = L2.font(16, .medium)
         b.tintColor = L2.accent
         b.setTitleColor(L2.accent, for: .normal)
@@ -168,8 +171,13 @@ extension MessageViewController {
         pad.translatesAutoresizingMaskIntoConstraints = false
         pad.widthAnchor.constraint(equalToConstant: 4).isActive = true
         g.content.addArrangedSubview(b)
-        g.content.addArrangedSubview(pad)
+        if compact {
+            b.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        } else {
+            g.content.addArrangedSubview(pad)
+        }
         g.heightAnchor.constraint(equalToConstant: 38).isActive = true
+        if compact { g.widthAnchor.constraint(equalToConstant: 38).isActive = true }
         return g
     }
 
