@@ -165,6 +165,8 @@ final class Linia2Playback {
     private weak var voicePlayer: VLCMediaPlayer?
     private var voicePaused = false
     private weak var round: Linia2RoundVideoView?
+    /// Последний запущенный кружок (может стоять на паузе): при запуске другого он сбрасывается к началу.
+    private weak var lastRound: Linia2RoundVideoView?
     /// seq голосового, которое сейчас звучит (0 — ничего).
     private(set) var voiceSeq = 0
 
@@ -214,8 +216,13 @@ final class Linia2Playback {
 
     func claimRound(_ r: Linia2RoundVideoView) {
         stopVoice()
+        let prev = lastRound ?? round
         if let o = round, o !== r { o.pause() }
+        // Переключились на другой кружок — прежний к началу (превью с ▶, «остановлено»), а не «пауза» за миг до конца:
+        // иначе повторное нажатие на него доигрывало хвост в доли секунды и сразу «остановлено».
+        if let p = prev, p !== r { p.rewind() }
         round = r
+        lastRound = r
         post()
     }
 

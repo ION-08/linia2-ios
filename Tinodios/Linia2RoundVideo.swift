@@ -290,7 +290,9 @@ final class Linia2RoundVideoView: UIView {
             try? s.setCategory(.playback, mode: .default, options: [])
             try? s.setActive(true)
         }
-        if let item = p.currentItem, item.duration.isNumeric, CMTimeCompare(p.currentTime(), item.duration) >= 0 {
+        // Дошли до конца (или осталось меньше 0,3 с) — с начала, а не «играет» на долю секунды.
+        if let item = p.currentItem, item.duration.isNumeric,
+           CMTimeGetSeconds(item.duration) - CMTimeGetSeconds(p.currentTime()) < 0.3 {
             p.seek(to: .zero)
         }
         p.isMuted = false
@@ -315,6 +317,14 @@ final class Linia2RoundVideoView: UIView {
 
     /// Ячейка переиспользуется.
     func stop() { pause() }
+
+    /// Стал текущим другой кружок: пауза и к началу — следующее нажатие играет с начала.
+    func rewind() {
+        pause()
+        guard let p = player else { return }
+        p.seek(to: .zero)
+        if !loading { accessibilityValue = "остановлено" }
+    }
 
     private func finished() {
         player?.seek(to: .zero)
