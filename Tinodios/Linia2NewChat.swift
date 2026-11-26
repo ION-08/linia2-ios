@@ -549,9 +549,13 @@ final class Linia2NewChatViewController: UIViewController, UITableViewDataSource
 
     /// Запрос к fnd: как в FindInteractor — одиночное слово превращается в «alias:x,x»;
     /// дополнительно ищем по тегу basic:логин (его выставляет наш сервер авторизации).
-    private static func tagQuery(_ q: String) -> String {
-        if q.rangeOfCharacter(from: CharacterSet(charactersIn: " ,:")) != nil { return q }
-        return "\(Tinode.kTagAlias)\(q),basic:\(q),\(q)"
+    private static func tagQuery(_ raw: String) -> String {
+        // LINIA2: «@ann» = «ann»; теги в Tinode — в нижнем регистре; слова имени ищутся каждое отдельно.
+        let words = raw.lowercased().split(whereSeparator: { " ,".contains($0) })
+            .map { $0.hasPrefix("@") ? String($0.dropFirst()) : String($0) }.filter { !$0.isEmpty && !$0.contains(":") }
+        guard let first = words.first else { return raw }
+        if words.count > 1 { return words.joined(separator: ",") }
+        return "\(Tinode.kTagAlias)\(first),basic:\(first),\(first)"
     }
 
     private func updateLocalMatches() {

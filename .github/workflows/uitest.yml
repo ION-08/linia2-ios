@@ -164,7 +164,7 @@ jobs:
           cd "$RUNNER_TEMP/web" && npm init -y >/dev/null && npm i playwright@1.49.1 >/dev/null 2>&1 && npx playwright install chromium >/dev/null 2>&1
           cp "$GITHUB_WORKSPACE"/ci/web-tests/*.mjs "$RUNNER_TEMP/web/"
           # Ждёт входящий звонок от iOS (тест test00_CallToWebPeer идёт первым), принимает, проверяет ICE и медиатрафик.
-          ( cd "$RUNNER_TEMP/web" && L2_PEER_LOGIN="$L2_PEER_LOGIN" L2_PEER_PASSWORD="$L2_PEER_PASSWORD" L2_PEER_WAIT_SEC=1500 \
+          ( cd "$RUNNER_TEMP/web" && L2_PEER_LOGIN="$L2_PEER_LOGIN" L2_PEER_PASSWORD="$L2_PEER_PASSWORD" WAIT_S=1500 PEER_WAIT_HANGUP=1 HANGUP_WAIT_S=180 \
             OUT_DIR="$RUNNER_TEMP/out/web" node call-peer.mjs > "$RUNNER_TEMP/out/web/call-peer.json" 2> "$RUNNER_TEMP/out/web/call-peer.log"; \
             echo $? > "$RUNNER_TEMP/out/web/call-peer.rc" ) &
           echo "L2_WEB_PEER=1" >> "$GITHUB_ENV"

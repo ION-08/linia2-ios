@@ -27,6 +27,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/web" && cd "$RUNNER_TEMP/web" && npm init -y >/dev/null
           npm i playwright@1.49.1 >/dev/null 2>&1 && npx playwright install --with-deps chromium >/dev/null 2>&1
           cp "$GITHUB_WORKSPACE"/ci/web-tests/*.mjs .
+      - name: Все звонки (веб↔веб аудио/видео, ссылка с входом, гостевая ссылка; 60+ с, микрофон/камера, отбой, история)
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+          OUT_DIR: ${{ runner.temp }}/out/calls
+        run: |
+          mkdir -p "$OUT_DIR"
+          [ -f "$RUNNER_TEMP/web/calls-all.mjs" ] || { echo "::error::нет ci/web-tests/calls-all.mjs — без проверки звонков выпуск невозможен"; exit 1; }
+          cd "$RUNNER_TEMP/web"
+          set +e; node calls-all.mjs > "$OUT_DIR/result.json" 2> "$OUT_DIR/log.txt"; RC=$?; set -e
+          echo "### Звонки (все варианты): $( [ $RC = 0 ] && echo '✅ прошли' || echo "❌ упали (код $RC)")" >> "$GITHUB_STEP_SUMMARY"
+          tail -c 6000 "$OUT_DIR/result.json" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
+          exit $RC
       - name: Гостевая ссылка на звонок
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}

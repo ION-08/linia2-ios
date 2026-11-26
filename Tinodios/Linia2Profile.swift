@@ -342,6 +342,13 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
             }
         }
 
+        // LINIA2: теги поиска (логин, слова имени и их начала) — обновляются тем же запросом, что и имя,
+        // чтобы человека находили по новому имени сразу (алгоритм совпадает с сервером, auth/l2tags.py).
+        if name != me.pub?.fn {
+            let merged = Linia2SearchTags.merge(existing: tags ?? me.tags ?? [], name: name)
+            if merged.sorted() != (me.tags ?? []).sorted() { tags = merged }
+        }
+
         if pub == nil && tags == nil {
             UiUtils.showToast(message: "Изменений нет", level: .info)
             return
@@ -549,5 +556,50 @@ private final class L2CopyControl: UIControl {
         UIPasteboard.general.string = value
         L2.haptic()
         UiUtils.showToast(message: "Скопировано", level: .info)
+    }
+}
+
+
+// MARK: - Теги поиска (как auth/l2tags.py на сервере)
+
+enum Linia2SearchTags {
+    static let maxTags = 16
+
+    private static func clean(_ s: String) -> String {
+        String(s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0) })
+    }
+
+    /// Логин, слова имени и начала (от 2 букв) логина и первых двух слов.
+    static func compute(login: String, name: String) -> [String] {
+        let login = login.lowercased()
+        if login.hasPrefix("l2-") { return [] }
+        if login.range(of: "^ci[0-9]+[lr]?$", options: .regularExpression) != nil {
+            // тестовые: точный логин и слова имени с цифрами (уникальные метки автотестов)
+            let uniq = name.lowercased().components(separatedBy: .whitespaces).map(clean)
+                .filter { $0.count >= 4 && $0.rangeOfCharacter(from: .decimalDigits) != nil && $0 != login }
+            return [login] + uniq
+        }
+        var out: [String] = []
+        func add(_ t: String) {
+            let c = clean(t)
+            if c.count >= 2 && c.count <= 96 && !out.contains(c) { out.append(c) }
+        }
+        add(login)
+        let words = name.lowercased().components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).inverted)
+            .filter { clean($0).count >= 2 }.prefix(4)
+        words.forEach { add($0) }
+        for src in [login] + Array(words.prefix(2)) {
+            let c = clean(src)
+            if c.count > 2 { for n in 2..<min(c.count, 12) { add(String(c.prefix(n))) } }
+        }
+        return out
+    }
+
+    /// Сохраняет служебные теги (basic:, alias: …) и заменяет теги поиска на новые.
+    static func merge(existing: [String], name: String) -> [String] {
+        let prefixed = existing.filter { $0.contains(":") }
+        guard let login = prefixed.first(where: { $0.hasPrefix("basic:") }).map({ String($0.dropFirst(6)) }) else { return existing }
+        let mine = compute(login: login, name: name).filter { !prefixed.contains($0) }
+        return Array((prefixed + mine).prefix(maxTags))
     }
 }
