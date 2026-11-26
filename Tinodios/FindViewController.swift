@@ -236,9 +236,12 @@ class FindViewController: UITableViewController, FindDisplayLogic {
             // Configure the cell...
             if indexPath.section == FindViewController.kLocalSavedMessagesSection {
                 cell.avatar.set(pub: nil, id: Tinode.kTopicSlf, deleted: false)
-                cell.title.text = NSLocalizedString("Saved messages", comment: "Title of the slf topic")
-                cell.subtitle.text = NSLocalizedString("Notes, messages, links, files saved for posterity", comment: "Explanation for Saved messages topic")
+                // LINIA2: «Избранное» (пересылка «в Избранное»).
+                cell.title.text = Linia2Chrome.savedTitle
+                cell.subtitle.text = Linia2Chrome.savedSubtitle
+                cell.accessibilityIdentifier = "l2.forward.saved"
             } else {
+                cell.accessibilityIdentifier = nil
                 let contact = indexPath.section == FindViewController.kLocalContactsSection ? localContacts[indexPath.row] : remoteContacts[indexPath.row]
 
                 cell.avatar.set(pub: contact.pub, id: contact.uniqueId, deleted: false)

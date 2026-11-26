@@ -384,4 +384,91 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         screenshot("call-video-speaker")
         hangUp("видео (динамик)")
     }
+
+    // MARK: - Экран чата как в Telegram: плавающая шапка, фон, строка ввода
+
+    func testF6_ChatFloatingHeader() {
+        openPeerChat()
+        let back = any("l2.chat.back")
+        wait(back, "«‹ Назад» в шапке")
+        XCTAssertTrue(back.isHittable, "«Назад» не нажимается")
+        XCTAssertEqual(back.label, "Назад")
+        XCTAssertTrue(any("l2.chat.title").exists, "нет имени и статуса по центру шапки")
+        XCTAssertTrue(labelContains(peerName).exists, "в шапке нет имени собеседника")
+        XCTAssertTrue(any("l2.chat.search").exists, "нет 🔍 в шапке")
+        XCTAssertTrue(any("l2.chat.more").exists, "нет ⋮ в шапке")
+        let title = any("l2.chat.title")
+        XCTAssertLessThan(back.frame.maxX, title.frame.minX, "«Назад» не слева от имени")
+        XCTAssertLessThan(title.frame.maxX, any("l2.chat.search").frame.minX, "🔍 не справа от имени")
+        XCTAssertTrue(any("l2.chat.pattern").exists, "нет фона с узором")
+        XCTAssertTrue(any("l2.chat.inputGlass").exists, "строка ввода не плавающая (нет полупрозрачной подложки)")
+        screenshot("chat-floating-header")
+        back.tap()
+        XCTAssertTrue(app.buttons["Новый чат"].firstMatch.waitForExistence(timeout: 8), "«Назад» не вернул к списку чатов")
+    }
+
+    // MARK: - Поиск по чату: «1 из 2», ↑/↓, переход с подсветкой
+
+    func testF7_ChatSearch() {
+        openPeerChat()
+        let token = "Искомое" + Self.stamp
+        send(token + " первое")
+        send(token + " второе")
+        any("l2.chat.search").tap()
+        let field = wait(any("l2.search.field"), "поле поиска", timeout: 5)
+        field.typeText(token)
+        let counter = any("l2.search.counter")
+        let one = NSPredicate(format: "label == '1 из 2'")
+        expectation(for: one, evaluatedWith: counter)
+        waitForExpectations(timeout: 10)
+        screenshot("search-1-of-2")
+        any("l2.search.up").tap()
+        expectation(for: NSPredicate(format: "label == '2 из 2'"), evaluatedWith: counter)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(labelContains(token + " первое").isHittable, "не перешли к более старому совпадению")
+        any("l2.search.down").tap()
+        expectation(for: one, evaluatedWith: counter)
+        waitForExpectations(timeout: 10)
+        // Нет совпадений.
+        field.tap()
+        field.typeText("щщщ")
+        expectation(for: NSPredicate(format: "label == 'Нет совпадений' OR label BEGINSWITH 'Ищу'"), evaluatedWith: counter)
+        waitForExpectations(timeout: 10)
+        any("l2.search.close").tap()
+        XCTAssertFalse(any("l2.search.field").waitForExistence(timeout: 2), "поиск не закрылся")
+    }
+
+    // MARK: - «Избранное»: сверху списка, заметка себе, пересылка «в Избранное»
+
+    func testF8_SavedMessages() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.chats").tap(); sleep(1)
+        let saved = wait(any("l2.chats.saved"), "«Избранное» в списке чатов", timeout: 15)
+        let firstChat = app.cells.firstMatch
+        if firstChat.exists { XCTAssertLessThan(saved.frame.minY, firstChat.frame.minY, "«Избранное» не сверху списка") }
+        screenshot("saved-in-list")
+        saved.tap()
+        wait(app.textViews["l2.chat.input"].firstMatch, "поле ввода в «Избранном»", timeout: 20)
+        XCTAssertTrue(labelContains("Избранное").exists, "в шапке нет «Избранное»")
+        let note = "Заметка " + Self.stamp
+        send(note)
+        screenshot("saved-note")
+        any("l2.chat.back").tap()
+        sleep(1)
+
+        // Переслать сообщение из чата «в Избранное».
+        openPeerChat()
+        let text = "В избранное " + Self.stamp
+        send(text)
+        labelContains(text).press(forDuration: 1.0)
+        wait(any("l2.menu"), "меню сообщения", timeout: 5)
+        wait(any("l2.menu.forward"), "«Переслать»", timeout: 5).tap()
+        wait(any("l2.forward.saved"), "«Избранное» в окне пересылки", timeout: 10).tap()
+        wait(app.buttons["l2.forward.send"].firstMatch, "«Отправить» пересылаемое в «Избранном»", timeout: 20).tap()
+        let end = Date().addingTimeInterval(20)
+        let fwd = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text))
+        while Date() < end && fwd.count < 1 { usleep(500_000) }
+        XCTAssertGreaterThanOrEqual(fwd.count, 1, "пересланное сообщение не появилось в «Избранном»")
+        screenshot("saved-forwarded")
+    }
 }

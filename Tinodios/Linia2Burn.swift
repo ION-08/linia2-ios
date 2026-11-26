@@ -418,7 +418,7 @@ extension MessageViewController {
         return b
     }
 
-    @objc func linia2BurnTapped(_ sender: UIBarButtonItem) {
+    @objc func linia2BurnTapped(_ sender: Any?) {
         guard let t = topic else { return }
         if let me = Linia2Burn.state(t.name).me, Linia2Burn.isOn(t.name) {
             let alert = UIAlertController(title: L2T("l2.burn.offTitle", "Выключить исчезающие сообщения?"),

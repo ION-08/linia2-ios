@@ -229,6 +229,9 @@ class MessageViewController: UIViewController {
     var linia2LastScreenshotNote: Date?
     var linia2BurnTimer: Timer?
     var linia2BurnFading = Set<String>()
+    // LINIA2: поиск по чату и свайп назад при своей кнопке «Назад» (Linia2ChatChrome.swift).
+    var linia2Search: Linia2ChatSearch?
+    var linia2SavedPopDelegate: UIGestureRecognizerDelegate?
 
     // Highlight this cell when scroll finishes (after the user tapped on a quote or a pinned message).
     var highlightCellAtPathAfterScroll: IndexPath?
@@ -430,6 +433,7 @@ class MessageViewController: UIViewController {
         forwardMessageBar.delegate = self
 
         self.setInterfaceColors()
+        linia2InstallChatBackground()
 
         if self.interactor?.setup(topicName: self.topicName, sendReadReceipts: self.sendReadReceipts) ?? false {
             self.interactor?.deleteFailedMessages()
@@ -461,19 +465,30 @@ class MessageViewController: UIViewController {
             return
         }
         self.setInterfaceColors()
+        linia2InstallChatBackground()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         // LINIA2_CHAT_SAFETY: шапка с «назад», аватаром и именем видна всегда (другие экраны прячут панель).
         navigationController?.setNavigationBarHidden(false, animated: animated)
-        navigationItem.hidesBackButton = false
-        navigationItem.leftItemsSupplementBackButton = true
+        if Linia2Chrome.floatingHeader {
+            linia2ApplyFloatingAppearance()   // своя «‹ Назад» в пилюле
+        } else {
+            navigationItem.hidesBackButton = false
+            navigationItem.leftItemsSupplementBackButton = true
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        linia2RestorePopGesture()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+        linia2EnablePopGesture()
         linia2ScheduleHistoryCheck()
         linia2UpdateBurnUI()
 

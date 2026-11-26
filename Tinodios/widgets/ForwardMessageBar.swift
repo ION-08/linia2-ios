@@ -38,6 +38,11 @@ class ForwardMessageBar: UIView {
             nibView.rightAnchor.constraint(equalTo: rightAnchor),
             nibView.leftAnchor.constraint(equalTo: leftAnchor)
             ])
+        // LINIA2_UITEST_IDS: «Отправить» пересылаемое (в т.ч. «в Избранное»).
+        for case let b as UIButton in nibView.subviews where b.actions(forTarget: self, forControlEvent: .touchUpInside)?.contains("send:") == true {
+            b.accessibilityIdentifier = "l2.forward.send"
+            b.accessibilityLabel = "Отправить"
+        }
     }
 
     override var intrinsicContentSize: CGSize {

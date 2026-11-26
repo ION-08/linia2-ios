@@ -49,7 +49,7 @@ class ChatListViewCell: UITableViewCell {
     }
 
     public func fillFromTopic(topic: DefaultComTopic) {
-        title.text = topic.isSlfType ? NSLocalizedString("Saved messages", comment: "Title of the slf topic") :
+        title.text = topic.isSlfType ? Linia2Chrome.savedTitle :
             topic.pub?.fn ?? NSLocalizedString("Unknown or unnamed", comment: "Topic title when it has no name")
         title.sizeToFit()
         if let msg = topic.latestMessage as? StoredMessage {

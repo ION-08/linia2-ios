@@ -75,6 +75,8 @@ extension ChatListViewController: UITextFieldDelegate {
         if let b = Linia2Config.shared.banner { parts.append(linia2BannerView(b)) }   // объявление из админки
         if Linia2Config.shared.feature("search") { parts.append(search) } else if !linia2Query.isEmpty { linia2Query = ""; linia2Refilter() }
         parts.append(chips)
+        // «Избранное» (slf) — закреплено сверху, как в Telegram.
+        if Linia2Chrome.savedOn { parts.append(linia2SavedRow()) }
         let h = L2TableHeader(parts, spacing: 18)
         h.install(in: tableView)
         linia2Header = h
@@ -98,7 +100,9 @@ extension ChatListViewController: UITextFieldDelegate {
 
     func linia2Filtered(_ all: [DefaultComTopic]) -> [DefaultComTopic] {
         let q = linia2Query.trimmingCharacters(in: .whitespaces).lowercased()
+        let saved = Linia2Chrome.savedOn
         return all.filter { t in
+            if saved && t.isSlfType { return false }   // показано закреплённой строкой «Избранное» над списком
             if linia2FilterIndex == 1 && t.unread <= 0 { return false }
             guard !q.isEmpty else { return true }
             let name = (t.pub?.fn ?? "").lowercased()
@@ -219,8 +223,13 @@ extension AvatarWithOnlineIndicator {
 extension MessageViewController {
     private static let kL2Name = 0x4C41, kL2Status = 0x4C42, kL2Dot = 0x4C43
 
+    /// Контейнер имени и статуса: в плавающей шапке — по центру (titleView), иначе — слева.
+    private var linia2TitleContainer: UIView? {
+        Linia2Chrome.floatingHeader ? navigationItem.titleView : navigationItem.leftBarButtonItem?.customView
+    }
+
     private func linia2TitleView() -> UIView {
-        if let v = navigationItem.leftBarButtonItem?.customView, v.viewWithTag(Self.kL2Name) != nil { return v }
+        if let v = linia2TitleContainer, v.viewWithTag(Self.kL2Name) != nil { return v }
         let name = UILabel()
         name.tag = Self.kL2Name
         name.font = L2.font(18, .bold)
@@ -249,6 +258,23 @@ extension MessageViewController {
         let tap = UITapGestureRecognizer(target: self, action: #selector(linia2TitleTapped))
         row.addGestureRecognizer(tap)
         row.isUserInteractionEnabled = true
+        if Linia2Chrome.floatingHeader {
+            // LINIA2: как в Telegram — «‹ Назад» слева, имя и статус по центру в полупрозрачных пилюлях.
+            name.font = L2.font(16, .bold)
+            name.lineBreakMode = .byTruncatingTail
+            name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            status.font = L2.font(12)
+            let glass = L2GlassView(insets: UIEdgeInsets(top: 3, left: 4, bottom: 3, right: 14))
+            glass.content.addArrangedSubview(row)
+            glass.heightAnchor.constraint(equalToConstant: 40).isActive = true
+            glass.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
+            glass.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(linia2TitleTapped)))
+            glass.accessibilityIdentifier = "l2.chat.title"
+            navigationItem.titleView = glass
+            navigationItem.leftBarButtonItem = UIBarButtonItem(customView: linia2BackCapsule())
+            linia2ApplyFloatingAppearance()
+            return glass
+        }
         navigationItem.leftItemsSupplementBackButton = true
         navigationItem.leftBarButtonItem = UIBarButtonItem(customView: row)
         return row
@@ -266,6 +292,17 @@ extension MessageViewController {
         navigationItem.title = nil
         navBarAvatarView.linia2StyleIndicator()
         linia2SetStatus(online)
+
+        if Linia2Chrome.floatingHeader {
+            // Справа одна пилюля: 📞 📹 ⏱ 🔍 ⋮ (chatHeader.buttons).
+            let right = linia2RightCapsule().map { [UIBarButtonItem(customView: $0)] } ?? []
+            navigationItem.setRightBarButtonItems(right, animated: false)
+            if let row = (tv as? L2GlassView)?.content.arrangedSubviews.first as? UIStackView, navBarAvatarView.superview !== row {
+                navBarAvatarView.removeFromSuperview()
+                row.insertArrangedSubview(navBarAvatarView, at: 0)
+            }
+            return
+        }
 
         // Справа налево: ⋮, ⏱ самоуничтожение, 📹 видео, 📞 аудио (на экране: 📞 📹 ⏱ ⋮).
         var items: [UIBarButtonItem] = []
@@ -289,7 +326,7 @@ extension MessageViewController {
     }
 
     func linia2SetStatus(_ online: Bool?) {
-        guard let tv = navigationItem.leftBarButtonItem?.customView else { return }
+        guard let tv = linia2TitleContainer else { return }
         let status = tv.viewWithTag(Self.kL2Status) as? UILabel
         let dot = tv.viewWithTag(Self.kL2Dot)
         if topic?.isSlfType ?? false {
@@ -306,7 +343,7 @@ extension MessageViewController {
 
     func linia2SetTyping() {
         guard Linia2Config.shared.feature("typing") else { return }
-        guard let tv = navigationItem.leftBarButtonItem?.customView,
+        guard let tv = linia2TitleContainer,
               let status = tv.viewWithTag(Self.kL2Status) as? UILabel else { return }
         status.text = "печатает…"
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -334,6 +371,35 @@ extension SendMessageBar {
         sendButton.contentHorizontalAlignment = .center
         sendButton.contentVerticalAlignment = .center
         sendButton.imageView?.contentMode = .center
+        if Linia2Chrome.floatingInput { linia2Float(container: container) }
+    }
+
+    private static let kGlassTag = 0x4C3271
+
+    /// Плавающая строка ввода: прозрачная подложка (виден фон чата), поле — скруглённое полупрозрачное (blur) с тенью.
+    private func linia2Float(container: UIView) {
+        container.backgroundColor = .clear
+        guard let host = inputField.superview else { return }
+        host.backgroundColor = .clear
+        for v in host.subviews where v is UIVisualEffectView && v.tag != Self.kGlassTag {
+            v.isHidden = true   // сплошная подложка из xib — давала полосу другого цвета
+        }
+        inputField.backgroundColor = L2.surface.withAlphaComponent(0.55)
+        guard host.viewWithTag(Self.kGlassTag) == nil else { return }
+        let glass = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+        glass.tag = Self.kGlassTag
+        glass.isUserInteractionEnabled = false
+        glass.clipsToBounds = true
+        glass.layer.cornerRadius = L2.r("input", 18)
+        glass.accessibilityIdentifier = "l2.chat.inputGlass"
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        host.insertSubview(glass, belowSubview: inputField)
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: inputField.leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: inputField.trailingAnchor),
+            glass.topAnchor.constraint(equalTo: inputField.topAnchor),
+            glass.bottomAnchor.constraint(equalTo: inputField.bottomAnchor),
+        ])
     }
 }
 

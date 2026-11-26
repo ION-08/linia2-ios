@@ -73,11 +73,40 @@ class PinnedMessagesView: UICollectionReusableView {
             l2Counter.topAnchor.constraint(equalTo: nibView.topAnchor, constant: 3)])
         addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(linia2ShowList)))
         accessibilityIdentifier = "l2.pinned"
+        if Linia2Chrome.floatingHeader { linia2Float(nibView) }
         if let cancel = nibView.subviews.first(where: { ($0 as? UIButton)?.actions(forTarget: self, forControlEvent: .touchUpInside)?.isEmpty == false }) as? UIButton {
             cancel.accessibilityIdentifier = "l2.pinned.unpin"
             cancel.accessibilityLabel = "Открепить"
             cancel.tintColor = L2.textSecondary
         }
+    }
+
+    /// Плашка под плавающей шапкой: скруглённая полупрозрачная (blur), слева акцентная полоска — как в Telegram.
+    private func linia2Float(_ nibView: UIView) {
+        backgroundColor = .clear
+        nibView.backgroundColor = L2.surface.withAlphaComponent(0.45)
+        nibView.layer.cornerRadius = 14
+        nibView.clipsToBounds = true
+        let glass = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+        glass.isUserInteractionEnabled = false
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        nibView.insertSubview(glass, at: 0)
+        let bar = UIView()
+        bar.backgroundColor = L2.accent
+        bar.layer.cornerRadius = 1.5
+        bar.isUserInteractionEnabled = false
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        nibView.addSubview(bar)
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: nibView.leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: nibView.trailingAnchor),
+            glass.topAnchor.constraint(equalTo: nibView.topAnchor),
+            glass.bottomAnchor.constraint(equalTo: nibView.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: nibView.leadingAnchor, constant: 6),
+            bar.topAnchor.constraint(equalTo: nibView.topAnchor, constant: 8),
+            bar.bottomAnchor.constraint(equalTo: nibView.bottomAnchor, constant: -8),
+            bar.widthAnchor.constraint(equalToConstant: 3),
+        ])
     }
 
     private func linia2UpdateCounter() {

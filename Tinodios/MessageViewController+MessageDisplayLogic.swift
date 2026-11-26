@@ -46,7 +46,7 @@ extension MessageViewController: MessageDisplayLogic {
         assert(Thread.isMainThread)
         let isSlf = self.topic?.isSlfType ?? false
         self.navigationItem.title = isSlf ?
-            NSLocalizedString("Saved messages", comment: "Title of the slf topic") :
+            Linia2Chrome.savedTitle :   // LINIA2: «Избранное»
             pub?.fn ?? NSLocalizedString("Undefined", comment: "Undefined chat name")
         navBarAvatarView.set(pub: pub, id: topicName, online: isSlf ? nil : online, deleted: deleted)
         navBarAvatarView.bounds = CGRect(x: 0, y: 0, width: Constants.kNavBarAvatarSmallState, height: Constants.kNavBarAvatarSmallState)
@@ -60,7 +60,9 @@ extension MessageViewController: MessageDisplayLogic {
         if let t = self.topic, t.callsAllowed {
             items.append(self.navBarCallBtn)
         }
-        self.navigationItem.setRightBarButtonItems(items, animated: false)
+        if !Linia2Chrome.floatingHeader {   // в плавающей шапке аватар — в пилюле с именем
+            self.navigationItem.setRightBarButtonItems(items, animated: false)
+        }
         linia2StyleTitleBar(pub: pub, online: isSlf ? nil : online)
     }
 

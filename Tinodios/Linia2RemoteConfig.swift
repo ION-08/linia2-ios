@@ -270,6 +270,12 @@ final class Linia2Config {
         return n.isEmpty ? nil : n
     }
 
+    /// Список строк из раздела (например, chatHeader.buttons); nil — нет или не список.
+    func strings(_ sectionName: String, _ key: String) -> [String]? {
+        guard let a = section(sectionName)[key] as? [Any] else { return nil }
+        return a.compactMap { $0 as? String }
+    }
+
     /// Встроенная функция включена? По умолчанию — да.
     func feature(_ name: String) -> Bool {
         (section("features")[name] as? Bool) ?? true
