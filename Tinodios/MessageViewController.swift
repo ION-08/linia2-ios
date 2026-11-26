@@ -981,7 +981,8 @@ extension MessageViewController: MessageViewLayoutDelegate {
         if attr.representedElementCategory == .supplementaryView {
             // Request for pinned area attributes (section header).
             let height: CGFloat = self.pinnedMessageSeqs.isEmpty ? 0 : Constants.kPinnedMessagesViewHeight
-            attr.frame = CGRect(origin: CGPoint(), size: CGSize(width: collectionView.frame.width - collectionView.layoutMargins.left - collectionView.layoutMargins.right, height: height))
+            // Дизайн: плашка с равными полями слева и справа (раньше прижималась к левому краю экрана).
+            attr.frame = CGRect(origin: CGPoint(x: collectionView.layoutMargins.left, y: 0), size: CGSize(width: collectionView.frame.width - collectionView.layoutMargins.left - collectionView.layoutMargins.right, height: height))
             attr.zIndex = 1
             return
         } else if attr.representedElementCategory == .decorationView {
