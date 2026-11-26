@@ -71,6 +71,7 @@ class ForwardMessageBar: UIView {
         } else {
             previewViewHeight.constant = CGFloat.zero
             previewView.attributedText = nil
+            previewView.l2AccessibilityText = nil
             previewView.isHidden = true
         }
         layoutIfNeeded()

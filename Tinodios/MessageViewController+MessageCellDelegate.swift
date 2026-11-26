@@ -209,6 +209,8 @@ extension MessageViewController: MessageCellDelegate {
         // Make sure it's properly formatted.
         let preview = (forwarded ? SendForwardedFormatter(defaultAttributes: [:]) : SendReplyFormatter(defaultAttributes: [:])).toAttributed(content, fitIn: CGSize(width: maxWidth, height: maxHeight))
         self.togglePreviewBar(with: preview, onAction: action)
+        // Цитата в панели над полем ввода рисуется картинкой — для VoiceOver/XCUITest отдаём её текст.
+        (isForwardingMessage ? forwardMessageBar.previewView : sendMessageBar.previewView)?.l2AccessibilityText = content.string
     }
 
     @objc func showReplyPreview(sender: UIMenuController) {

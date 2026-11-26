@@ -447,6 +447,7 @@ class SendMessageBar: UIView {
         } else {
             previewViewHeight.constant = .zero
             pendingPreviewText = nil
+            previewView.l2AccessibilityText = nil
             previewView.isHidden = true
             pendingPreviewAction = .none
         }

@@ -47,7 +47,11 @@ class RichTextView: UITextView {
     // TextView с вложенным TextView-фрагментом: подпись у вложенного, проверка «нажимаемости» по нему
     // не проходит (долгое нажатие по сообщению после закрытия меню не срабатывало), цитата над полем
     // ввода не читалась как текст. Без текста (только вложение) — поведение UITextView по умолчанию.
+    /// Текст для доступности, если видимый текст нарисован картинкой (цитата ответа/пересылки — QuotedAttachment).
+    var l2AccessibilityText: String?
+
     private var l2AccessibleText: String? {
+        if let t = l2AccessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
         let t = (attributedText?.string ?? text ?? "")
             .replacingOccurrences(of: "\u{FFFC}", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
