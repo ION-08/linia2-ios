@@ -25,12 +25,13 @@ const verdicts = new Map();       // "s#a" -> {status, notes}
 const scen = new Map();           // s -> {id, title, roles, attempts:[...], status, ms, notes, metrics}
 const aborted = new Set();        // "s#a" — кто-то уже отчитался о провале: ожидания сигналов этой попытки сразу отпускаются
 const order = [];
+const screens = [];        // скриншоты и проверки аккуратности: {role, name, file, checks}
 let netState = 'ok';
 
 const log = (...a) => { const l = new Date().toISOString().slice(11, 23) + ' ' + a.join(' '); fs.appendFileSync(LOG, l + '\n'); };
 const save = () => {
   const list = order.map(s => scen.get(s));
-  fs.writeFileSync(OUT, JSON.stringify({ host: HOST, finished: new Date().toISOString(), scenarios: list, gone: [...gone] }, null, 1));
+  fs.writeFileSync(OUT, JSON.stringify({ host: HOST, finished: new Date().toISOString(), scenarios: list, screens, gone: [...gone] }, null, 1));
 };
 
 function setSignal(k, v) {
@@ -89,6 +90,13 @@ function decide(s, a, roles, timedOut) {
   verdicts.set(key, v);
   sc.attempts.push({ a, status, notes, ms: Date.now() - t0 });
   for (const r of roles) if (p[r] && p[r].metric) sc.metrics.push(`${r}: ${p[r].metric}`);
+  // Результат по каждому участнику (для колонок «iOS | Веб» в отчёте).
+  sc.byRole = {};
+  for (const r of roles) {
+    const x = p[r];
+    sc.byRole[r] = !x ? { status: 'fail', note: gone.has(r) ? 'участник завершился' : 'нет ответа' }
+      : { status: x.ok === 'skip' ? 'skip' : (x.ok ? (status === 'fail' ? 'pass*' : 'pass') : 'fail'), note: x.note || '', metric: x.metric || '' };
+  }
   if (final) {
     sc.status = status; sc.ms = sc.attempts.reduce((x, y) => x + y.ms, 0); sc.notes = notes;
     log('ИТОГ', s, status, 'попытка', a, notes.join(' | '));
@@ -213,6 +221,7 @@ const srv = http.createServer(async (req, res) => {
           return send(200, { http: r.status, ...j });
         } catch (e) { return send(200, { http: 0, error: e.message }); }
       }
+      case '/screen': screens.push({ role: p.role, name: p.name, file: p.file, checks: p.checks || '' }); return send(200, { ok: true });
       case '/log': log('[' + (p.role || '?') + ']', p.m || ''); return send(200, { ok: true });
       case '/results': save(); return send(200, { scenarios: order.map(s => scen.get(s)) });
       default: return send(404, { error: 'no route' });

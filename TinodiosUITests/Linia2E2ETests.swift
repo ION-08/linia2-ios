@@ -200,12 +200,96 @@ final class Linia2E2ETests: XCTestCase {
 
     // MARK: - Помощники UI
 
-    private func screenshot(_ name: String) {
+    /// Скриншот экрана + автоматическая проверка аккуратности (результат — на доску, в отчёт «Скриншоты»).
+    /// bg: проверять фон тёмной темы по краям экрана (#0A0E1B ±14); выключать для экрана звонка, светлой темы, SpringBoard.
+    private func screenshot(_ name: String, bg: Bool = true, checks: Bool = true, target: XCUIApplication? = nil) {
         shot += 1
-        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        a.name = String(format: "%@-%03d-%@", role, shot, name)
+        let file = String(format: "%@-%03d-%@", role, shot, name)
+        let img = XCUIScreen.main.screenshot()
+        let a = XCTAttachment(screenshot: img)
+        a.name = file
         a.lifetime = .keepAlways
         add(a)
+        guard checks else { return }
+        let res = screenChecks(img.image, bg: bg, target: target ?? app)
+        _ = board.call("/screen", ["role": role, "name": name, "file": file, "checks": res])
+    }
+
+    private static let latinAllowed: Set<String> = ["PIN", "Face", "ID", "iPhone", "iOS", "OK", "CI", "FCM", "Email", "Telegram",
+                                                    "URL", "App", "Store", "Wi", "Fi", "SMS", "GB", "MB", "KB", "e2e", "doc", "file", "txt"]
+
+    /// Проверки: cut — текст не обрезан краем экрана; kb — клавиатура не перекрывает поле/кнопку; bg — фон по краям;
+    /// margin — одинаковые отступы карточек слева/справа (±2 pt); ru — нет латинских слов (кроме разрешённых).
+    /// Ответ: «имя=ok|fail:причина;…».
+    private func screenChecks(_ image: UIImage, bg: Bool, target: XCUIApplication) -> String {
+        var out: [String] = []
+        guard let snap = try? target.snapshot() else { return "snapshot=fail:нет дерева доступности" }
+        let screen = snap.frame
+        var texts: [(String, CGRect, XCUIElement.ElementType)] = []
+        var cells: [CGRect] = []
+        var inputs: [CGRect] = []
+        var kb: CGRect?
+        func walk(_ n: XCUIElementSnapshot, _ depth: Int) {
+            if depth > 60 { return }
+            let f = n.frame
+            switch n.elementType {
+            case .staticText, .button, .link: if !n.label.isEmpty && f.width > 1 && f.height > 1 { texts.append((n.label, f, n.elementType)) }
+            case .cell: if f.width > 40 && f.height > 20 && f.intersects(screen) { cells.append(f) }
+            case .textView, .textField, .secureTextField, .searchField: if f.width > 1 { inputs.append(f) }
+            case .keyboard: kb = f
+            default: break
+            }
+            for c in n.children { walk(c, depth + 1) }
+        }
+        walk(snap, 0)
+        // cut: элемент виден частично (пересекает экран, но выходит за край) — по горизонтали.
+        let cut = texts.filter { $0.1.intersects(screen) && ($0.1.minX < screen.minX - 1 || $0.1.maxX > screen.maxX + 1) }.map { $0.0 }
+        out.append(cut.isEmpty ? "cut=ok" : "cut=fail:" + cut.prefix(3).joined(separator: ", "))
+        if let k = kb, k.height > 50, k.minY < screen.maxY {
+            let covered = inputs.filter { $0.intersects(screen) && $0.maxY > k.minY + 2 && $0.minY < k.minY }
+            out.append(covered.isEmpty ? "kb=ok" : "kb=fail:поле ввода под клавиатурой")
+        }
+        if bg {
+            let ys: [CGFloat] = [screen.height * 0.35, screen.height * 0.6]
+            var bad: [String] = []
+            for y in ys { for x in [CGFloat(2), screen.width - 3] {
+                let c = rgb(image, CGPoint(x: x, y: y)), ref = [0x0A, 0x0E, 0x1B]
+                if zip(c, ref).map({ abs($0 - $1) }).max() ?? 0 > 14 { bad.append(String(format: "#%02X%02X%02X", c[0], c[1], c[2])) }
+            } }
+            out.append(bad.isEmpty ? "bg=ok" : "bg=fail:" + bad.prefix(2).joined(separator: ","))
+        }
+        let visibleCells = cells.filter { $0.width < screen.width - 1 }
+        if !visibleCells.isEmpty {
+            let bad = visibleCells.filter { abs($0.minX - (screen.width - $0.maxX)) > 2 }
+            out.append(bad.isEmpty ? "margin=ok" : String(format: "margin=fail:слева %.0f, справа %.0f", bad[0].minX, screen.width - bad[0].maxX))
+        }
+        var latin: [String] = []
+        let allowedNames = [env["L2_P1_LOGIN"], env["L2_P2_LOGIN"], env["L2_W_LOGIN"], env["L2_D_LOGIN"]].compactMap { $0 }
+        for (t, f, type) in texts where type == .staticText && f.intersects(screen) {
+            for w in t.split(whereSeparator: { !$0.isLetter }) {
+                let word = String(w)
+                guard word.count >= 2, word.unicodeScalars.allSatisfy({ $0.isASCII }) else { continue }
+                if Self.latinAllowed.contains(word) || word.hasPrefix("ci") || allowedNames.contains(where: { $0.contains(word) }) { continue }
+                latin.append(word)
+            }
+        }
+        out.append(latin.isEmpty ? "ru=ok" : "ru=fail:" + Array(Set(latin)).prefix(5).joined(separator: " "))
+        return out.joined(separator: ";")
+    }
+
+    /// Цвет точки скриншота (в точках экрана).
+    private func rgb(_ img: UIImage, _ p: CGPoint) -> [Int] {
+        guard let cg = img.cgImage else { return [0, 0, 0] }
+        let sx = CGFloat(cg.width) / img.size.width, sy = CGFloat(cg.height) / img.size.height
+        let x = min(cg.width - 1, max(0, Int(p.x * sx))), y = min(cg.height - 1, max(0, Int(p.y * sy)))
+        var px = [UInt8](repeating: 0, count: 4)
+        px.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.draw(cg, in: CGRect(x: -CGFloat(x), y: -CGFloat(cg.height - 1 - y), width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        }
+        return [Int(px[0]), Int(px[1]), Int(px[2])]
     }
 
     private func failureEvidence(_ name: String, _ note: String) {
@@ -432,6 +516,7 @@ final class Linia2E2ETests: XCTestCase {
         try need(chatInput(), "поле ввода в чате «\(name)»", 15)
         openedChat = name
         sleep(1)
+        screenshot("chat-" + name.replacingOccurrences(of: " ", with: "_"))
     }
 
     private func acceptInviteIfAsked() {
@@ -479,6 +564,7 @@ final class Linia2E2ETests: XCTestCase {
         m.press(forDuration: 1.0)
         try need(any("l2.menu"), "меню сообщения", 6)
         sleep(1)
+        screenshot("message-menu", bg: false)
     }
 
     private func closeMenu() {
@@ -588,10 +674,10 @@ final class Linia2E2ETests: XCTestCase {
     /// Ответить на входящий звонок; true — экран звонка открыт.
     private func answerIncoming(_ timeout: TimeInterval = 40) throws {
         guard let b = incomingCallButton(true, timeout: timeout) else {
-            screenshot("нет-входящего")
+            screenshot("нет-входящего", bg: false)
             throw fail("входящий звонок не показан (CallKit-баннера «Принять» нет за \(Int(timeout)) с)")
         }
-        screenshot("входящий")
+        screenshot("входящий", bg: false)
         b.tap()
         sleep(2)
         if app.state != .runningForeground { app.activate(); sleep(1) }
@@ -907,7 +993,26 @@ final class Linia2E2ETests: XCTestCase {
             _ = try waitText(text, 30)
             c.sig("read")
             try c.wait("checked", from: "web", 40)
-            return "отметка «прочитано» проверена на вебе; на iOS у значка доставки нет accessibility-метки"
+            // Обратно: iPhone 1 пишет, веб читает → у своего сообщения на iOS отметка «прочитано» (l2.delivery.<seq>).
+            let mine = "Прочти, веб \(c.tag)"
+            sendMessage(mine)
+            _ = try waitText(mine, 15)
+            c.sig("sent2", mine)
+            try c.wait("seen2", from: "web", 60)
+            let marks = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'l2.delivery.'"))
+            if marks.count == 0 { return "веб: «прочитано» ✓; на iOS нет элементов l2.delivery.<seq> (старая сборка)" }
+            let end = Date().addingTimeInterval(30)
+            var last = ""
+            while Date() < end {
+                let all = marks.allElementsBoundByIndex
+                let top = all.max { (Int($0.identifier.split(separator: ".").last ?? "0") ?? 0) < (Int($1.identifier.split(separator: ".").last ?? "0") ?? 0) }
+                last = (top?.value as? String) ?? ""
+                if last == "прочитано" { break }
+                sleep(1)
+            }
+            screenshot("delivery-read")
+            if last != "прочитано" { throw fail("на iOS отметка последнего своего сообщения: «\(last)», а не «прочитано»") }
+            return "веб и iOS: «прочитано» ✓"
         }
 
         // --- Звонки ---
@@ -916,7 +1021,7 @@ final class Linia2E2ETests: XCTestCase {
             c.sig("ready")
             try c.wait("calling", from: "web", 120)
             try answerIncoming(45)
-            screenshot("call-in-progress")
+            screenshot("call-in-progress", bg: false)
             c.sig("answered")
             sleep(4)
             let st = try inCallCheck()
@@ -936,7 +1041,20 @@ final class Linia2E2ETests: XCTestCase {
             sleep(6)
             let st = try inCallCheck()
             let mic = micEnabled()
-            screenshot("call-1-2")
+            screenshot("call-1-2", bg: false)
+            // Свёрнутое приложение во время звонка: SpringBoard, затем возврат и плашка «Идёт звонок» (l2.call.banner).
+            XCUIDevice.shared.press(.home)
+            sleep(2)
+            screenshot("call-home-springboard", checks: false)
+            app.activate()
+            sleep(2)
+            unlockIfNeeded()
+            screenshot("call-back-in-app", bg: false)
+            if !hangUpButton().exists {
+                back(); sleep(1)
+                if any("l2.call.banner").exists { screenshot("call-banner") }
+                if any("l2.call.banner").exists { any("l2.call.banner").tap(); sleep(2) }
+            }
             c.sig("talked")
             try c.wait("checked", from: "iphone2", 30)
             hangUpIfInCall()
@@ -950,7 +1068,7 @@ final class Linia2E2ETests: XCTestCase {
             c.sig("ready")
             try c.wait("calling", from: "web", 120)
             if incomingCallButton(true, timeout: 30) == nil { throw fail("входящий звонок не показан") }
-            screenshot("missed-ringing")
+            screenshot("missed-ringing", bg: false)
             try c.wait("hungup", from: "web", 60)
             sleep(3)
             if app.state != .runningForeground { app.activate() }
@@ -959,6 +1077,49 @@ final class Linia2E2ETests: XCTestCase {
             try need(labelContains("Пропущенный"), "«Пропущенный звонок» во вкладке «Звонки»", 20)
             screenshot("calls-missed")
             return nil
+        }
+
+        scenario("G01", "Гостевая ссылка на звонок: создать, гость звонит, принять, история, отключить", withWeb, timeout: 400) { c in
+            try openCallsTab()
+            let create = any("l2.calls.createGuestLink")
+            if !create.waitForExistence(timeout: 5) { c.sig("url", "none"); throw E2ESkip(msg: "пропущен: нет функции (кнопки l2.calls.createGuestLink)") }
+            create.tap(); sleep(1)
+            let title = try need(any("l2.guestlink.title"), "поле названия ссылки", 10)
+            title.tap(); title.typeText("Тест e2e")
+            try need(any("l2.guestlink.create"), "«Создать»").tap()
+            let u = try need(any("l2.guestlink.url"), "адрес ссылки", 20)
+            let url = [u.value as? String ?? "", u.label].first { $0.contains("http") } ?? ""
+            screenshot("guest-link")
+            guard url.contains("http") else { c.sig("url", "none"); throw fail("не прочитан адрес ссылки: «\(u.label)»") }
+            c.sig("url", url)
+            let (opened, _) = try c.wait("opened", from: "web", 120)
+            if opened == "404" { throw E2ESkip(msg: "пропущен: нет функции (/call/<token> → 404)") }
+            guard let b = incomingCallButton(true, timeout: 45) else { throw fail("входящий от гостя не показан") }
+            let from = labelContains("Гость e2e").exists
+            screenshot("guest-incoming", bg: false)
+            b.tap(); sleep(2)
+            if app.state != .runningForeground { app.activate() }
+            unlockIfNeeded()
+            try waitCallScreen(25)
+            let st = try inCallCheck()
+            screenshot("guest-call", bg: false)
+            c.sig("answered")
+            try c.wait("connected", from: "web", 60)
+            hangUpIfInCall()
+            try waitCallClosed(20)
+            c.sig("hungup")
+            try openCallsTab()
+            try need(any("l2.calls.myLinks"), "«Мои ссылки»").tap(); sleep(2)
+            let link = labelContains("Тест e2e")
+            try need(link, "ссылка «Тест e2e» в «Моих ссылках»").tap(); sleep(2)
+            try need(any("l2.guestlink.history"), "история звонков по ссылке", 10)
+            screenshot("guest-history")
+            try need(any("l2.guestlink.deactivate"), "«Отключить ссылку»").tap()
+            for t in ["Отключить", "Да", "OK"] where dialogButton(t).exists { dialogButton(t).tap(); break }
+            sleep(2)
+            c.sig("deactivated")
+            try c.wait("checked", from: "web", 60)
+            return "\(st); входящий \(from ? "с именем «Гость e2e»" : "(имя гостя не найдено в тексте)")"
         }
 
         // --- Сеть ---
@@ -1206,7 +1367,7 @@ final class Linia2E2ETests: XCTestCase {
             try openSettingsItem("Внешний вид")
             try need(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Тема: Светлая'")).firstMatch, "«Светлая»").tap(); sleep(2)
             try need(app.buttons["Тема: Светлая, выбрана"].firstMatch, "светлая тема выбрана", 5)
-            screenshot("theme-light")
+            screenshot("theme-light", bg: false)
             app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Тема: Тёмная'")).firstMatch.tap(); sleep(2)
             try need(app.buttons["Тема: Тёмная, выбрана"].firstMatch, "тёмная тема вернулась", 5)
             back()
@@ -1386,7 +1547,7 @@ final class Linia2E2ETests: XCTestCase {
             c.sig("ready")
             try c.wait("calling", from: "iphone1", 120)
             try answerIncoming(45)
-            screenshot("call-2")
+            screenshot("call-2", bg: false)
             c.sig("answered")
             try c.wait("talked", from: "iphone1", 60)
             c.sig("checked")
@@ -1406,7 +1567,7 @@ final class Linia2E2ETests: XCTestCase {
             sleep(3)
             let st = try inCallCheck()
             let mic = micEnabled()
-            screenshot("call-2-web")
+            screenshot("call-2-web", bg: false)
             hangUpIfInCall()
             try waitCallClosed(20)
             c.sig("hungup")
@@ -1418,7 +1579,7 @@ final class Linia2E2ETests: XCTestCase {
             c.sig("ready")
             try c.wait("calling", from: "web", 120)
             guard let d = incomingCallButton(false, timeout: 40) else { throw fail("входящий звонок не показан (нет «Отклонить»)") }
-            screenshot("decline")
+            screenshot("decline", bg: false)
             d.tap()
             sleep(2)
             c.sig("declined")

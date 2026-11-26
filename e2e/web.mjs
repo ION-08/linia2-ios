@@ -52,7 +52,26 @@ let page, context, browser;
 
 async function shot(name) {
   shotN++;
-  try { await page.screenshot({ path: path.join(OUT, 'shots', `web-${String(shotN).padStart(3, '0')}-${name}.png`) }); } catch {}
+  const file = `web-${String(shotN).padStart(3, '0')}-${name}`;
+  try { await page.screenshot({ path: path.join(OUT, 'shots', file + '.png') }); } catch { return; }
+  // Проверки аккуратности: текст не обрезан краем окна, нет латинских слов, фон тёмный по краям.
+  const checks = await page.evaluate(allowed => {
+    const out = [], W = innerWidth, H = innerHeight, cut = [], latin = new Set();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walker.nextNode());) {
+      const t = n.textContent.trim(); if (!t) continue;
+      const el = n.parentElement; if (!el) continue;
+      const cs = getComputedStyle(el); if (cs.visibility === 'hidden' || cs.display === 'none' || el.closest('[hidden],script,style,noscript')) continue;
+      const r = el.getBoundingClientRect(); if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.top > H || r.right < 0 || r.left > W) continue;
+      if ((r.left < -1 || r.right > W + 1) && cs.overflow !== 'hidden') cut.push(t.slice(0, 30));
+      if (el.closest('#scroller, .l2-quote, input, textarea')) continue;   // сообщения — пользовательский текст
+      for (const w of t.split(/[^A-Za-z\u0400-\u04FF0-9]+/)) if (/^[A-Za-z]{2,}$/.test(w) && !allowed.some(a => a === w || a.includes(w))) latin.add(w);
+    }
+    out.push(cut.length ? 'cut=fail:' + cut.slice(0, 3).join(', ') : 'cut=ok');
+    out.push(latin.size ? 'ru=fail:' + [...latin].slice(0, 5).join(' ') : 'ru=ok');
+    return out.join(';');
+  }, ['PIN', 'ID', 'iPhone', 'iOS', 'OK', 'CI', 'Email', 'Telegram', 'e2e', 'file', 'txt', E.L2_W_LOGIN || '', E.L2_P2_LOGIN || '', E.L2_P1_LOGIN || '', E.L2_INV_LOGIN || '']).catch(() => 'checks=fail:страница недоступна');
+  await bcall('/screen', { role: ROLE, name, file, checks });
 }
 
 async function scenario(s, title, roles, body, timeout = 240) {
@@ -314,6 +333,135 @@ async function play() {
     await shot('logged-in');
   });
 
+  // ---------- Веб-аналоги iOS-сценариев (тот же список, колонка «Веб» в отчёте) ----------
+  const tabBtn = id => page.locator(`#l2-tabs button[data-tab="${id}"]`).first();
+  const srow = t => page.locator('#l2-settings button.l2-srow').filter({ has: page.locator(`.t:text-is("${t}")`) }).first();
+  const openTab = async id => { await tabBtn(id).click(); await sleep(800); };
+  const settingsRoot = async () => { await openTab('settings'); for (let i = 0; i < 3 && await page.locator('#l2-settings .l2-back').first().isVisible().catch(() => false); i++) { await page.locator('#l2-settings .l2-back').first().click(); await sleep(500); } };
+  const modalBtn = t => page.locator('.l2-modal button').filter({ hasText: t }).first();
+
+  await solo('WP01', 'Push через FCM (веб)', async () => {
+    const [, j] = await bcall('/push-check', { login: E.L2_W_LOGIN }, 40);
+    if (j.http === 404) throw new Skip('пропущен: нет endpoint /invite/api/ci/push-check на сервере');
+    if (j.http !== 200) throw new Fail(`push-check: HTTP ${j.http} ${j.error || ''}`);
+    if (!(j.tokens >= 1)) throw new Skip('пропущен: в headless Chromium нет push-сервиса браузера — веб-токен FCM не регистрируется');
+    if (j.ok !== j.tokens) throw new Fail(`Firebase принял ${j.ok} из ${j.tokens}: ${(j.errors || []).join('; ')}`);
+    return `токенов ${j.tokens}, принято ${j.ok}`;
+  });
+  await solo('WT01', 'Вкладки: Чаты, Звонки, Контакты, Настройки (веб)', async () => {
+    for (const [id, sel] of [['calls', '#l2-calls'], ['contacts', '#l2-contacts'], ['settings', '#l2-settings'], ['chats', '#sidepanel']]) {
+      await tabBtn(id).waitFor({ timeout: 10000 }).catch(() => { throw new Fail('нет вкладки ' + id); });
+      await openTab(id);
+      if (!(await page.locator(sel).first().isVisible().catch(() => false))) throw new Fail('не открылась вкладка ' + id);
+      await shot('tab-' + id);
+    }
+  });
+  await solo('WS01', 'Настройки: каждый пункт открывается (веб)', async () => {
+    for (const item of ['Уведомления', 'Конфиденциальность', 'Внешний вид', 'О приложении', 'Поддержка']) {
+      await settingsRoot();
+      const r = srow(item);
+      if (!(await r.isVisible().catch(() => false))) throw new Fail(`нет пункта «${item}»`);
+      await r.click(); await sleep(1200);
+      await shot('settings-' + item);
+    }
+    await settingsRoot();
+    await page.locator('#l2-settings button.l2-profile').first().click(); await sleep(1200);
+    await shot('profile');
+    await settingsRoot();
+  });
+  await solo('WN01', 'Настройки: имя (веб)', async () => {
+    await settingsRoot();
+    await page.locator('#l2-settings button.l2-profile').first().click(); await sleep(1500);
+    // Профиль Tinode: имя — редактирование по месту (клик по имени → поле → Enter).
+    const nameEl = page.locator(`text="${W_NAME}"`).last();
+    if (!(await nameEl.isVisible().catch(() => false))) throw new Fail('в профиле не найдено имя');
+    await nameEl.click(); await sleep(500);
+    const inp = page.locator('input:focus').first();
+    if (!(await inp.isVisible().catch(() => false))) throw new Fail('имя не редактируется');
+    await inp.fill(W_NAME + ' ✓'); await inp.press('Enter'); await sleep(1500);
+    const fn = await page.evaluate(() => window.__l2.tn().getMeTopic().public.fn);
+    // Вернуть исходное (по нему iPhone находят чат).
+    await page.evaluate(n => window.__l2.tn().getMeTopic().setMeta({ desc: { public: { fn: n } } }), W_NAME);
+    await settingsRoot();
+    if (fn !== W_NAME + ' ✓') throw new Fail(`имя не сохранилось на сервере: «${fn}»`);
+  });
+  await solo('WN02', 'Настройки: аватар (веб)', async () => {
+    await settingsRoot();
+    await page.locator('#l2-settings button.l2-profile').first().click(); await sleep(1500);
+    const fi = page.locator('input[type=file][accept*="image"]').first();
+    if (!(await fi.count())) throw new Fail('нет выбора фото в профиле');
+    await fi.setInputFiles(E.L2_AVATAR || 'ios-chat.png');
+    await sleep(1500);
+    await shot('avatar-crop');
+    const ok = page.locator('button:has(i:text("check")), button:has-text("Готово"), button:has-text("Сохранить"), a:has(i:text("check"))').last();
+    if (await ok.isVisible().catch(() => false)) await ok.click();
+    const done = await page.waitForFunction(() => { const p = window.__l2.tn().getMeTopic().public; return !!(p && p.photo); }, null, { timeout: 30000 }).then(() => true).catch(() => false);
+    await settingsRoot();
+    if (!done) throw new Fail('фото профиля не сохранилось');
+  });
+  const appearanceOpen = async () => { await settingsRoot(); await srow('Внешний вид').click(); await sleep(800); };
+  await solo('WN03', 'Настройки: тема (светлая → тёмная, веб)', async () => {
+    await appearanceOpen();
+    const b = n => page.locator('#l2-settings .l2-seg button').filter({ hasText: n }).first();
+    await b('Светлая').click(); await sleep(800);
+    if ((await b('Светлая').getAttribute('aria-pressed')) !== 'true') throw new Fail('светлая тема не выбралась');
+    await shot('theme-light');
+    await b('Тёмная').click(); await sleep(800);
+    if ((await b('Тёмная').getAttribute('aria-pressed')) !== 'true') throw new Fail('тёмная тема не вернулась');
+  });
+  await solo('WN04', 'Настройки: цвет акцента (веб)', async () => {
+    await appearanceOpen();
+    const b = n => page.locator(`#l2-settings .l2-accents button[title="${n}"]`).first();
+    await b('Фиолетовый').click(); await sleep(800);
+    if ((await b('Фиолетовый').getAttribute('aria-pressed')) !== 'true') throw new Fail('цвет не выбрался');
+    await shot('accent-violet');
+    await b('Мятный').click(); await sleep(800);
+    if ((await b('Мятный').getAttribute('aria-pressed')) !== 'true') throw new Fail('мятный не вернулся');
+  });
+  await solo('WN05', 'Настройки: уведомления (веб)', async () => {
+    await settingsRoot();
+    await srow('Уведомления').click(); await sleep(1500);
+    const cb = page.locator('input[type=checkbox]:visible, .switch:visible, [role=switch]:visible').first();
+    if (!(await cb.isVisible().catch(() => false))) throw new Fail('нет переключателей в «Уведомлениях»');
+    await shot('notifications');
+    await settingsRoot();
+  });
+  await solo('WN06', 'Настройки: конфиденциальность (веб)', async () => {
+    await settingsRoot();
+    await srow('Конфиденциальность').click(); await sleep(800);
+    for (const t of ['Заблокированные пользователи', 'Пароль и безопасность']) {
+      const r = srow(t);
+      if (!(await r.isVisible().catch(() => false))) throw new Fail(`нет «${t}»`);
+    }
+    await srow('Пароль и безопасность').click(); await sleep(1500);
+    await shot('security');
+    await settingsRoot();
+  });
+  await solo('WN07', 'Настройки: смена пароля (веб)', async () => { throw new Skip('пропущен: веб-сценарий смены пароля ещё не написан'); });
+  await solo('WN08', 'Настройки: смена PIN (веб)', async () => { throw new Skip('пропущен: в веб-версии нет PIN-кода (только iOS)'); });
+  await solo('WO01', 'Контакты: найти по логину, открыть чат (веб)', async () => {
+    await openTab('contacts');
+    const inp = page.locator('#l2-contacts input[type=search]').first();
+    await inp.fill(E.L2_P2_LOGIN); await page.locator('#l2-contacts button:has-text("Найти")').first().click();
+    const f = page.locator('#l2-contacts .l2-found li, #l2-contacts .l2-found button').first();
+    await f.waitFor({ timeout: 20000 }).catch(() => { throw new Fail('поиск по логину ничего не нашёл'); });
+    await shot('contacts-found');
+    await openTab('chats');
+  });
+  await solo('WR02', 'Выход → вход по логину и паролю (веб)', async () => {
+    await settingsRoot();
+    await srow('Выйти').click();
+    await modalBtn('Выйти').click().catch(() => { throw new Fail('нет подтверждения выхода'); });
+    await page.locator('button:has-text("Войти")').first().waitFor({ timeout: 20000 }).catch(() => { throw new Fail('после выхода нет экрана входа'); });
+    await shot('logged-out');
+    await webLogin(E.L2_W_LOGIN, E.L2_W_PASSWORD);
+  });
+  await solo('WR03', 'Повторное открытие → вход по сохранённой сессии (веб)', async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await rootReady(40000).catch(() => { throw new Fail('после перезагрузки страницы сессия не восстановилась'); });
+    await shot('relogin');
+  });
+
   await bcall('/barrier', { n: 'chats', role: ROLE, roles: ALL.join(','), t: 1500 }, 1500);
 
   const IW = ['iphone1', 'web'], I2W = ['iphone2', 'web'];
@@ -485,6 +633,42 @@ async function play() {
     await hangUp();
     await c.sig('hungup');
   }, 300);
+
+  await scenario('G01', 'Гостевая ссылка на звонок: создать, гость звонит, принять, история, отключить', IW, async c => {
+    const [url] = await c.wait('url', 'iphone1', 180);
+    if (!url || url === 'none') throw new Skip('пропущен: нет функции (кнопки создания ссылки)');
+    const g = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: 'ru-RU', permissions: ['microphone', 'camera'] });
+    await g.addInitScript(INIT);
+    const gp = await g.newPage();
+    try {
+      const r = await gp.goto(url, { waitUntil: 'networkidle' });
+      if (!r || r.status() === 404) { await c.sig('opened', '404'); throw new Skip('пропущен: нет функции (/call/<token> → 404)'); }
+      await gp.screenshot({ path: path.join(OUT, 'shots', 'web-guest-1-open.png') });
+      const name = gp.locator('input[placeholder*="имя" i], input[name*="name" i]').first();
+      await name.waitFor({ timeout: 15000 }).catch(() => { throw new Fail('на странице гостя нет поля «Ваше имя»'); });
+      await name.fill('Гость e2e');
+      await gp.locator('button:has-text("Позвонить"), a:has-text("Позвонить")').first().click();
+      await c.sig('opened', 'ok');
+      await c.wait('answered', 'iphone1', 90);
+      const end = Date.now() + 40000; let a = null;
+      while (Date.now() < end) { a = await gp.evaluate(() => window.__l2.rtc()); if (a.ice === 'connected' || a.ice === 'completed') break; await sleep(500); }
+      if (!a || !(a.ice === 'connected' || a.ice === 'completed')) throw new Fail('гость: ICE не соединился ' + JSON.stringify(a));
+      await sleep(3000);
+      const b = await gp.evaluate(() => window.__l2.rtc());
+      if (!(b.pair > a.pair)) throw new Fail(`гость: bytesReceived не растёт ${a.pair}→${b.pair}`);
+      await gp.screenshot({ path: path.join(OUT, 'shots', 'web-guest-2-call.png') });
+      await c.sig('connected');
+      await c.wait('hungup', 'iphone1', 60);
+      await c.wait('deactivated', 'iphone1', 120);
+      await gp.goto(url, { waitUntil: 'networkidle' });
+      await sleep(1500);
+      await gp.screenshot({ path: path.join(OUT, 'shots', 'web-guest-3-deactivated.png') });
+      const txt = await gp.evaluate(() => document.body.innerText);
+      if (!/больше не действует/i.test(txt)) throw new Fail('после отключения нет «Ссылка больше не действует»');
+      await c.sig('checked');
+      return `гость: ICE ${b.ice}, bytesReceived ${a.pair}→${b.pair}`;
+    } finally { await g.close(); }
+  }, 400);
 
   // ---------- Сеть ----------
   await scenario('F01', 'Обрыв сети на вебе 10 с → очередь ушла', IW, async c => {

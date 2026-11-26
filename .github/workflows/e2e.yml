@@ -57,19 +57,24 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E 'error:|\*\* TEST BUILD' || true
           grep -q '\*\* TEST BUILD SUCCEEDED \*\*' "$RUNNER_TEMP/build.log"
 
-      - name: Тестовые пользователи (3 шт.) и переписка
+      - name: Тестовые пользователи (4 шт.) и переписка
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
           [ -n "$CI_TOKEN" ] || { echo "::error::нет секрета CI_TOKEN"; exit 1; }
           BASE="${{ github.run_id }}${{ github.run_attempt }}"; BASE="${BASE: -9}"
           echo "L2_RUN=${BASE: -5}" >> "$GITHUB_ENV"
-          for i in 4 5 6 7; do
-            curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
-                 -d "{\"run\":\"$BASE$i\"}" -o "$RUNNER_TEMP/ci$i.json" || { echo "::error::ci/setup $i не удался"; exit 1; }
-          done
-          python3 - "$RUNNER_TEMP" >> "$GITHUB_ENV" <<'PY'
-          import json, secrets, sys
+          # Пользователи без входа в Tinode может удалить /ci/cleanup чужого прогона — поэтому seed входит каждым сразу,
+          # а при сбое вся подготовка повторяется с новыми номерами.
+          for TRY in 1 2 3; do
+            ok=1
+            for i in 4 5 6 7; do
+              curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
+                   -d "{\"run\":\"${BASE:0:8}$TRY$i\"}" -o "$RUNNER_TEMP/ci$i.json" || { echo "::warning::ci/setup $i не удался"; ok=0; }
+            done
+            [ $ok = 1 ] || { sleep 10; continue; }
+            python3 - "$RUNNER_TEMP" <<'PY'
+          import json, secrets, sys, shlex
           t = sys.argv[1]
           a, b, c, w = (json.load(open(f"{t}/ci{i}.json")) for i in (4, 5, 6, 7))
           pw = lambda: "E2e-" + secrets.token_urlsafe(10)
@@ -84,15 +89,19 @@ jobs:
             # Веб: регистрация по ссылке-приглашению /invite/<код> (отдельный пользователь).
             "L2_INV_CODE": w["code"], "L2_INV_LOGIN": w["reg_login"], "L2_INV_PASSWORD": pw(), "L2_INV_PRE_LOGIN": w["login"], "L2_INV_PRE_PASSWORD": w["password"],
           }
+          with open(f"{t}/l2env", "w") as f:
+              for k, v in env.items(): f.write(f"{k}={v}\n")
+          with open(f"{t}/l2env.sh", "w") as f:
+              for k, v in env.items(): f.write(f"export {k}={shlex.quote(v)}\n")
           for k, v in env.items():
-              if "PASSWORD" in k or "NEWPASS" in k: print(f"::add-mask::{v}", file=sys.stderr)
-              print(f"{k}={v}")
+              if "PASSWORD" in k or "NEWPASS" in k: print(f"::add-mask::{v}")
           PY
-          for k in L2_INV_PASSWORD L2_INV_PRE_PASSWORD L2_P1_PASSWORD L2_D_PASSWORD L2_P2_PASSWORD L2_P2_NEWPASS L2_W_PASSWORD; do
-            echo "::add-mask::$(grep "^$k=" "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+            . "$RUNNER_TEMP/l2env.sh"
+            if node e2e/seed.mjs > "$RUNNER_TEMP/uids"; then break; fi
+            echo "::warning::подготовка пользователей, попытка $TRY не удалась — повтор"; ok=0; sleep 10
           done
-          set -a; . <(grep '^L2_' "$GITHUB_ENV"); set +a
-          node e2e/seed.mjs >> "$GITHUB_ENV"
+          [ $ok = 1 ] || { echo "::error::не удалось подготовить тестовых пользователей"; exit 1; }
+          cat "$RUNNER_TEMP/l2env" "$RUNNER_TEMP/uids" >> "$GITHUB_ENV"
 
       - name: Два симулятора iPhone (iOS 18 или 17), фото и файл для вложений
         run: |
@@ -190,6 +199,18 @@ jobs:
           for r in iphone1 iphone2; do
             X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
             xcrun xcresulttool export attachments --path "$X" --output-path "$OUT/shots-$r" >/dev/null 2>&1 || true
+            # Понятные имена файлов (как в отчёте): по manifest.json.
+            python3 - "$OUT/shots-$r" <<'PY' || true
+          import json, os, sys
+          d = sys.argv[1]
+          for t in json.load(open(os.path.join(d, "manifest.json"))):
+              for a in t.get("attachments", []):
+                  src = os.path.join(d, a["exportedFileName"]); name = a.get("suggestedHumanReadableName") or a["exportedFileName"]
+                  base, ext = os.path.splitext(a["exportedFileName"])
+                  n = name.split("_0_")[0] if "_0_" in name else os.path.splitext(name)[0]
+                  dst = os.path.join(d, n.replace("/", "-") + ext)
+                  if os.path.exists(src) and not os.path.exists(dst): os.rename(src, dst)
+          PY
             (cd "$RUNNER_TEMP" && zip -qr "$OUT/$r.xcresult.zip" "$r.xcresult") || true
           done
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci4.json" -exec cp {} "$OUT/" \; 2>/dev/null || true
