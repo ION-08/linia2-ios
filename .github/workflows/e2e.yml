@@ -1,12 +1,15 @@
-# Большой автотест «как живые люди»: 2 симулятора iPhone + веб (Playwright).
-# ЗАГОТОВКА: настоящий тест дописывается в ветке e2e и заменит этот файл, сохранив интерфейс:
-#   on: workflow_call (input dry_run) + push в main; concurrency e2e-${{ github.workflow }}-${{ github.ref }};
-#   отдельный прогон на push с [release] пропускается (это делает release.yml).
+# Большой автотест «как живые люди»: iPhone 1 + iPhone 2 (два симулятора, XCUITest) + Веб (Playwright, Chromium).
+# Один macOS-раннер: приложение собирается один раз (build-for-testing), два симулятора и браузер работают параллельно,
+# шаги синхронизируются через «доску» e2e/board.mjs (http://127.0.0.1:8765). Сценарии — TinodiosUITests/Linia2E2ETests.swift
+# и e2e/web.mjs; нестабильный сценарий повторяется всеми участниками до 2 раз (видно в отчёте).
+# Отчёт — таблица в Summary; скриншоты, видео (при падениях), xcresult и логи — в артефакте e2e-results-N.
+# Workflow падает, если упал хоть один сценарий («пропущен» — не падение, но виден в отчёте).
 name: E2E
 
 on:
   push:
     branches: [main, e2e]
+  workflow_dispatch:
   workflow_call:
     inputs:
       dry_run:
@@ -20,14 +23,200 @@ concurrency:
 jobs:
   e2e:
     if: ${{ github.workflow != 'E2E' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]') }}
-    runs-on: ubuntu-latest
+    runs-on: macos-26
+    timeout-minutes: 170
+    env:
+      API: https://v2.chat-linia.site/invite/api
+      L2_BOARD_PORT: "8765"
+      BUNDLE: info.codix.liniya2
     steps:
-      - name: Большой автотест ещё не готов
-        env:
-          DRY: ${{ inputs.dry_run }}
+      - uses: actions/checkout@v4
+
+      - name: Xcode
         run: |
-          echo "::warning::Большой e2e-тест (iPhone+iPhone+Веб) ещё в разработке — это заготовка."
-          echo "Большой e2e-тест: ЗАГОТОВКА (ещё не готов)" >> "$GITHUB_STEP_SUMMARY"
-          # В пробном выпуске пропускаем с предупреждением; настоящий выпуск без e2e невозможен.
-          if [ "$DRY" = "true" ]; then exit 0; fi
-          if [ "${{ github.workflow }}" = "Release" ]; then echo "::error::Выпуск без большого e2e-теста запрещён"; exit 1; fi
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1); sudo xcode-select -s "${XC:-/Applications/Xcode.app}"; xcodebuild -version
+
+      - name: Подготовка (Firebase-конфиг, pods)
+        env:
+          GSI: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          # Настоящий Firebase-конфиг — для сценария «Push через FCM»; без секрета — заглушка (сценарий упадёт честно).
+          if [ -n "$GSI" ]; then echo "$GSI" | base64 --decode > GoogleService-Info.plist; echo "Firebase: настоящий конфиг"
+          else cp ci/GoogleService-Info.stub.plist GoogleService-Info.plist; echo "::warning::Firebase: заглушка — push через FCM не заработает"; fi
+          which pod || sudo gem install cocoapods --no-document
+          pod install --repo-update
+
+      - name: Сборка для тестов (один раз)
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/dd" \
+            ENABLE_TESTABILITY=YES \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E 'error:|\*\* TEST BUILD' || true
+          grep -q '\*\* TEST BUILD SUCCEEDED \*\*' "$RUNNER_TEMP/build.log"
+
+      - name: Тестовые пользователи (3 шт.) и переписка
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          [ -n "$CI_TOKEN" ] || { echo "::error::нет секрета CI_TOKEN"; exit 1; }
+          BASE="${{ github.run_id }}${{ github.run_attempt }}"; BASE="${BASE: -9}"
+          echo "L2_RUN=${BASE: -5}" >> "$GITHUB_ENV"
+          for i in 4 5 6 7; do
+            curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
+                 -d "{\"run\":\"$BASE$i\"}" -o "$RUNNER_TEMP/ci$i.json" || { echo "::error::ci/setup $i не удался"; exit 1; }
+          done
+          python3 - "$RUNNER_TEMP" >> "$GITHUB_ENV" <<'PY'
+          import json, secrets, sys
+          t = sys.argv[1]
+          a, b, c, w = (json.load(open(f"{t}/ci{i}.json")) for i in (4, 5, 6, 7))
+          pw = lambda: "E2e-" + secrets.token_urlsafe(10)
+          env = {
+            # iPhone 1: регистрация по коду (новый аккаунт), в конце удаляет отдельного пользователя D.
+            "L2_CODE": a["code"], "L2_P1_LOGIN": a["reg_login"], "L2_P1_PASSWORD": pw(),
+            "L2_D_LOGIN": a["login"], "L2_D_PASSWORD": a["password"], "L2_D_NAME": "Удаляемый CI",
+            # iPhone 2: вход готовым пользователем; в тесте меняет имя, пароль и PIN.
+            "L2_P2_LOGIN": b["login"], "L2_P2_PASSWORD": b["password"], "L2_P2_NEWPASS": pw(), "L2_P2_SEEDNAME": "Айфон2 (старое имя)",
+            # Веб.
+            "L2_W_LOGIN": c["login"], "L2_W_PASSWORD": c["password"], "L2_W_NAME": "Веб CI",
+            # Веб: регистрация по ссылке-приглашению /invite/<код> (отдельный пользователь).
+            "L2_INV_CODE": w["code"], "L2_INV_LOGIN": w["reg_login"], "L2_INV_PASSWORD": pw(), "L2_INV_PRE_LOGIN": w["login"], "L2_INV_PRE_PASSWORD": w["password"],
+          }
+          for k, v in env.items():
+              if "PASSWORD" in k or "NEWPASS" in k: print(f"::add-mask::{v}", file=sys.stderr)
+              print(f"{k}={v}")
+          PY
+          for k in L2_INV_PASSWORD L2_INV_PRE_PASSWORD L2_P1_PASSWORD L2_D_PASSWORD L2_P2_PASSWORD L2_P2_NEWPASS L2_W_PASSWORD; do
+            echo "::add-mask::$(grep "^$k=" "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          done
+          set -a; . <(grep '^L2_' "$GITHUB_ENV"); set +a
+          node e2e/seed.mjs >> "$GITHUB_ENV"
+
+      - name: Два симулятора iPhone (iOS 18 или 17), фото и файл для вложений
+        run: |
+          pick() { xcrun simctl list runtimes available | grep -o "com.apple.CoreSimulator.SimRuntime.iOS-$1-[0-9-]*" | sort -V | tail -1; }
+          RT=$(pick 18); [ -n "$RT" ] || RT=$(pick 17)
+          if [ -z "$RT" ]; then
+            xcodebuild -downloadPlatform iOS -buildVersion 18.6 >/dev/null 2>&1 || xcodebuild -downloadPlatform iOS -buildVersion 18.5 >/dev/null 2>&1 || true
+            RT=$(pick 18); [ -n "$RT" ] || RT=$(pick 17)
+          fi
+          [ -n "$RT" ] || { echo "::error::Нет симулятора iOS 18/17"; xcrun simctl list runtimes; exit 1; }
+          for n in 1 2; do
+            U=""
+            for DT in iPhone-16-Pro iPhone-16 iPhone-15-Pro iPhone-15; do
+              U=$(xcrun simctl create "L2 E2E $n" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || U=""
+            done
+            [ -n "$U" ] || { echo "::error::не удалось создать iPhone $n"; exit 1; }
+            echo "UDID$n=$U" >> "$GITHUB_ENV"
+            xcrun simctl boot "$U" || true
+          done
+          . <(grep '^UDID' "$GITHUB_ENV")
+          printf 'Линия 2.0 e2e: файл для отправки из «Файлов»\n' > "$RUNNER_TEMP/e2e-doc.txt"
+          for U in "$UDID1" "$UDID2"; do
+            xcrun simctl bootstatus "$U" -b >/dev/null 2>&1 || true
+            for k in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do
+              xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences $k -bool true || true
+            done
+            xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false || true
+            xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences KeyboardPrediction -bool false || true
+            xcrun simctl addmedia "$U" ios-chat.png ios-contacts.png || echo "::warning::addmedia не удался"
+            for s in microphone camera photos; do xcrun simctl privacy "$U" grant $s "$BUNDLE" 2>/dev/null || true; done
+            # Файл в «Файлы → На iPhone».
+            G=$(xcrun simctl get_app_container "$U" com.apple.FileProvider.LocalStorage group.com.apple.FileProvider.LocalStorage 2>/dev/null || true)
+            if [ -n "$G" ]; then mkdir -p "$G/File Provider Storage"; cp "$RUNNER_TEMP/e2e-doc.txt" "$G/File Provider Storage/"; else echo "::warning::нет контейнера «Файлов»"; fi
+          done
+          echo "Симуляторы: $(xcrun simctl list devices | grep -E "$UDID1|$UDID2" | sed 's/^ *//' | tr '\n' ';') на ${RT##*.}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Playwright (Chromium)
+        run: |
+          cd e2e && npm init -y >/dev/null && npm i --no-audit --no-fund playwright@1.49.1 && npx playwright install chromium
+
+      - name: Прогон — iPhone 1, iPhone 2 и веб параллельно
+        id: run
+        timeout-minutes: 120
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          OUT="$RUNNER_TEMP/out"; mkdir -p "$OUT/video" "$OUT/web"
+          export L2_BOARD_OUT="$OUT/results.json" L2_BOARD_LOG="$OUT/board.log" L2_WEB_OUT="$OUT/web"
+          node e2e/board.mjs > "$OUT/board.stdout" 2>&1 &
+          echo $! > "$RUNNER_TEMP/board.pid"
+          for i in $(seq 1 30); do curl -sf "http://127.0.0.1:$L2_BOARD_PORT/ping" >/dev/null && break; sleep 1; done
+          # Видео всего прогона на обоих iPhone (сохраняется, только если были падения).
+          xcrun simctl io "$UDID1" recordVideo --codec=h264 --force "$OUT/video/iphone1.mp4" > /dev/null 2>&1 & echo $! > "$RUNNER_TEMP/rec1.pid"
+          xcrun simctl io "$UDID2" recordVideo --codec=h264 --force "$OUT/video/iphone2.mp4" > /dev/null 2>&1 & echo $! > "$RUNNER_TEMP/rec2.pid"
+          XT=$(ls "$RUNNER_TEMP"/dd/Build/Products/*.xctestrun | head -1)
+          echo "xctestrun: $XT"
+          ios() {   # $1 = роль, $2 = UDID
+            env TEST_RUNNER_L2_ROLE="$1" TEST_RUNNER_L2_RUN="$L2_RUN" TEST_RUNNER_L2_BOARD_PORT="$L2_BOARD_PORT" \
+                TEST_RUNNER_L2_CODE="$L2_CODE" TEST_RUNNER_L2_P1_LOGIN="$L2_P1_LOGIN" TEST_RUNNER_L2_P1_PASSWORD="$L2_P1_PASSWORD" \
+                TEST_RUNNER_L2_D_LOGIN="$L2_D_LOGIN" TEST_RUNNER_L2_D_PASSWORD="$L2_D_PASSWORD" \
+                TEST_RUNNER_L2_P2_LOGIN="$L2_P2_LOGIN" TEST_RUNNER_L2_P2_PASSWORD="$L2_P2_PASSWORD" TEST_RUNNER_L2_P2_NEWPASS="$L2_P2_NEWPASS" \
+                TEST_RUNNER_L2_W_LOGIN="$L2_W_LOGIN" \
+              xcodebuild test-without-building -xctestrun "$XT" \
+                -destination "platform=iOS Simulator,id=$2" \
+                -only-testing:TinodiosUITests/Linia2E2ETests \
+                -parallel-testing-enabled NO \
+                -resultBundlePath "$RUNNER_TEMP/$1.xcresult" > "$OUT/$1.log" 2>&1
+            echo "$1: xcodebuild завершился с кодом $?"
+            curl -s "http://127.0.0.1:$L2_BOARD_PORT/gone?role=$1" > /dev/null
+          }
+          ios iphone1 "$UDID1" & P1=$!
+          sleep 20   # симуляторы не стартуют тест-раннер одновременно — меньше нагрузка на 3 ядра
+          ios iphone2 "$UDID2" & P2=$!
+          ( node e2e/web.mjs > "$OUT/web.log" 2>&1; echo "web: код $?"; curl -s "http://127.0.0.1:$L2_BOARD_PORT/gone?role=web" > /dev/null ) & PW=$!
+          wait $P1 $P2 $PW || true
+          grep -E 'Test Case|error:|\*\* TEST' "$OUT/iphone1.log" "$OUT/iphone2.log" | tail -20 || true
+          tail -5 "$OUT/web.log" || true
+
+      - name: Отчёт
+        id: report
+        if: always()
+        run: |
+          OUT="$RUNNER_TEMP/out"; mkdir -p "$OUT"
+          for f in rec1 rec2; do [ -f "$RUNNER_TEMP/$f.pid" ] && kill -INT "$(cat "$RUNNER_TEMP/$f.pid")" 2>/dev/null || true; done
+          [ -f "$RUNNER_TEMP/board.pid" ] && kill -TERM "$(cat "$RUNNER_TEMP/board.pid")" 2>/dev/null || true
+          sleep 5
+          # Сеть раннера — в исходное состояние (на случай сбоя посреди сценария).
+          sudo pfctl -a com.apple/l2e2e -F all 2>/dev/null || true
+          [ -f /tmp/l2e2e.hosts.bak ] && sudo cp /tmp/l2e2e.hosts.bak /etc/hosts || true
+          set +e
+          node e2e/report.mjs "$OUT/results.json" "$OUT/report.md" > /dev/null; RC=$?
+          set -e
+          cat "$OUT/report.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+          for r in iphone1 iphone2; do
+            X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
+            xcrun xcresulttool export attachments --path "$X" --output-path "$OUT/shots-$r" >/dev/null 2>&1 || true
+            (cd "$RUNNER_TEMP" && zip -qr "$OUT/$r.xcresult.zip" "$r.xcresult") || true
+          done
+          find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci4.json" -exec cp {} "$OUT/" \; 2>/dev/null || true
+          # Видео iOS — только при падениях.
+          if [ "$RC" = "0" ]; then rm -rf "$OUT/video"; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results-${{ github.run_number }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+      - name: Удалить тестовых пользователей
+        if: always()
+        run: |
+          # /ci/cleanup НЕ вызываем: он отзывает коды и мешает параллельным прогонам.
+          [ -n "$L2_P1_LOGIN" ] && node e2e/del.mjs "$L2_P1_LOGIN" "$L2_P1_PASSWORD" || true
+          [ -n "$L2_D_LOGIN" ] && node e2e/del.mjs "$L2_D_LOGIN" "$L2_D_PASSWORD" || true
+          [ -n "$L2_P2_LOGIN" ] && node e2e/del.mjs "$L2_P2_LOGIN" "$L2_P2_NEWPASS" "$L2_P2_PASSWORD" || true
+          [ -n "$L2_W_LOGIN" ] && node e2e/del.mjs "$L2_W_LOGIN" "$L2_W_PASSWORD" || true
+          [ -n "$L2_INV_LOGIN" ] && node e2e/del.mjs "$L2_INV_LOGIN" "$L2_INV_PASSWORD" || true
+          [ -n "$L2_INV_PRE_LOGIN" ] && node e2e/del.mjs "$L2_INV_PRE_LOGIN" "$L2_INV_PRE_PASSWORD" || true
+
+      - name: Итог
+        if: always()
+        run: |
+          RC="${{ steps.report.outputs.rc }}"
+          if [ "$RC" != "0" ]; then echo "::error::Упали сценарии e2e (см. отчёт в Summary)"; exit 1; fi
+          echo "Все сценарии e2e прошли (пропущенные — см. отчёт)"

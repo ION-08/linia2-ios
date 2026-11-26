@@ -69,6 +69,7 @@
 		0AD6873D27233C0800A39486 /* QuotedAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AD6873C27233C0800A39486 /* QuotedAttachment.swift */; };
 		0ADDBC8B2249F617000BD00D /* ChatListViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ADDBC8A2249F617000BD00D /* ChatListViewCell.swift */; };
 		0AE21E4E28D21849008F486C /* TinodiosUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21E4D28D21849008F486C /* TinodiosUITests.swift */; };
+		E2E0A1B2C3D4E5F600000002 /* Linia2E2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E0A1B2C3D4E5F600000001 /* Linia2E2ETests.swift */; };
 		0AE21E5028D21849008F486C /* TinodiosUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */; };
 		0AE50D4422156A250021F7B7 /* FindViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE50D4322156A250021F7B7 /* FindViewController.swift */; };
 		0AE50D4622156A4B0021F7B7 /* FindInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE50D4522156A4B0021F7B7 /* FindInteractor.swift */; };
@@ -266,6 +267,7 @@
 		0ADDBC8A2249F617000BD00D /* ChatListViewCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListViewCell.swift; sourceTree = "<group>"; };
 		0AE21E4B28D21849008F486C /* TinodiosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TinodiosUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0AE21E4D28D21849008F486C /* TinodiosUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinodiosUITests.swift; sourceTree = "<group>"; };
+		E2E0A1B2C3D4E5F600000001 /* Linia2E2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2E2ETests.swift; sourceTree = "<group>"; };
 		0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinodiosUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		0AE50D4322156A250021F7B7 /* FindViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindViewController.swift; sourceTree = "<group>"; };
 		0AE50D4522156A4B0021F7B7 /* FindInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindInteractor.swift; sourceTree = "<group>"; };
@@ -576,6 +578,7 @@
 			children = (
 				0A3EECCC28DA0EEF00313C35 /* TinodiosUITests.entitlements */,
 				0AE21E4D28D21849008F486C /* TinodiosUITests.swift */,
+				E2E0A1B2C3D4E5F600000001 /* Linia2E2ETests.swift */,
 				0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */,
 			);
 			path = TinodiosUITests;
@@ -1153,6 +1156,7 @@
 			files = (
 				0AE21E5028D21849008F486C /* TinodiosUITestsLaunchTests.swift in Sources */,
 				0AE21E4E28D21849008F486C /* TinodiosUITests.swift in Sources */,
+				E2E0A1B2C3D4E5F600000002 /* Linia2E2ETests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
