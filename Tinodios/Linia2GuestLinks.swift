@@ -284,6 +284,8 @@ enum Linia2GuestLinks {
 class Linia2GuestBaseViewController: UIViewController {
     let scroll = UIScrollView()
     let stack = UIStackView()
+    /// Отступ снизу под плавающее меню вкладок (в нижнем листе — меньше).
+    var bottomReserve: CGFloat { Linia2TabBarController.reservedBottom + 24 }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -303,7 +305,7 @@ class Linia2GuestBaseViewController: UIViewController {
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -(Linia2TabBarController.reservedBottom + 24)),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -bottomReserve),
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -20),
         ])
@@ -335,38 +337,97 @@ class Linia2GuestBaseViewController: UIViewController {
     }
 }
 
-// MARK: - «Создать ссылку на звонок»
+// MARK: - «Ссылка на звонок» (нижний лист)
 
 final class Linia2GuestLinkCreateViewController: Linia2GuestBaseViewController, UITextFieldDelegate {
-    private let titleField = L2TextField(placeholder: "Например, «Консультация»")
+    static let mint = L2.hex(0x7EE0C3)
+    private let titleField = L2TextField(placeholder: "Название (необязательно)")
     private lazy var modeControl = segmented(Linia2Config.shared.feature("videoCalls") ? ["Аудио", "Видео"] : ["Аудио"], selected: 0, id: "l2.guestlink.mode")
-    private lazy var ttlControl = segmented(["1 час", "24 часа", "7 дней", "Бессрочно"], selected: 1, id: "l2.guestlink.ttl")
-    private lazy var onceControl = segmented(["Многоразовая", "Одноразовая"], selected: 0, id: "l2.guestlink.once")
-    private let createButton = L2Button("Создать ссылку", kind: .primary, symbol: "link")
+    private lazy var ttlControl = segmented(["1 ч", "24 ч", "7 дней", "Бессрочно"], selected: 1, id: "l2.guestlink.ttl")
+    private let onceSwitch = UISwitch()
+    private let createButton = L2Button("Создать", kind: .primary, symbol: "link")
+    private let form = UIStackView()
+    private let result = UIStackView()
     private static let ttls = ["1h", "24h", "7d", "never"]
+    private var link: Linia2GuestLink?
+
+    /// Открыть нижним листом (.medium / .large) поверх `from`.
+    static func presentSheet(from vc: UIViewController) {
+        let nav = UINavigationController(rootViewController: Linia2GuestLinkCreateViewController())
+        nav.overrideUserInterfaceStyle = Linia2Appearance.interfaceStyle
+        if let sheet = nav.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+        }
+        vc.present(nav, animated: true)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Ссылка на звонок"
-        let intro = UILabel()
-        intro.text = "Гость откроет ссылку в браузере, введёт имя и позвонит вам — без регистрации. Ваш номер и логин он не увидит."
-        intro.numberOfLines = 0
-        intro.font = L2.font(15)
-        intro.textColor = L2.textSecondary
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Готово", style: .done, target: self, action: #selector(close))
+        stack.spacing = 12
         titleField.accessibilityIdentifier = "l2.guestlink.title"
         titleField.delegate = self
         titleField.returnKeyType = .done
         titleField.autocapitalizationType = .sentences
         createButton.accessibilityIdentifier = "l2.guestlink.create"
         createButton.addTarget(self, action: #selector(create), for: .touchUpInside)
-        for v in [intro, caption("НАЗВАНИЕ"), titleField, caption("ТИП ЗВОНКА"), modeControl, caption("СРОК ДЕЙСТВИЯ"), ttlControl,
-                  caption("ИСПОЛЬЗОВАНИЕ"), onceControl] as [UIView] {
-            stack.addArrangedSubview(v)
+        onceSwitch.onTintColor = L2.accentStrong
+        onceSwitch.accessibilityIdentifier = "l2.guestlink.once"
+        let onceLabel = UILabel()
+        onceLabel.text = "Одноразовая (гаснет после звонка)"
+        onceLabel.font = L2.font(15)
+        onceLabel.textColor = L2.textPrimary
+        onceLabel.numberOfLines = 0
+        let onceRow = UIStackView(arrangedSubviews: [onceLabel, onceSwitch])
+        onceRow.alignment = .center
+        onceRow.spacing = 12
+
+        form.axis = .vertical
+        form.spacing = 12
+        for v in [titleField, modeControl, caption("Срок действия"), ttlControl, onceRow, createButton] as [UIView] {
+            form.addArrangedSubview(v)
         }
-        stack.setCustomSpacing(24, after: intro)
-        stack.setCustomSpacing(6, after: stack.arrangedSubviews[1])
-        stack.addArrangedSubview(UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 8)))
-        stack.addArrangedSubview(createButton)
+        form.setCustomSpacing(4, after: form.arrangedSubviews[2])
+        result.axis = .vertical
+        result.spacing = 12
+        result.isHidden = true
+        stack.addArrangedSubview(form)
+        stack.addArrangedSubview(result)
+        stack.addArrangedSubview(hint())
+        stack.addArrangedSubview(textButton("Мои ссылки", id: "l2.calls.myLinks", action: #selector(myLinks)))
+        if Linia2Config.shared.feature("createLink") {
+            // Прежняя «Создать ссылку» (на профиль) — здесь, функция сохранена.
+            stack.addArrangedSubview(textButton("Поделиться ссылкой на профиль", id: "l2.calls.profileLink", action: #selector(profileLink(_:))))
+        }
+    }
+
+    // В нижнем листе меню вкладок не мешает — отступ снизу небольшой.
+    override var bottomReserve: CGFloat { 24 }
+
+    private func hint() -> UILabel {
+        let l = UILabel()
+        l.text = "Гость сможет позвонить вам из браузера без регистрации."
+        l.font = L2.font(13)
+        l.textColor = L2.textSecondary
+        l.numberOfLines = 0
+        l.textAlignment = .center
+        return l
+    }
+
+    private func textButton(_ title: String, id: String, action: Selector) -> UIButton {
+        let b = UIButton(type: .system)
+        b.setTitle(title, for: .normal)
+        b.titleLabel?.font = L2.font(16, .semibold)
+        b.titleLabel?.numberOfLines = 0
+        b.titleLabel?.textAlignment = .center
+        b.setTitleColor(Self.mint, for: .normal)
+        b.accessibilityIdentifier = id
+        b.addTarget(self, action: action, for: .touchUpInside)
+        b.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return b
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
@@ -374,21 +435,32 @@ final class Linia2GuestLinkCreateViewController: Linia2GuestBaseViewController, 
         return true
     }
 
+    @objc private func close() { dismiss(animated: true) }
+
+    @objc private func myLinks() {
+        navigationController?.pushViewController(Linia2GuestLinksViewController(), animated: true)
+    }
+
+    @objc private func profileLink(_ sender: UIView) {
+        guard let uid = Cache.tinode.myUid, !uid.isEmpty else { return }
+        let text = "Напишите или позвоните мне в «Линия 2.0»: https://\(SharedUtils.kLinia2Host)/#/\(uid)"
+        let share = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        share.popoverPresentationController?.sourceView = sender
+        share.popoverPresentationController?.sourceRect = sender.bounds
+        present(share, animated: true)
+    }
+
     @objc private func create() {
-        let t = (titleField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else {
-            titleField.isInvalid = true
-            UiUtils.showToast(message: "Введите название ссылки")
-            return
-        }
-        titleField.isInvalid = false
+        var t = (titleField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let video = modeControl.selectedSegmentIndex == 1
+        if t.isEmpty { t = video ? "Видеозвонок" : "Звонок" }
         view.endEditing(true)
         createButton.isEnabled = false
         let body: [String: Any] = [
             "title": String(t.prefix(60)),
-            "mode": modeControl.selectedSegmentIndex == 1 ? "video" : "audio",
+            "mode": video ? "video" : "audio",
             "ttl": Self.ttls[max(0, min(3, ttlControl.selectedSegmentIndex))],
-            "once": onceControl.selectedSegmentIndex == 1,
+            "once": onceSwitch.isOn,
         ]
         Linia2GuestLinks.request("POST", "links", body) { [weak self] status, json in
             guard let self = self else { return }
@@ -398,13 +470,87 @@ final class Linia2GuestLinkCreateViewController: Linia2GuestBaseViewController, 
                 return
             }
             L2.haptic()
-            let detail = Linia2GuestLinkDetailViewController(link: link)
-            if var vcs = self.navigationController?.viewControllers {
-                vcs.removeLast()
-                vcs.append(detail)
-                self.navigationController?.setViewControllers(vcs, animated: true)
-            }
+            self.show(link)
         }
+    }
+
+    /// Готовая ссылка: поле со ссылкой, «Скопировать», «Поделиться», QR.
+    private func show(_ link: Linia2GuestLink) {
+        self.link = link
+        form.isHidden = true
+        result.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let name = UILabel()
+        name.text = "\(link.title) · \(link.mode == "video" ? "видео" : "аудио") · \(link.expiresText)"
+        name.font = L2.font(15, .semibold)
+        name.textColor = L2.textSecondary
+        name.numberOfLines = 0
+        name.textAlignment = .center
+        let url = UITextField()
+        url.text = link.url
+        url.font = L2.font(14, .medium)
+        url.textColor = L2.textPrimary
+        url.backgroundColor = L2.surface
+        url.layer.cornerRadius = 12
+        url.adjustsFontSizeToFitWidth = true
+        url.minimumFontSize = 10
+        url.textAlignment = .center
+        url.accessibilityIdentifier = "l2.guestlink.url"
+        url.accessibilityValue = link.url
+        url.delegate = self
+        url.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        let copy = L2Button("Скопировать", kind: .primary, symbol: "doc.on.doc")
+        copy.accessibilityIdentifier = "l2.guestlink.copy"
+        copy.addTarget(self, action: #selector(copyTapped), for: .touchUpInside)
+        let share = L2Button("Поделиться", kind: .secondary, symbol: "square.and.arrow.up")
+        share.accessibilityIdentifier = "l2.guestlink.share"
+        share.addTarget(self, action: #selector(shareTapped(_:)), for: .touchUpInside)
+        for b in [copy, share] {
+            b.titleLabel?.adjustsFontSizeToFitWidth = true
+            b.titleLabel?.minimumScaleFactor = 0.7
+        }
+        let row = UIStackView(arrangedSubviews: [copy, share])
+        row.spacing = 12
+        row.distribution = .fillEqually
+        let qr = UIImageView(image: Linia2GuestLinks.qr(link.url, size: 400))
+        qr.contentMode = .scaleAspectFit
+        qr.backgroundColor = .white
+        qr.layer.cornerRadius = 14
+        qr.clipsToBounds = true
+        qr.accessibilityIdentifier = "l2.guestlink.qr"
+        qr.accessibilityLabel = "QR-код ссылки"
+        qr.translatesAutoresizingMaskIntoConstraints = false
+        let qrBox = UIView()
+        qrBox.addSubview(qr)
+        NSLayoutConstraint.activate([
+            qr.widthAnchor.constraint(equalToConstant: 180), qr.heightAnchor.constraint(equalToConstant: 180),
+            qr.centerXAnchor.constraint(equalTo: qrBox.centerXAnchor),
+            qr.topAnchor.constraint(equalTo: qrBox.topAnchor), qr.bottomAnchor.constraint(equalTo: qrBox.bottomAnchor),
+        ])
+        let another = textButton("Создать ещё одну", id: "l2.guestlink.another", action: #selector(another))
+        for v in [name, url, row, qrBox, another] as [UIView] { result.addArrangedSubview(v) }
+        result.isHidden = false
+    }
+
+    func textFieldShouldBeginEditing(_ textField: UITextField) -> Bool {
+        // Поле со ссылкой — только для чтения (копирование — кнопкой).
+        textField === titleField
+    }
+
+    @objc private func another() {
+        result.isHidden = true
+        form.isHidden = false
+        titleField.text = nil
+    }
+
+    @objc private func copyTapped() {
+        guard let l = link else { return }
+        L2.haptic()
+        Linia2GuestLinks.copy(l)
+    }
+
+    @objc private func shareTapped(_ sender: UIView) {
+        guard let l = link else { return }
+        Linia2GuestLinks.share(l, from: self, source: sender)
     }
 }
 

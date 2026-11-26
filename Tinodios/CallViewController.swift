@@ -1495,7 +1495,8 @@ extension CallViewController {
         let symbol: String
         let caption: String
         var on = false
-        if outputs.contains(where: { [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE].contains($0) }) {
+        let bluetooth: [AVAudioSession.Port] = [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE]
+        if outputs.contains(where: { bluetooth.contains($0) }) {
             symbol = "airpodspro"; caption = "Аудио"
         } else if outputs.contains(.headphones) || outputs.contains(.usbAudio) {
             symbol = "headphones"; caption = "Аудио"
