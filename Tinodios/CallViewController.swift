@@ -482,6 +482,9 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
             fallthrough
         case .failed:
             self.delegate?.closeCall()
+        case .connected, .completed:
+            // LINIA2: соединение установлено — экран звонка показывает «Идёт звонок» и таймер.
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallConnected, object: nil) }
         default:
             break
         }
@@ -642,6 +645,7 @@ class CallViewController: UIViewController {
             self.audioOutput = .speaker
         }
         self.listener = InfoListener(delegateEventsTo: self)
+        linia2SetupCallStatus()
 
         if let topic = topic {
             peerNameLabel.text = topic.pub?.fn
@@ -1136,5 +1140,46 @@ extension CallViewController: TinodeVideoCallDelegate {
         assert(Thread.isMainThread)
         self.dialingAnimation(on: true)
         self.playSoundEffect("call-out", loop: true)
+    }
+}
+
+
+// MARK: - LINIA2: состояние звонка и идентификаторы (для пользователя и автотестов)
+
+extension Notification.Name {
+    static let linia2CallConnected = Notification.Name("Linia2CallConnected")
+}
+
+extension CallViewController {
+    private static let kL2StateTag = 0x4C3243
+
+    func linia2SetupCallStatus() {
+        hangUpButton.accessibilityIdentifier = "l2.call.hangup"
+        hangUpButton.accessibilityLabel = "Завершить"
+        micToggleButton.accessibilityIdentifier = "l2.call.mic"
+        micToggleButton.accessibilityLabel = "Микрофон"
+        videoToggleButton.accessibilityIdentifier = "l2.call.video"
+        speakerToggleButton.accessibilityIdentifier = "l2.call.speaker"
+        let l = UILabel()
+        l.tag = Self.kL2StateTag
+        l.text = "Соединение…"
+        l.font = L2.font(15, .medium)
+        l.textColor = .white
+        l.textAlignment = .center
+        l.accessibilityIdentifier = "l2.call.state"
+        l.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(l)
+        NSLayoutConstraint.activate([l.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                                     l.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12)])
+        var started: Date?
+        NotificationCenter.default.addObserver(forName: .linia2CallConnected, object: nil, queue: .main) { [weak self, weak l] _ in
+            guard self != nil, started == nil else { return }
+            started = Date()
+            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
+                guard let l = l, let s = started else { t.invalidate(); return }
+                let sec = Int(Date().timeIntervalSince(s))
+                l.text = String(format: "Идёт звонок %02d:%02d", sec / 60, sec % 60)
+            }.fire()
+        }
     }
 }

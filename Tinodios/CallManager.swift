@@ -117,6 +117,28 @@ class CallManager {
         let tinode = Cache.tinode
         let user: DefaultUser? = tinode.getUser(with: fromUid)
         let senderName = user?.pub?.fn ?? NSLocalizedString("Unknown", comment: "Placeholder for missing user name")
+        // LINIA2_E2E: в автотестах (симулятор) входящий звонок — своим окном вместо CallKit.
+        if ProcessInfo.processInfo.arguments.contains("-l2-uitest") {
+            tinode.videoCall(topic: topicName, seq: seq, event: "ringing")
+            let timeout = (tinode.getServerParam(for: "callTimeout")?.asInt() ?? CallManager.kCallTimeout) + 5
+            self.timer = self.makeCallTimeoutTimer(withDeadline: TimeInterval(timeout))
+            DispatchQueue.main.async {
+                let alert = UIAlertController(title: "Входящий звонок", message: senderName, preferredStyle: .alert)
+                alert.view.accessibilityIdentifier = "l2.call.incoming"
+                alert.addAction(UIAlertAction(title: "Отклонить", style: .destructive) { _ in
+                    self.completeCallInProgress(reportToSystem: false, reportToPeer: true)
+                })
+                alert.addAction(UIAlertAction(title: "Принять", style: .default) { _ in
+                    CallManager.activateAudioSession(withSpeaker: !audioOnly)
+                    _ = self.acceptPendingCall()
+                })
+                var top = Linia2Root.window?.rootViewController
+                while let p = top?.presentedViewController { top = p }
+                top?.present(alert, animated: true)
+            }
+            completion?(nil)
+            return
+        }
         callDelegate.reportIncomingCall(uuid: uuid, handle: senderName, audioOnly: audioOnly) { err in
             if err == nil {
                 Cache.log.info("Reporting incoming call (uuid: %@) on topic: %@, seq: %d", self.callInProgress?.uuid.uuidString ?? "missing", topicName, seq)

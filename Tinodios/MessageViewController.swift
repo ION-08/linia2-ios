@@ -772,6 +772,14 @@ extension MessageViewController: UICollectionViewDataSource {
         if let (image, tint) = deliveryMarker(for: message) {
             cell.deliveryMarker.image = image
             cell.deliveryMarker.tintColor = tint
+            // LINIA2: отметка доставки словами (VoiceOver и автотесты).
+            if let t = topic {
+                let st = t.msgReadCount(seq: message.seqId) > 0 ? "прочитано" : (t.msgRecvCount(seq: message.seqId) > 0 ? "доставлено" : "отправлено")
+                cell.deliveryMarker.isAccessibilityElement = true
+                cell.deliveryMarker.accessibilityLabel = "Статус"
+                cell.deliveryMarker.accessibilityValue = st
+                cell.deliveryMarker.accessibilityIdentifier = "l2.delivery.\(message.seqId)"
+            }
         }
         let markerTextColor = isFromCurrentSender(message: message) ? UIColor.white.withAlphaComponent(0.75) : L2.textSecondary
         if let ts = message.ts {
