@@ -249,7 +249,7 @@ private final class Linia2TabItem: UIControl {
         label.font = L2.font(11, .medium)
         label.textAlignment = .center
         label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.8
+        label.minimumScaleFactor = 0.7
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(icon)
         addSubview(label)
@@ -258,8 +258,10 @@ private final class Linia2TabItem: UIControl {
             icon.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             icon.heightAnchor.constraint(equalToConstant: 24),
             label.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 4),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            // Дизайн: подпись внутри зелёного выделения (оно уже вкладки на 6 pt с каждой стороны) —
+            // «Настройки» на SE больше не вылезает за край выделения.
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
         ])
         isAccessibilityElement = true
         accessibilityLabel = title
