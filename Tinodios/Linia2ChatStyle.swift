@@ -409,7 +409,7 @@ extension SendMessageBar {
         glass.tag = Self.kGlassTag
         glass.isUserInteractionEnabled = false
         glass.clipsToBounds = true
-        glass.layer.cornerRadius = L2.r("input", 18)
+        glass.layer.cornerRadius = inputField.layer.cornerRadius   // Дизайн: те же углы, что у поля (было 18 при поле 20 — «ступенька»)
         glass.accessibilityIdentifier = "l2.chat.inputGlass"
         glass.translatesAutoresizingMaskIntoConstraints = false
         host.insertSubview(glass, belowSubview: inputField)
