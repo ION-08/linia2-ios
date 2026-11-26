@@ -54,7 +54,11 @@ class ChatListViewCell: UITableViewCell {
         title.sizeToFit()
         if let msg = topic.latestMessage as? StoredMessage {
             // If we have a latestMessage and its up to date.
-            subtitle.attributedText = msg.attributedPreview(fitIn: subtitle.frame.size)
+            // Дизайн: до первой раскладки у подписи нулевой размер — превью было пустым («Дизайн CI» без
+            // последнего сообщения). Берём ширину строки за вычетом аватара и полей.
+            let fit = CGSize(width: max(subtitle.frame.width, (window?.bounds.width ?? UIScreen.main.bounds.width) - 120),
+                             height: max(subtitle.frame.height, 20))
+            subtitle.attributedText = msg.attributedPreview(fitIn: fit)
             if msg.from == Cache.tinode.myUid {
                 setMessageStatusVisibility(hidden: false)
                 let (image, tint) = UiUtils.deliveryMarkerIcon(for: msg, in: topic)

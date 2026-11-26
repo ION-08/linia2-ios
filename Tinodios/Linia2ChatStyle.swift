@@ -13,7 +13,7 @@ extension ChatListViewController: UITextFieldDelegate {
     func linia2Setup() {
         tableView.backgroundColor = L2.background
         tableView.separatorColor = L2.separator
-        tableView.separatorInset = UIEdgeInsets(top: 0, left: 86, bottom: 0, right: 20)
+        tableView.separatorInset = UIEdgeInsets(top: 0, left: 90, bottom: 0, right: 20)   // Дизайн: от начала имени (аватар 20+56+14)
         tableView.rowHeight = 88
         tableView.keyboardDismissMode = .onDrag
         tableView.contentInset.bottom = Linia2TabBarController.reservedBottom + 20
@@ -213,7 +213,7 @@ extension ChatListViewCell {
             l.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(l)
             // По одной линии с именем; имя и превью — по вертикальному центру строки, как аватар.
-            NSLayoutConstraint.activate([l.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            NSLayoutConstraint.activate([l.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),   // Дизайн: поля 20 как у шапки и «Избранного»
                                          l.centerYAnchor.constraint(equalTo: title.centerYAnchor)])
             time = l
         }
