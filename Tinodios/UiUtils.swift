@@ -745,14 +745,15 @@ class UiUtils {
 
     public static func deliveryMarkerIcon(for message: Message, in topic: DefaultComTopic) -> (UIImage, UIColor) {
         let iconName: String
-        var tint: UIColor = UiUtils.kDeliveryMarkerColor
+        // LINIA2: ✓ серая — отправлено, ✓✓ серые — доставлено, ✓✓ красные — прочитано (colors.readReceipt, по умолчанию #FF1F3D).
+        var tint: UIColor = UIColor.white.withAlphaComponent(0.62)
 
         if message.isPending {
             iconName = "in-progress-30"
         } else {
             if topic.msgReadCount(seq: message.seqId) > 0 {
                 iconName = "done-all-30"
-                tint = UiUtils.kDeliveryMarkerTint
+                tint = L2.hex(Linia2Config.shared.color("readReceipt") ?? 0xFF1F3D)
             } else if topic.msgRecvCount(seq: message.seqId) > 0 {
                 iconName = "done-all-30"
             } else {
