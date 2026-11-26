@@ -1020,7 +1020,10 @@ extension MessageViewController: MessageViewLayoutDelegate {
         let containerSize = calcContainerSize(for: message, avatarsVisible: hasAvatars, progressVisible: showUploadProgress)
         // Get cell size.
         let cellSize = !isDeleted ? calcCellSize(forItemAt: indexPath) : containerSize
-        attr.cellSpacing = Constants.kVerticalCellSpacing + linia2ReactionSpacing(for: message.seqId)
+        attr.cellSpacing = Constants.kVerticalCellSpacing
+        // LINIA2: место под пилюли реакций — внутри ячейки (а не в отступе между ячейками): иначе пилюля
+        // лежала за границами ячейки, касание и доступность (XCUITest «scroll to visible») до неё не доходили.
+        let reactionsHeight = linia2ReactionSpacing(for: message.seqId)
 
         // Height of the field with the current date above the first message of the day.
         let newDateLabelHeight = !isDeleted ? calcNewDateLabelHeight(at: indexPath) : 0
@@ -1087,7 +1090,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
             attr.progressViewFrame = .zero
         }
 
-        attr.frame = CGRect(origin: CGPoint(), size: cellSize)
+        attr.frame = CGRect(origin: CGPoint(), size: CGSize(width: cellSize.width, height: cellSize.height + reactionsHeight))
     }
 
     // MARK: supporting methods
