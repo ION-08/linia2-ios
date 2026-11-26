@@ -52,10 +52,10 @@ class RichTextView: UITextView {
 
     private var l2AccessibleText: String? {
         if let t = l2AccessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
-        let t = (attributedText?.string ?? text ?? "")
-            .replacingOccurrences(of: "\u{FFFC}", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
+        // Текст как есть (без обрезки пробелов: за текстом идут пробелы-отступ под время, по подписи ищут
+        // фрагменты сообщения вместе с концевыми пробелами); пусто — только если кроме вложений ничего нет.
+        let t = (attributedText?.string ?? text ?? "").replacingOccurrences(of: "\u{FFFC}", with: "")
+        return t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : t
     }
 
     override var isAccessibilityElement: Bool {
