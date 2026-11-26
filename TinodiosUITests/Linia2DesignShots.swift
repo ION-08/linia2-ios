@@ -46,7 +46,8 @@ final class Linia2DesignShots: Linia2CallTestBase {
     }
 
     private func labelContains(_ text: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch
+        // Текст пузыря (UITextView) виден тестам как value, а не label — ищем по обоим.
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@", text, text)).firstMatch
     }
 
     private func goBack() {
@@ -93,8 +94,12 @@ final class Linia2DesignShots: Linia2CallTestBase {
         app.textViews["l2.chat.input"].firstMatch.tap()
         for t in ["Continue", "Продолжить"] where app.buttons[t].firstMatch.waitForExistence(timeout: 1) { app.buttons[t].firstMatch.tap() }
         shot("chat", "keyboard")
-        app.collectionViews.firstMatch.swipeDown(); sleep(1)   // спрятать клавиатуру
-        if app.keyboards.firstMatch.exists { app.collectionViews.firstMatch.tap() }
+        // Спрятать клавиатуру: лента с keyboardDismissMode = .interactive — протянуть палец сквозь клавиатуру вниз.
+        let feedC = app.collectionViews.firstMatch
+        feedC.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        sleep(1)
+        if app.keyboards.firstMatch.exists { app.collectionViews.firstMatch.swipeDown(velocity: .fast); sleep(1) }
 
         let marks: [(String, String)] = [("Метка: реакции", "reactions"), ("Метка: ответ", "reply"), ("Метка: кружок", "round"),
                                          ("Метка: голосовое", "voice"), ("Метка: фото", "photo")]
