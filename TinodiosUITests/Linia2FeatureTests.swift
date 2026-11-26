@@ -647,4 +647,35 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         wait(any("l2.menu.copy"), "«Копировать»").tap()
         assertMenuClosed("выбор пункта")
     }
+
+    // MARK: - Список чатов: одинаковая высота строк, текст по центру с аватаром, без двойного эмодзи
+
+    func testU3_ChatListRows() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.chats").tap(); sleep(2)
+        let cells = app.tables.firstMatch.cells
+        let n = min(cells.count, 6)
+        XCTAssertGreaterThan(n, 0, "список чатов пуст")
+        var heights: [CGFloat] = []
+        for i in 0..<n {
+            let c = cells.element(boundBy: i)
+            guard c.isHittable else { continue }
+            heights.append(c.frame.height)
+            let texts = c.staticTexts.allElementsBoundByIndex.filter { $0.frame.height > 0 && !$0.label.isEmpty }
+            guard let first = texts.first else { continue }
+            let union = texts.dropFirst().reduce(first.frame) { $0.union($1.frame) }
+            XCTAssertLessThan(abs(union.midY - c.frame.midY), 8, "строка \(i): имя и превью не по центру (\(union) в \(c.frame))")
+            XCTAssertGreaterThanOrEqual(union.minY, c.frame.minY, "строка \(i): текст обрезан сверху")
+            XCTAssertLessThanOrEqual(union.maxY, c.frame.maxY, "строка \(i): текст обрезан снизу")
+        }
+        if let h0 = heights.first {
+            XCTAssertTrue(heights.allSatisfy { abs($0 - h0) < 0.5 }, "разная высота строк: \(heights)")
+        }
+        // «🛡 Безопасность»: щит только в аватаре.
+        let sec = app.tables.firstMatch.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Безопасность'")).firstMatch
+        if sec.exists {
+            XCTAssertFalse(sec.label.hasPrefix("🛡"), "щит дублируется перед именем: «\(sec.label)»")
+        }
+        screenshot("chat-list-rows")
+    }
 }

@@ -485,9 +485,14 @@ extension ChatListViewController {
         row.isUserInteractionEnabled = false
         row.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(row)
+        // Высота как у строки чата (72 + отступ шапки 18 ≈ 88), содержимое — по вертикальному центру.
+        let h = v.heightAnchor.constraint(equalToConstant: 72)
+        h.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            row.topAnchor.constraint(equalTo: v.topAnchor, constant: 4),
-            row.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -4),
+            h,
+            row.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            row.topAnchor.constraint(greaterThanOrEqualTo: v.topAnchor, constant: 4),
+            row.bottomAnchor.constraint(lessThanOrEqualTo: v.bottomAnchor, constant: -4),
             row.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             row.trailingAnchor.constraint(equalTo: v.trailingAnchor),
         ])

@@ -13,7 +13,7 @@ extension ChatListViewController: UITextFieldDelegate {
     func linia2Setup() {
         tableView.backgroundColor = L2.background
         tableView.separatorColor = L2.separator
-        tableView.separatorInset = UIEdgeInsets(top: 0, left: 100, bottom: 0, right: 20)
+        tableView.separatorInset = UIEdgeInsets(top: 0, left: 86, bottom: 0, right: 20)
         tableView.rowHeight = 88
         tableView.keyboardDismissMode = .onDrag
         tableView.contentInset.bottom = Linia2TabBarController.reservedBottom + 20
@@ -144,6 +144,19 @@ extension ChatListViewController: UITextFieldDelegate {
 
 // MARK: - Ячейка чата
 
+/// «🛡 Безопасность» → «Безопасность»: ведущий эмодзи убирается, если после него есть текст (эмодзи уже в аватаре).
+func linia2NameWithoutLeadingEmoji(_ name: String) -> String {
+    var rest = Substring(name)
+    var dropped = false
+    while let ch = rest.first, ch.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value > 0x2000) }) {
+        rest = rest.dropFirst()
+        dropped = true
+    }
+    guard dropped else { return name }
+    let trimmed = rest.trimmingCharacters(in: .whitespaces)
+    return trimmed.isEmpty ? name : trimmed
+}
+
 extension ChatListViewCell {
     private static let kTimeTag = 0x4C32
 
@@ -171,6 +184,8 @@ extension ChatListViewCell {
         selectedBackgroundView = sel
 
         title.font = L2.font(18, .semibold)
+        // Имя «🛡 Безопасность»: эмодзи уже в аватаре — в строке без ведущего эмодзи.
+        if let t = title.text { title.text = linia2NameWithoutLeadingEmoji(t) }
         title.textColor = L2.textPrimary
         subtitle.textColor = L2.textSecondary
         if let att = subtitle.attributedText, att.length > 0 {
@@ -197,8 +212,9 @@ extension ChatListViewCell {
             l.textAlignment = .right
             l.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(l)
+            // По одной линии с именем; имя и превью — по вертикальному центру строки, как аватар.
             NSLayoutConstraint.activate([l.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-                                         l.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 14)])
+                                         l.centerYAnchor.constraint(equalTo: title.centerYAnchor)])
             time = l
         }
         time?.text = Self.linia2Time(topic.touched)
@@ -289,7 +305,7 @@ extension MessageViewController {
     func linia2StyleTitleBar(pub: TheCard?, online: Bool?) {
         navigationItem.backButtonDisplayMode = .minimal
         let tv = linia2TitleView()
-        (tv.viewWithTag(Self.kL2Name) as? UILabel)?.text = navigationItem.title
+        (tv.viewWithTag(Self.kL2Name) as? UILabel)?.text = navigationItem.title.map { linia2NameWithoutLeadingEmoji($0) }
         navigationItem.title = nil
         navBarAvatarView.linia2StyleIndicator()
         linia2SetStatus(online)
