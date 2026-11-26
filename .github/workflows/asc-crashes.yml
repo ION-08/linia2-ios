@@ -1,0 +1,63 @@
+# Краш-отчёты TestFlight (betaFeedbackCrashSubmissions + crashLog) и диагностика сборки.
+# Логи шифруются публичным ключом ci/crash-pub.pem (закрытый — только на сервере): репозиторий публичный.
+name: ASC crashes
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "За сколько дней"
+        default: "3"
+
+jobs:
+  crashes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Краш-отчёты
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/k.p8"; chmod 600 "$RUNNER_TEMP/k.p8"
+          mkdir -p "$RUNNER_TEMP/out"
+          cat > "$RUNNER_TEMP/c.mjs" <<'JS'
+          import crypto from 'node:crypto'; import fs from 'node:fs';
+          const e = process.env, key = fs.readFileSync(process.argv[2]), out = process.argv[3];
+          function tok() { const n = Math.floor(Date.now() / 1000), b = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+            const h = b({ alg: 'ES256', kid: e.ASC_KEY_ID, typ: 'JWT' }), p = b({ iss: e.ASC_ISSUER_ID, iat: n, exp: n + 900, aud: 'appstoreconnect-v1' });
+            return h + '.' + p + '.' + crypto.sign('sha256', Buffer.from(h + '.' + p), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url'); }
+          async function api(path) { const r = await fetch(path.startsWith('http') ? path : 'https://api.appstoreconnect.apple.com' + path, { headers: { Authorization: 'Bearer ' + tok() } });
+            const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, j, t }; }
+          const app = (await api('/v1/apps?filter[bundleId]=info.codix.liniya2')).j.data[0];
+          const since = Date.now() - (+e.DAYS || 3) * 86400e3;
+          const r = await api(`/v1/apps/${app.id}/betaFeedbackCrashSubmissions?limit=50&sort=-createdDate`);
+          console.log('crash submissions HTTP', r.s, r.s >= 300 ? r.t.slice(0, 300) : '');
+          const list = (r.j?.data || []).filter(x => Date.parse(x.attributes.createdDate) >= since);
+          console.log('за период:', list.length);
+          for (const x of list) {
+            const a = x.attributes; console.log(a.createdDate, 'build', a.buildBundleId || '', a.appVersion || '', a.deviceModel || '', a.osVersion || '');
+            const cl = await api(`/v1/betaFeedbackCrashSubmissions/${x.id}/crashLog`);
+            fs.writeFileSync(`${out}/${a.createdDate.replace(/[:.]/g, '-')}.json`, cl.t);
+          }
+          // Сигнатуры диагностики (зависания/запуски) последних сборок
+          const bs = (await api(`/v1/builds?filter[app]=${app.id}&sort=-uploadedDate&limit=3&fields[builds]=version`)).j?.data || [];
+          for (const b of bs) { const d = await api(`/v1/builds/${b.id}/diagnosticSignatures?limit=20`); console.log('build', b.attributes.version, 'diagnosticSignatures HTTP', d.s, (d.j?.data || []).length);
+            fs.writeFileSync(`${out}/diag-${b.attributes.version}.json`, d.t); }
+          JS
+          node "$RUNNER_TEMP/c.mjs" "$RUNNER_TEMP/k.p8" "$RUNNER_TEMP/out" || true
+          rm -f "$RUNNER_TEMP/k.p8"
+          cd "$RUNNER_TEMP" && tar czf out.tgz out && openssl rand -out k.bin 32 \
+            && openssl enc -aes-256-cbc -pbkdf2 -in out.tgz -out crashes.enc -pass file:k.bin \
+            && openssl pkeyutl -encrypt -pubin -inkey "$GITHUB_WORKSPACE/ci/crash-pub.pem" -pkeyopt rsa_padding_mode:oaep -in k.bin -out key.enc \
+            && rm -f out.tgz k.bin && rm -rf out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crashes-encrypted
+          path: |
+            ${{ runner.temp }}/crashes.enc
+            ${{ runner.temp }}/key.enc
+          retention-days: 3
