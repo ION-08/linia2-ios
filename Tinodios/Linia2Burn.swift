@@ -236,13 +236,14 @@ enum Linia2Burn {
     }
 
     /// Удалить у всех (hard); шлют оба, кто первый. 404 — уже удалено; 403 — удалить у себя.
+    /// Скрывается у себя (gone) только после ответа сервера: исчезло на экране — значит, у собеседника уже удалено
+    /// (раньше пузырь гас до отправки {del}, и собеседник ещё видел сообщение на сервере).
     static func burn(topic: DefaultComTopic, seq: Int, done: @escaping () -> Void) {
         let key = k(topic.name, seq)
         guard !sent.contains(key) else { return }
         sent.insert(key)
-        gone.insert(key)
         topic.delMessages(ids: [seq], hard: true).then(onSuccess: { _ in
-            DispatchQueue.main.async { clearStart(key); done() }
+            DispatchQueue.main.async { gone.insert(key); clearStart(key); done() }
             return nil
         }, onFailure: { err in
             var code = 0
@@ -250,6 +251,7 @@ enum Linia2Burn {
             Cache.log.error("Linia2Burn: не удалось удалить %d (%d): %@", seq, code, err.localizedDescription)
             if code == 403 { _ = topic.delMessages(ids: [seq], hard: false) }
             DispatchQueue.main.async {
+                gone.insert(key)   // у себя скрыть в любом случае; при ошибке сети — повтор из таймера
                 if code == 403 || code == 404 { clearStart(key) } else { sent.remove(key) }   // иначе — повтор позже
                 if code == 403 { UiUtils.showToast(message: L2T("l2.del.noPeer", "Удалить у собеседника нельзя"), level: .info) }
                 done()
@@ -382,19 +384,33 @@ extension MessageViewController {
                 continue
             }
             if let cell = cell {
-                Linia2Burn.gone.insert(key)
+                // Сначала {del hard} на сервер, гасить — по ответу: пока пузырь виден, у собеседника он ещё может быть.
                 linia2BurnFading.insert(key)
                 cell.isUserInteractionEnabled = false
-                UIView.animate(withDuration: 0.45, animations: {
-                    cell.contentView.alpha = 0
-                    cell.contentView.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
-                }, completion: { [weak self] _ in
-                    self?.linia2BurnFading.remove(key)
-                    cell.contentView.alpha = 1
-                    cell.contentView.transform = .identity
-                    cell.isUserInteractionEnabled = true
-                    finish()
-                })
+                Linia2Burn.burn(topic: topic, seq: seq) { [weak self] in
+                    guard let self = self else { return }
+                    let reload = { [weak self] in
+                        self?.linia2BurnFading.remove(key)
+                        self?.interactor?.loadMessagesFromCache(scrollToMostRecentMessage: false)
+                    }
+                    // Ячейка могла переиспользоваться под другое сообщение — гасим только свою.
+                    guard let i = self.messageSeqIdIndex[seq],
+                          let c = self.collectionView?.cellForItem(at: IndexPath(item: i, section: 0)) as? MessageCell,
+                          c === cell, c.seqId == seq else {
+                        cell.isUserInteractionEnabled = true
+                        reload()
+                        return
+                    }
+                    UIView.animate(withDuration: 0.45, animations: {
+                        c.contentView.alpha = 0
+                        c.contentView.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+                    }, completion: { _ in
+                        c.contentView.alpha = 1
+                        c.contentView.transform = .identity
+                        c.isUserInteractionEnabled = true
+                        reload()
+                    })
+                }
             } else {
                 finish()
             }
