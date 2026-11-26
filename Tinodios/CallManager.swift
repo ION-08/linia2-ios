@@ -139,6 +139,16 @@ class CallManager {
         return true
     }
 
+    /// LINIA2: в этом топике идёт звонок (исходящий/входящий, в т.ч. ещё дозвон или свёрнутый экран звонка).
+    /// Пока он идёт, из топика уходить нельзя: сервер Tinode завершает звонок, как только сессия участника
+    /// отписывается от топика (topic.go unregisterSession → terminateCallInProgress) — собеседник получает «hang-up».
+    func isCallActive(onTopic topicName: String?) -> Bool {
+        guard let name = topicName, !name.isEmpty else { return false }
+        if let call = callInProgress, call.topic == name { return true }
+        if let vc = Linia2CallCenter.shared.active, !vc.closed, vc.topic?.name == name { return true }
+        return false
+    }
+
     // Sets seq id on the current call.
     func updateOutgoingCall(withNewSeqId seq: Int) {
         self.callInProgress?.seq = seq

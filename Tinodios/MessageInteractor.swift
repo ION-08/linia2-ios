@@ -205,6 +205,14 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         }
     }
     func leaveTopic() {
+        // LINIA2: во время звонка в этом чате топик не покидаем. Раньше системный запрос доступа к микрофону
+        // (приложение становится неактивным → MessageViewController.appGoingInactive), блокировка экрана,
+        // Пункт управления или уход из чата при свёрнутом звонке отписывали сессию от топика, и сервер
+        // завершал звонок (веб получал «hang-up», у звонящего — «Не состоялся»).
+        if Cache.callManager.isCallActive(onTopic: self.topic?.name) {
+            Cache.log.info("MessageInteractor: call in progress on %@, not leaving topic", self.topic?.name ?? "")
+            return
+        }
         if self.topic?.attached ?? false {
             self.topic?.leave()
         }
