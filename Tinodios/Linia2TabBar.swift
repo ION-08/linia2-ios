@@ -9,6 +9,8 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
     enum Tab: Int, CaseIterable { case chats, calls, contacts, settings }
 
     private let bar = Linia2FloatingBar()
+    /// Дизайн: подложка под строкой состояния на корневых экранах — прокрученный текст не налезает на часы/батарею.
+    private let statusScrim = UIView()
     private var barBottom: NSLayoutConstraint!
     private(set) var chatsNavigator: UINavigationController!
     private var configObserver: NSObjectProtocol?
@@ -41,6 +43,16 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
         super.viewDidLoad()
         view.backgroundColor = L2.background
         tabBar.isHidden = true
+        statusScrim.backgroundColor = L2.background.withAlphaComponent(0.94)
+        statusScrim.isUserInteractionEnabled = false
+        statusScrim.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statusScrim)
+        NSLayoutConstraint.activate([
+            statusScrim.topAnchor.constraint(equalTo: view.topAnchor),
+            statusScrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            statusScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            statusScrim.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+        ])
         bar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(bar)
         barBottom = bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -6)
@@ -95,6 +107,8 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
             self.bar.transform = visible ? .identity : CGAffineTransform(translationX: 0, y: 30)
         }
         bar.isUserInteractionEnabled = visible
+        let nav = selectedViewController as? UINavigationController
+        statusScrim.isHidden = (nav?.viewControllers.count ?? 1) > 1
         if animated { UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .beginFromCurrentState], animations: apply) } else { apply() }
     }
 
