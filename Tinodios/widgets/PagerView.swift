@@ -63,6 +63,8 @@ public class PagerView: UIView, UICollectionViewDelegateFlowLayout, UICollection
         collectionView.delegate = self
         collectionView.dataSource = self
         collectionView.translatesAutoresizingMaskIntoConstraints =  false
+        // Дизайн: прозрачная — иначе внешний вид UICollectionView (фон экрана) давал «коробку в коробке» на плашке «Закреплённое».
+        collectionView.backgroundColor = .clear
         return collectionView
     }()
 
