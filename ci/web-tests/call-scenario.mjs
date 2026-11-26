@@ -3,7 +3,8 @@
 //   1) ждёт входящий от iOS (аудио) → принимает → проверяет ICE и растущий bytesReceived → ждёт, пока трубку положит iOS;
 //   2) то же для видео;
 //   3) звонит iOS (аудио) через window.L2Call.start (повтор, пока iOS не примет) → держит → ждёт, пока iOS положит трубку;
-//   4) то же для видео.
+//   4) то же для видео;
+//   5) веб → iOS (аудио) сразу после перезапуска приложения на iOS (Linia2CallTests.test6): звук в обе стороны ≤ 5 с после ответа.
 // Каждый звонок должен продержаться ≥ MIN_HOLD_S (60) с. Код выхода 0 — все 4 прошли, 1 — проверка не прошла, 2 — не смог выполниться.
 // stdout — одна строка JSON-итога; stderr — ход работы; скриншоты — в OUT_DIR.
 // env: L2_PEER_LOGIN, L2_PEER_PASSWORD (B), L2_IOS_UID (uid A = топик p2p у B), CI_TOKEN (заголовок X-L2-CI),
@@ -116,9 +117,11 @@ async function main() {
 
 
   // ---- сценарий ----
-  const kinds = [['iOS → веб (аудио)', 'in', false], ['iOS → веб (видео)', 'in', true], ['веб → iOS (аудио)', 'out', false], ['веб → iOS (видео)', 'out', true]];
+  const kinds = [['iOS → веб (аудио)', 'in', false], ['iOS → веб (видео)', 'in', true], ['веб → iOS (аудио)', 'out', false], ['веб → iOS (видео)', 'out', true],
+                 ['веб → iOS (аудио, холодный старт)', 'out', false, true]];
   for (let i = 0; i < kinds.length; i++) {
-    const [name, dir, video] = kinds[i];
+    const [name, dir, video, cold] = kinds[i];
+    let answeredAt = 0;
     const c = { name, ok: false, ice: null, heldS: 0, grew: 0, endedBy: null, note: '' };
     result.calls.push(c);
     try {
@@ -143,7 +146,7 @@ async function main() {
           const end = Date.now() + 45000;
           for (;;) {
             const s = await ev(stateJs).catch(() => ({ state: 'idle' }));
-            if (s.state === 'active') { answered = true; break; }
+            if (s.state === 'active') { answered = true; answeredAt = Date.now(); break; }
             if (s.state === 'idle' || Date.now() > end) break;
             await sleep(500);
           }
@@ -153,6 +156,16 @@ async function main() {
       }
       c.ice = await wait(`(async function(){var s=await ${statsJs};var c=s.find(function(x){return x.ice==='connected'||x.ice==='completed'});return c?c.ice:null})()`, 30000, 'ICE connected');
       step(name + ': ICE', true, c.ice);
+      if (cold && answeredAt) {
+        // Звук от iOS (bytesReceived растёт) — не позже 5 с после ответа (+1 с на опрос).
+        let b0 = -1, tGrow = 0;
+        for (const tEnd = answeredAt + 20000; Date.now() < tEnd && !tGrow;) {
+          const st = await ev(statsJs).catch(() => []), b = st.reduce((s, x) => s + x.bytes, 0);
+          if (b0 >= 0 && b > b0) tGrow = Date.now(); b0 = b; await sleep(250);
+        }
+        c.firstMediaS = tGrow ? +((tGrow - answeredAt) / 1000).toFixed(1) : null;
+        step(name + ': звук от iOS ≤ 5 с после ответа', tGrow && tGrow - answeredAt <= 6000, c.firstMediaS == null ? 'нет медиатрафика 20 с' : c.firstMediaS + ' с');
+      }
       await sleep(1500); await shot(i + '-active');
       const t0 = Date.now(); let prev = -1;
       for (;;) {
@@ -168,7 +181,7 @@ async function main() {
       const okHold = step(name + ': держался ≥ ' + MIN_HOLD_S + ' с', c.heldS >= MIN_HOLD_S - 3, c.heldS + ' с');
       const okBytes = step(name + ': медиатрафик идёт', c.grew >= 10, 'приростов bytesReceived: ' + c.grew);
       const okEnd = step(name + ': трубку положил iOS, у веба завершилось', c.endedBy === 'ios', c.endedBy || '');
-      c.ok = okHold && okBytes && okEnd;
+      c.ok = okHold && okBytes && okEnd && (!cold || (c.firstMediaS != null && c.firstMediaS <= 6));
     } catch (e) {
       await shot(i + '-fail');
       step(name, false, e.message);

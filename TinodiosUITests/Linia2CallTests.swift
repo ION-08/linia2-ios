@@ -308,6 +308,40 @@ final class Linia2CallTests: Linia2CallTestBase {
     func test3_IOSToWebVideo() { outgoing(to: peerName, video: true, "iOS → веб (видео)") }
     func test4_WebToIOSAudio() { incoming(from: peerName, video: false, "веб → iOS (аудио)") }
     func test5_WebToIOSVideo() { incoming(from: peerName, video: true, "веб → iOS (видео)") }
+
+    /// Звонок веб → iOS сразу после перезапуска приложения (вход, загрузка и звонок одновременно):
+    /// ответ — и уже через ≤ 5 с соединение и звук в обе стороны (байты аудио растут на приём и на передачу).
+    /// Веб (call-scenario.mjs, шаг 5) звонит через ~40 с после предыдущего звонка — перезапускаемся к этому моменту.
+    func test6_WebToIOSAudioColdStart() {
+        let what = "веб → iOS (аудио, холодный старт)"
+        login()
+        app.terminate()
+        sleep(34)
+        app.launch()
+        dismissSpringboardAlerts()
+        if app.staticTexts["Введите PIN-код"].waitForExistence(timeout: 15) { for d in ["1", "3", "5", "7"] { app.buttons[d].firstMatch.tap() } }
+        acceptIncoming(timeout: 420)
+        let accepted = Date()
+        // Соединение и аудио в обе стороны — не позже 5 с после «Принять» (+1 с на опрос статистики).
+        var rx0 = -1, tx0 = -1, bothAt: Date?
+        while Date().timeIntervalSince(accepted) < 20 && bothAt == nil {
+            if connectedSeconds() != nil, let v = any("l2.call.state").value as? String {
+                let nums = v.split(separator: " ").compactMap { Int($0.split(separator: "=").last ?? "") }
+                if nums.count == 2 {
+                    if rx0 < 0 { rx0 = nums[0]; tx0 = nums[1] } else if nums[0] > rx0 && nums[1] > tx0 { bothAt = Date() }
+                }
+            }
+            usleep(250_000)
+        }
+        let dt = bothAt.map { $0.timeIntervalSince(accepted) }
+        screenshot(dt == nil ? "нет-звука" : "audio-both-ways")
+        XCTAssertNotNil(dt, "\(what): за 20 с после ответа нет звука в обе стороны (состояние: \(any("l2.call.state").exists ? any("l2.call.state").label : "нет экрана"))")
+        if let dt = dt { XCTAssertLessThanOrEqual(dt, 6.0, "\(what): звук в обе стороны только через \(String(format: "%.1f", dt)) с после ответа") }
+        holdConnected(what)
+        hangUp(what)
+        assertInCallLog(name: peerName, video: false, what)
+        XCTAssertEqual(app.state, .runningForeground, "\(what): вылет")
+    }
 }
 
 // MARK: - Второй симулятор (C, «принимающий»)

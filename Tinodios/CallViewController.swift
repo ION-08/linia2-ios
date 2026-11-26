@@ -1872,7 +1872,7 @@ extension CallViewController {
         isPoorConnection = unstableUntil != nil || (connectedAt != nil && lastStatsPoor)
         stateLabel.text = linia2StatusText
         stateLabel.textColor = isPoorConnection || isHeld ? L2.hex(0xFFB547) : L2.hex(0xC9D1DE)
-        if connectedAt != nil, Int(Date().timeIntervalSince1970) % 2 == 0 { linia2CheckQuality() }
+        if let c = connectedAt, Date().timeIntervalSince(c) < 10 || Int(Date().timeIntervalSince1970) % 2 == 0 { linia2CheckQuality() }
     }
 
     /// «Плохая связь»: потери входящих пакетов > 10% или RTT > 800 мс (статистика WebRTC, каждые 2 с).
@@ -1881,8 +1881,12 @@ extension CallViewController {
             var rtt: Double = 0
             var lost: Double = 0, received: Double = 0
             var fraction: Double = 0
+            var audioRx: Double = 0, audioTx: Double = 0
             for (_, st) in report.statistics {
                 let v = st.values
+                let kind = (v["kind"] as? String) ?? (v["mediaType"] as? String) ?? ""
+                if st.type == "inbound-rtp", kind == "audio" { audioRx += (v["bytesReceived"] as? NSNumber)?.doubleValue ?? 0 }
+                if st.type == "outbound-rtp", kind == "audio" { audioTx += (v["bytesSent"] as? NSNumber)?.doubleValue ?? 0 }
                 switch st.type {
                 case "candidate-pair":
                     if (v["state"] as? String) == "succeeded", (v["nominated"] as? NSNumber)?.boolValue ?? true,
@@ -1907,6 +1911,8 @@ extension CallViewController {
                     if dl + dr > 0 { loss = max(loss, dl / (dl + dr)) }
                 }
                 self.lastStats = (lost, received)
+                // Автотесты: байты аудио в обе стороны (звук идёт и к нам, и от нас).
+                self.stateLabel.accessibilityValue = "arx=\(Int(audioRx)) atx=\(Int(audioTx))"
                 let poor = loss > 0.10 || rtt > 0.8
                 self.lastStatsPoor = poor
                 self.isPoorConnection = poor || self.unstableUntil != nil
