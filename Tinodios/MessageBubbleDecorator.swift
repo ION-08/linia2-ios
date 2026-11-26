@@ -106,17 +106,38 @@ class MessageBubbleDecorator {
         return UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: rect.size.width, height: rect.size.height), cornerRadius: 15.22)
     }
 
+    /// Прямоугольник с разными радиусами углов.
+    static func roundedPath(_ b: CGRect, tl: CGFloat, tr: CGFloat, br: CGFloat, bl: CGFloat) -> UIBezierPath {
+        let p = UIBezierPath()
+        p.move(to: CGPoint(x: b.minX + tl, y: b.minY))
+        p.addLine(to: CGPoint(x: b.maxX - tr, y: b.minY))
+        p.addArc(withCenter: CGPoint(x: b.maxX - tr, y: b.minY + tr), radius: tr, startAngle: -.pi / 2, endAngle: 0, clockwise: true)
+        p.addLine(to: CGPoint(x: b.maxX, y: b.maxY - br))
+        p.addArc(withCenter: CGPoint(x: b.maxX - br, y: b.maxY - br), radius: br, startAngle: 0, endAngle: .pi / 2, clockwise: true)
+        p.addLine(to: CGPoint(x: b.minX + bl, y: b.maxY))
+        p.addArc(withCenter: CGPoint(x: b.minX + bl, y: b.maxY - bl), radius: bl, startAngle: .pi / 2, endAngle: .pi, clockwise: true)
+        p.addLine(to: CGPoint(x: b.minX, y: b.minY + tl))
+        p.addArc(withCenter: CGPoint(x: b.minX + tl, y: b.minY + tl), radius: tl, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: true)
+        p.close()
+        return p
+    }
+
     public static func draw(_ rect: CGRect, isIncoming: Bool, style: Style) -> UIBezierPath {
         // LINIA2: радиус пузыря с сервера (radii.bubble) — скруглённый прямоугольник, угол у края отправителя меньше.
-        let r = Linia2Config.shared.radius("bubble", -1)
+        // Дизайн (как Telegram): все углы скруглены радиусом radii.bubble (по умолчанию 18), со стороны
+        // отправителя у сообщений одной серии углы-«стыки» маленькие (6), у последнего в серии — нижний 6.
+        // Раньше объединение двух путей давало прямой угол у края отправителя и разные углы у соседних пузырей.
+        let r = Linia2Config.shared.radius("bubble", 18)
         if r >= 0 {
             let b = CGRect(origin: .zero, size: rect.size)
-            let corners: UIRectCorner = isIncoming ? [.topLeft, .topRight, .bottomRight] : [.topLeft, .topRight, .bottomLeft]
-            let p = UIBezierPath(roundedRect: b, byRoundingCorners: corners, cornerRadii: CGSize(width: r, height: r))
-            let small = UIBezierPath(roundedRect: b, cornerRadius: min(r, 6))
-            p.append(small)
-            p.usesEvenOddFillRule = false
-            return p
+            let big = min(r, b.height / 2, b.width / 2)
+            let small = min(6, big)
+            let joinTop = style == .middle || style == .last
+            let senderTop = joinTop ? small : big
+            let senderBottom = small
+            return roundedPath(b,
+                               tl: isIncoming ? senderTop : big, tr: isIncoming ? big : senderTop,
+                               br: isIncoming ? big : senderBottom, bl: isIncoming ? senderBottom : big)
         }
         let path = UIBezierPath()
 

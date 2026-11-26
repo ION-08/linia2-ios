@@ -114,8 +114,9 @@ class MessageViewController: UIViewController {
         static let kOutgoingContainerPadding = UIEdgeInsets(top: 0, left: Constants.kFarSideHorizontalSpacing, bottom: 0, right: 0)
 
         // Insets around content inside the message bubble.
-        static let kIncomingMessageContentInset = UIEdgeInsets(top: 4, left: 18, bottom: 13, right: 14)
-        static let kOutgoingMessageContentInset = UIEdgeInsets(top: 4, left: 14, bottom: 13, right: 18)
+        // Дизайн: пузырь без «хвостика» — поля по 12 pt с обеих сторон, как в Telegram (было 18/14 — текст «уезжал» вправо).
+        static let kIncomingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
+        static let kOutgoingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
         static let kDeletedMessageContentInset = UIEdgeInsets(top: 4, left: 14, bottom: 0, right: 14)
 
         // Carve out for timestamp and delivery marker in the bottom-right corner.
