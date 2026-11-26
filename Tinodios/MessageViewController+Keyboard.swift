@@ -36,12 +36,13 @@ extension MessageViewController {
         if collectionView.contentSize.height > collectionView.bounds.height - inputAccessoryViewHeight {
             overlap = keyboardInfo.frameEnd.height - keyboardInfo.frameBegin.height
         } else {
-            overlap =
-                collectionView.contentSize.height
-                - collectionView.contentOffset.y
-                - keyboardInfo.frameEnd.origin.y
-                // 2x because keyboardInfo.frameEnd.origin.y accounts for inputAccessoryViewHeight
-                + 2 * inputAccessoryViewHeight
+            // LINIA2: переписка короче экрана — сдвигаем ровно настолько, насколько низ последнего сообщения
+            // заходит под клавиатуру/строку ввода (в координатах окна). Прежняя формула Tinode считала, что лента
+            // начинается с верха экрана; под плавающей шапкой она сдвигала короткую переписку вверх при каждом
+            // изменении строки ввода (например, при появлении цитаты ответа) — верхние сообщения уезжали
+            // под шапку, а снизу оставалась пустота.
+            let contentBottom = collectionView.convert(CGPoint(x: 0, y: collectionView.contentSize.height), to: nil).y
+            overlap = contentBottom - keyboardInfo.frameEnd.origin.y
         }
 
         if overlap > 0 && keyboardInfo.frameEnd.size.height != inputAccessoryViewHeight {
