@@ -6,6 +6,7 @@
 //
 
 import Firebase
+import Intents
 import PushKit
 import Network
 import UIKit
@@ -61,7 +62,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 // It is a legit incoming call. Start it.
                 let backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
                 DispatchQueue.main.async {
-                    Cache.callManager.displayIncomingCall(uuid: UUID(), onTopic: topic.name, originatingFrom: originator, withSeqId: seqId, audioOnly: isAudioOnly) { err in
+                    let guest = data.head?["linia2-guest"] != nil ? Linia2GuestLinks.info(fromHead: data.head, seq: seqId) : nil
+                    Cache.callManager.displayIncomingCall(uuid: UUID(), onTopic: topic.name, originatingFrom: originator, withSeqId: seqId, audioOnly: isAudioOnly, guest: guest) { err in
                         if let err = err {
                             Cache.log.error("Unable to take the call: %@", err.localizedDescription)
                         }
@@ -155,19 +157,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         Linia2Turn.shared.prefetch()
-        if let call = Cache.callManager.callInProgress, !UiUtils.isShowingCallVC(forTopic: call.topic) {
-            // App just entered the foreground and there's a call in progress. Go to the CallVC.
-            // Typically happens when the app wasn't running and screen was locked at the moment
-            // the call was answered.
-            Cache.log.info("Navigating to CallVC for topic=%@, seq=%d", call.topic, call.seq)
-            UiUtils.routeToMessageVC(forTopic: call.topic) { messageVC in
-                guard let messageVC = messageVC else {
-                    Cache.log.error("Unable to navigate to MessageVC for topic=%@.", call.topic)
-                    return
-                }
-                messageVC.performSegue(withIdentifier: "Messages2Call", sender: call)
-            }
-        }
+        // LINIA2: звонок, принятый на заблокированном экране / в фоне, — показать его экран.
+        Linia2CallCenter.shared.applicationDidBecomeActive()
+        Linia2Voip.shared.register()
+        Linia2GuestLinks.refreshGuestUid()
         self.appIsStarting = false
     }
 
@@ -225,14 +218,34 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
+    // LINIA2: liniya2://call/<token> — ссылка на звонок (кнопка «Открыть в приложении» на странице гостя).
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        if let token = Linia2GuestLinks.token(from: url) {
+            Linia2GuestLinks.open(token: token)
+            return true
+        }
+        return false
+    }
+
     // Tapped on a web link. See if it's an app link.
     func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
+        // LINIA2: перезвон из «Недавних» iPhone (CallKit): handle звонка = имя топика.
+        if let intent = userActivity.interaction?.intent as? INStartCallIntent,
+           let topic = intent.contacts?.first?.personHandle?.value, !topic.isEmpty {
+            let video = intent.callCapability == .videoCall
+            Linia2Root.openChat(topic, call: video ? .video : .audio)
+            return true
+        }
         guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
             let url = userActivity.webpageURL,
             let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
             return false
         }
         // TODO: support 3rd party urls.
+        if let token = Linia2GuestLinks.token(from: url) {
+            Linia2GuestLinks.open(token: token)
+            return true
+        }
         if components.host?.hasSuffix("chat-linia.site") ?? false {
             // Start the app.
             return true
@@ -303,50 +316,44 @@ extension AppDelegate: MessagingDelegate {
 
 extension AppDelegate: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
-        Cache.log.info("PK token received %@", credentials.debugDescription)
+        guard type == .voIP else { return }
+        Cache.log.info("PK token received")
+        // LINIA2: VoIP-токен — на наш сервер (linia2-auth), он шлёт VoIP push напрямую в APNs.
+        Linia2Voip.shared.update(token: credentials.token)
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         Cache.log.info("PK must invalidate token")
+        Linia2Voip.shared.invalidate()
     }
 
     // VoIP push notification recived.
+    // Формат (linia2-auth → APNs): {"aps":{}, "data":{"topic","seq","webrtc":"started"|"hang-up","xfrom","aonly","name"}}.
+    // ВАЖНО: на каждый VoIP push — reportNewIncomingCall (см. CallManager.handleVoipPush), иначе iOS закроет приложение.
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
-        Cache.log.info("PK push %s", payload.debugDescription)
+        Cache.log.info("PK push received")
 
         guard type == .voIP else {
             completion()
             return
         }
-
-        // Cannot defer completion() because it's called from a closure.
-
-        guard let data = payload.dictionaryPayload["data"] as? [String: Any], let topicName = data["topic"] as? String, let callState = data["webrtc"] as? String else {
-            Cache.log.error("Missing payload data")
-            completion()
-            return
-        }
-
-        switch callState {
-        case MsgServerData.WebRTC.kStarted.rawValue:
-            guard let callerUID = data["xfrom"] as? String, !Cache.tinode.isMe(uid: callerUID), let seq = Int(data["seq"] as? String ?? ""), seq > 0 else {
-                completion()
-                return
+        let data = (payload.dictionaryPayload["data"] as? [String: Any]) ?? [:]
+        let topicName = data["topic"] as? String ?? ""
+        let callState = data["webrtc"] as? String ?? ""
+        let seq = Int(data["seq"] as? String ?? "") ?? (data["seq"] as? Int) ?? Int(data["replace"] as? String ?? "") ?? 0
+        let audioOnly = (data["aonly"] as? Bool) ?? ((data["aonly"] as? String) == "true")
+        let name = data["name"] as? String
+        Cache.callManager.handleVoipPush(event: callState, topic: topicName, from: data["xfrom"] as? String, seq: seq,
+                                         audioOnly: audioOnly, callerName: (name?.isEmpty ?? true) ? nil : name, completion: completion)
+        // Подключиться к серверу (если приложение было закрыто) — дальше звонок идёт как обычно.
+        if callState == MsgServerData.WebRTC.kStarted.rawValue {
+            // При холодном старте подключение уже запускает didFinishLaunching; здесь — если приложение было в фоне.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let tinode = Cache.tinode
+                if !tinode.isConnected {
+                    tinode.reconnectNow(interactively: true, reset: false)
+                }
             }
-            let audioOnly = (data["aonly"] as? Bool) ?? false
-            // Report the call to CallKit, and let it display the call UI.
-            Cache.callManager.displayIncomingCall(uuid: UUID(), onTopic: topicName, originatingFrom: callerUID, withSeqId: seq, audioOnly: audioOnly, completion: { err in
-                // Tell PushKit that the notification is handled.
-                completion()
-            })
-        case MsgServerData.WebRTC.kAccepted.rawValue, MsgServerData.WebRTC.kBusy.rawValue, MsgServerData.WebRTC.kMissed.rawValue, MsgServerData.WebRTC.kDeclined.rawValue, MsgServerData.WebRTC.kDisconnected.rawValue:
-            // This should not happen: the server sends just the "started" push as voip.
-            guard let origSeq = Int(data["replace"] as? String ?? ""), origSeq > 0 else { return }
-            Cache.callManager.dismissIncomingCall(onTopic: topicName, withSeqId: origSeq)
-            fallthrough
-        default:
-            completion()
-            break
         }
     }
 }

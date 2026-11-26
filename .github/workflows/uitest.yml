@@ -85,6 +85,16 @@ jobs:
           d = json.load(open(sys.argv[1]))
           print(f"L2_PEER_LOGIN={d['login']}"); print(f"L2_PEER_PASSWORD={d['password']}")
           PY
+          # Третий тестовый пользователь C — принимает звонок на втором симуляторе (iOS ↔ iOS).
+          CUSR="${RUN:0:9}8"
+          curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
+               -d "{\"run\":\"$CUSR\"}" -o "$RUNNER_TEMP/c.json"
+          python3 - "$RUNNER_TEMP/c.json" >> "$GITHUB_ENV" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          print(f"L2_C_LOGIN={d['login']}"); print(f"L2_C_PASSWORD={d['password']}")
+          PY
+          echo "::add-mask::$(grep '^L2_C_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
           echo "::add-mask::$(grep '^L2_PEER_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
           echo "::add-mask::$(grep '^L2_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
           echo "::add-mask::$(grep '^L2_REG_PASSWORD=' $GITHUB_ENV | tail -1 | cut -d= -f2-)"
@@ -107,6 +117,15 @@ jobs:
           const sb = await B.req({ sub: { topic: A.uid } }); const topic = sb.topic || A.uid;
           for (let i = 1; i <= 3; i++) { const p = await B.req({ pub: { topic, content: 'История ' + i } }); console.log('pub', p.code); }
           const sa = await A.req({ sub: { topic: B.uid } }); await A.req({ pub: { topic: sa.topic || B.uid, content: 'История ответ' } });
+          // Звонки: uid A для веб-собеседника; чат C ↔ A для звонка iOS ↔ iOS.
+          (await import('node:fs')).appendFileSync(process.env.GITHUB_ENV, `L2_IOS_UID=${A.uid}\n`);
+          if (process.env.L2_C_LOGIN) {
+            const C = client(process.env.L2_C_LOGIN, process.env.L2_C_PASSWORD);
+            console.log('вход C', await C.login());
+            await C.req({ set: { topic: 'me', desc: { public: { fn: 'Собеседник iOS' } } } }).catch(() => {});
+            const sc = await C.req({ sub: { topic: A.uid } }); await C.req({ pub: { topic: sc.topic || A.uid, content: 'Позвони мне' } });
+            const sa2 = await A.req({ sub: { topic: C.uid } }); await A.req({ pub: { topic: sa2.topic || C.uid, content: 'Сейчас позвоню' } });
+          }
           process.exit(0);
           EOF
           node "$RUNNER_TEMP/seed.mjs" || echo "::warning::не удалось подготовить историю"
@@ -185,6 +204,7 @@ jobs:
             -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
             -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests \
+            -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests \
             -parallel-testing-enabled NO \
             -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
@@ -203,17 +223,68 @@ jobs:
           tail -c 3000 "$RUNNER_TEMP/out/web/call-peer.json" 2>/dev/null | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
           [ "$RC" = 0 ]
 
+      - name: Звонки iOS ↔ iOS и iOS ↔ веб (аудио и видео, 60+ с)
+        id: calls
+        if: ${{ !cancelled() }}
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          set -o pipefail
+          OUT="$RUNNER_TEMP/out/calls"; mkdir -p "$OUT/web"
+          XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+          [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          # Разрешения на микрофон и камеру — без системных окон.
+          RT=$(xcrun simctl list devices -j | python3 -c "import json,sys,os;d=json.load(sys.stdin)['devices'];print(next(k for k,v in d.items() for x in v if x['udid']==os.environ['UDID']))")
+          UDID2=$(xcrun simctl create "L2 peer" "$(xcrun simctl list devices -j | python3 -c "import json,sys,os;d=json.load(sys.stdin)['devices'];print(next(x['deviceTypeIdentifier'] for v in d.values() for x in v if x['udid']==os.environ['UDID']))")" "$RT")
+          xcrun simctl boot "$UDID2" || true; xcrun simctl bootstatus "$UDID2" -b >/dev/null 2>&1 || true
+          for U in "$UDID" "$UDID2"; do
+            for k in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences $k -bool true || true; done
+            xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false || true
+          done
+          APP=$(find "$(dirname "$XR")" -maxdepth 2 -name 'Tinodios.app' -path '*iphonesimulator*' | head -1)
+          [ -n "$APP" ] && xcrun simctl install "$UDID2" "$APP" || echo "::warning::не удалось установить приложение на второй симулятор заранее"
+          xcrun simctl terminate "$UDID" info.codix.liniya2 2>/dev/null || true
+          for U in "$UDID" "$UDID2"; do for k in microphone camera; do xcrun simctl privacy "$U" grant $k info.codix.liniya2 || true; done; done
+          # Веб-собеседник B (Chrome с поддельными камерой/микрофоном).
+          cp ci/web-tests/call-scenario.mjs "$RUNNER_TEMP/"
+          ( L2_PEER_LOGIN="$L2_PEER_LOGIN" L2_PEER_PASSWORD="$L2_PEER_PASSWORD" L2_IOS_UID="$L2_IOS_UID" OUT_DIR="$OUT/web" \
+            node "$RUNNER_TEMP/call-scenario.mjs" > "$OUT/web/result.json" 2> "$OUT/web/log.txt"; echo $? > "$OUT/web/rc" ) &
+          # Второй симулятор: пользователь C принимает звонок A.
+          ( TEST_RUNNER_L2_C_LOGIN="$L2_C_LOGIN" TEST_RUNNER_L2_C_PASSWORD="$L2_C_PASSWORD" TEST_RUNNER_L2_A_NAME="Тест CI" \
+            xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID2" \
+              -only-testing:TinodiosUITests/Linia2CallPeerTests/testAnswerIncomingCall -resultBundlePath "$RUNNER_TEMP/peer.xcresult" \
+              > "$OUT/peer.log" 2>&1; echo $? > "$OUT/peer.rc" ) &
+          sleep 75   # C входит и ждёт звонок
+          export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_C_NAME="Собеседник iOS"
+          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -only-testing:TinodiosUITests/Linia2CallTests -resultBundlePath "$RUNNER_TEMP/calls.xcresult" \
+            2>&1 | tee "$OUT/main.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|\*\* TEST' || true
+          for i in $(seq 1 60); do [ -f "$OUT/web/rc" ] && [ -f "$OUT/peer.rc" ] && break; sleep 5; done
+          WRC=$(cat "$OUT/web/rc" 2>/dev/null || echo 99); PRC=$(cat "$OUT/peer.rc" 2>/dev/null || echo 99)
+          grep -E 'Test Case .* (passed|failed|skipped)|error:' "$OUT/peer.log" | tail -5 || true
+          M=$(grep -c "Test Case .* passed" "$OUT/main.log" || true); SK=$(grep -c "Test Case .* skipped" "$OUT/main.log" "$OUT/peer.log" | awk -F: '{s+=$2} END {print s+0}')
+          {
+            echo "### Звонки (обязательны для выпуска)"
+            echo "- iOS (A): пройдено $M из 5 $(grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && echo ✅ || echo ❌)"
+            echo "- iOS (C, принимающий на втором симуляторе): $( [ "$PRC" = 0 ] && echo '✅' || echo "❌ (код $PRC)")"
+            echo "- Веб (B): $( [ "$WRC" = 0 ] && echo '✅' || echo "❌ (код $WRC)")"
+            echo "- Пропущенных: $SK (допустимо 0)"
+            python3 -c "import json,sys;d=json.load(open(sys.argv[1]));[print('  - %s %s — %s' % ('✅' if s['ok'] else '❌', s['name'], s.get('detail',''))) for s in d.get('steps',[])]" "$OUT/web/result.json" 2>/dev/null || true
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && [ "$PRC" = 0 ] && [ "$WRC" = 0 ] && [ "$SK" = 0 ]
+
       - name: Отчёт, скриншоты падений
         id: report
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/failures" "$RUNNER_TEMP/out/crashes"
-          for r in unit ui; do
+          for r in unit ui calls peer; do
             X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
             xcrun xcresulttool get test-results tests --path "$X" > "$RUNNER_TEMP/out/$r-tests.json" 2>/dev/null || true
             xcrun xcresulttool export attachments --path "$X" --output-path "$RUNNER_TEMP/out/failures/$r" --only-failures >/dev/null 2>&1 || true
           done
           [ -d "$RUNNER_TEMP/ui.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" >/dev/null 2>&1 || true
+          for r in calls peer; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
           cp "$RUNNER_TEMP"/unit.log "$RUNNER_TEMP"/test.log "$RUNNER_TEMP/out/" 2>/dev/null || true
           python3 ci/test-report.py "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/out/report.md" >> "$GITHUB_STEP_SUMMARY"
@@ -251,3 +322,4 @@ jobs:
           [ -n "$L2_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_LOGIN" "$L2_PASSWORD" || true
           [ -n "$L2_REG_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_REG_LOGIN" "$L2_REG_PASSWORD" || true
           [ -n "$L2_PEER_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_PEER_LOGIN" "$L2_PEER_PASSWORD" || true
+          [ -n "$L2_C_LOGIN" ] && node "$RUNNER_TEMP/del.mjs" "$L2_C_LOGIN" "$L2_C_PASSWORD" || true
