@@ -223,11 +223,18 @@ class RelativeDateFormatter {
     // DateFormatter is thread safe, OK to keep a copy.
     static let shared = RelativeDateFormatter()
 
-    private let formatter = DateFormatter()
+    // LINIA2: приложение только на русском — время всегда 24-часовое «20:17», а не «8:17 PM»
+    // по языку устройства (английский симулятор/телефон давал AM/PM в пузырях).
+    private let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        return f
+    }()
 
     func dateOnly(from date: Date?, style: DateFormatter.Style = .medium) -> String {
         guard let date = date else { return NSLocalizedString("Never ??:??", comment: "Invalid date") }
 
+        formatter.doesRelativeDateFormatting = false
         formatter.timeStyle = .none
         formatter.dateStyle = style
         switch true {
@@ -241,12 +248,15 @@ class RelativeDateFormatter {
             // All other dates: "Mar 15, 2019"
             break
         }
-        return formatter.string(from: date)
+        // «Сегодня», «Вчера», «Среда» — с заглавной (ru_RU даёт строчные).
+        let s = formatter.string(from: date)
+        return s.prefix(1).uppercased() + s.dropFirst()
     }
 
     func timeOnly(from date: Date?, style: DateFormatter.Style = .short) -> String {
         guard let date = date else { return "??:??" }
 
+        formatter.doesRelativeDateFormatting = false
         formatter.timeStyle = style
         formatter.dateStyle = .none
         return formatter.string(from: date)
@@ -256,6 +266,7 @@ class RelativeDateFormatter {
     func shortDate(from date: Date?) -> String {
         guard let date = date else { return NSLocalizedString("Never ??:??", comment: "Invalid date") }
 
+        formatter.doesRelativeDateFormatting = false
         let now = Date()
         if Calendar.current.isDate(date, equalTo: now, toGranularity: .year) {
             if Calendar.current.isDate(date, equalTo: now, toGranularity: .day) {
