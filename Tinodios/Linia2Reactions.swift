@@ -575,7 +575,7 @@ extension MessageViewController {
             "deleteAll": [(#selector(deleteMessageHard(sender:)), L2T("l2.menu.deleteAll", "Удалить у всех"), "trash.fill", true, "delete")],
             "report": [(#selector(linia2ReportMessage(sender:)), L2T("l2.menu.report", "Пожаловаться"), "exclamationmark.bubble", true, "")],
         ]
-        let present = Set(items.map { $0.action })
+        let available = Set(items.map { $0.action })
         // Время на изменение своего сообщения.
         var editAllowed = true
         if let win = cfg.editWindowSeconds, let ts = cell.timeStamp, Date().timeIntervalSince(ts) > win { editAllowed = false }
@@ -584,11 +584,11 @@ extension MessageViewController {
         var used = Set<String>()
         for id in order where !used.contains(id) {
             used.insert(id)
-            for (sel, title, sym, destr, flag) in builtin[id] ?? [] where present.contains(sel) {
+            for (sel, title, sym, destr, flag) in builtin[id] ?? [] where available.contains(sel) {
                 if !flag.isEmpty && !cfg.feature(flag) { continue }
                 if id == "edit" && !editAllowed { continue }
                 // В «Избранном» (self-чат) один пункт «Удалить».
-                let t = (id == "deleteAll" && !present.contains(#selector(deleteMessageSoft(sender:)))) ? L2T("l2.menu.deleteSelf", "Удалить") : title
+                let t = (id == "deleteAll" && !available.contains(#selector(deleteMessageSoft(sender:)))) ? L2T("l2.menu.deleteSelf", "Удалить") : title
                 actions.append(Linia2MenuAction(id: sel == #selector(unpinMessage(sender:)) ? "unpin" : id, title: t, symbol: sym, destructive: destr, action: sel))
             }
         }
@@ -603,7 +603,7 @@ extension MessageViewController {
         menu.onReact = { [weak self] e in self?.linia2ToggleReaction(e, on: seq) }
         menu.onAction = { [weak self] sel in self?.linia2Perform(sel, seq: seq) }
         L2.haptic()
-        present(menu, animated: true)
+        self.present(menu, animated: true)
     }
 
     /// Свайп вправо по сообщению — «Ответить».

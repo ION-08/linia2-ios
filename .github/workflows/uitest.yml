@@ -28,7 +28,9 @@ jobs:
   uitest:
     # Push с [release] тестирует release.yml (2 круга подряд) — отдельный прогон не нужен (общий тестовый сервер).
     if: ${{ github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]') }}
-    runs-on: macos-26
+    # macos-15: симуляторы iOS 18 уже установлены (на macos-26 их приходится скачивать ~30+ мин).
+    # Сборка для TestFlight остаётся на macos-26 / Xcode 26 (testflight.yml).
+    runs-on: macos-15
     timeout-minutes: 180
     outputs:
       compiled: ${{ steps.report.outputs.compiled }}
@@ -46,7 +48,11 @@ jobs:
 
       - name: Xcode
         run: |
-          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1); sudo xcode-select -s "${XC:-/Applications/Xcode.app}"; xcodebuild -version
+          # Последний Xcode 16.x (с ним в образе идут среды iOS 18); если нет — последний доступный.
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
+          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"; xcodebuild -version
+          xcrun simctl list runtimes available | grep -i ios || true
 
       - name: Подготовка
         run: |
