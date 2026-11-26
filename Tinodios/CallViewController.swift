@@ -7,6 +7,7 @@
 
 
 import AVFoundation
+import AVKit
 import Foundation
 import TinodeSDK
 import UIKit
@@ -61,6 +62,31 @@ class CameraManager: NSObject {
         } else {
             Cache.log.error("CallVC - Could not add video data output to the session")
             captureSession.commitConfiguration()
+        }
+    }
+
+    /// LINIA2: переключение фронтальной / основной камеры.
+    private(set) var position: AVCaptureDevice.Position = .front
+    func switchCamera() {
+        let newPos: AVCaptureDevice.Position = position == .front ? .back : .front
+        guard let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPos),
+              let input = try? AVCaptureDeviceInput(device: dev) else { return }
+        dataOutputQueue.async {
+            self.captureSession.beginConfiguration()
+            for i in self.captureSession.inputs { self.captureSession.removeInput(i) }
+            if self.captureSession.canAddInput(input) {
+                self.captureSession.addInput(input)
+                self.videoCaptureDevice = dev
+                self.position = newPos
+            } else if let old = self.videoCaptureDevice, let oldInput = try? AVCaptureDeviceInput(device: old), self.captureSession.canAddInput(oldInput) {
+                self.captureSession.addInput(oldInput)
+            }
+            if let c = self.videoDataOutput.connection(with: .video) {
+                c.videoOrientation = .portrait
+                c.automaticallyAdjustsVideoMirroring = false
+                if c.isVideoMirroringSupported { c.isVideoMirrored = (self.position == .front) }
+            }
+            self.captureSession.commitConfiguration()
         }
     }
 
@@ -171,6 +197,22 @@ class WebRTCClient: NSObject {
         track.isEnabled = !track.isEnabled
         return track.isEnabled
     }
+
+    // LINIA2: явные состояния (для CallKit «Выключить звук» и удержания).
+    var isAudioEnabled: Bool { localAudioTrack?.isEnabled ?? false }
+    func setAudioEnabled(_ on: Bool) { localAudioTrack?.isEnabled = on }
+    func setVideoEnabled(_ on: Bool) { localVideoTrack?.isEnabled = on }
+    var isVideoTrackEnabled: Bool { localVideoTrack?.isEnabled ?? false }
+
+    /// Статистика WebRTC (потери, RTT) — для «Плохая связь».
+    func statistics(_ completion: @escaping (RTCStatisticsReport) -> Void) {
+        guard let peer = localPeer else { return }
+        peer.statistics(completionHandler: completion)
+    }
+
+    /// Дополнительный получатель удалённого видео (картинка-в-картинке).
+    func addRemoteRenderer(_ renderer: RTCVideoRenderer) { remoteVideoTrack?.add(renderer) }
+    func removeRemoteRenderer(_ renderer: RTCVideoRenderer) { remoteVideoTrack?.remove(renderer) }
 
     func toggleVideo() -> Bool {
         guard let track = self.localVideoTrack else { return false }
@@ -485,6 +527,9 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
         case .connected, .completed:
             // LINIA2: соединение установлено — экран звонка показывает «Идёт звонок» и таймер.
             DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallConnected, object: nil) }
+        case .disconnected:
+            // Связь прервалась (WebRTC пытается восстановить) — «Плохая связь».
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallUnstable, object: nil) }
         default:
             break
         }
@@ -548,13 +593,15 @@ extension RTCIceCandidate {
     }
 }
 
+
 /// CallViewController
+/// LINIA2: экран звонка «как на iPhone» в стиле Линии 2.0 (тёмный фон, круглые кнопки с подписями).
+/// Показывается модально (fullScreen); «Чат» сворачивает его в зелёную плашку «Идёт звонок» (Linia2CallCenter),
+/// звонок при этом продолжается. Звонок завершают только «Завершить», собеседник или сервер.
 class CallViewController: UIViewController {
     private enum Constants {
-        static let kToggleCameraIcon = "vc"
-        static let kToggleMicIcon = "mic"
         static let kDialingAnimationDuration: Double = 1.5
-        static let kDialingAnimationColor = UIColor(red: 33.0/255.0, green: 150.0/255.0, blue: 243.0/255.0, alpha: 1).cgColor
+        static let kDialingAnimationColor = UIColor(red: 0x7E/255.0, green: 0xE0/255.0, blue: 0xC3/255.0, alpha: 1).cgColor
     }
 
     enum CallDirection {
@@ -580,12 +627,11 @@ class CallViewController: UIViewController {
 
     @IBOutlet weak var dialingAnimationContainer: UIView!
 
-    private static func actionButtonIcon(iconName: String, on: Bool) -> UIImage? {
-        let name = "\(iconName)\(on ? "" : ".slash").fill"
-        return UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+    weak var topic: DefaultComTopic? {
+        didSet { if let t = topic { strongTopic = t } }
     }
-
-    weak var topic: DefaultComTopic?
+    /// Звонок может идти при свёрнутом экране — держим топик сами.
+    private var strongTopic: DefaultComTopic?
     let cameraManager = CameraManager()
     let webRTCClient = WebRTCClient()
     // Peer messasges listener.
@@ -604,6 +650,29 @@ class CallViewController: UIViewController {
     var routeChangeObserver: NSObjectProtocol?
     // For playing sound effects.
     var audioPlayer: AVAudioPlayer?
+
+    // LINIA2: состояние экрана и звонка.
+    private(set) var started = false
+    private(set) var closed = false
+    /// Этот экран владеет звонком в CallManager (иначе закрытие не трогает чужой звонок).
+    private var ownsCall = false
+    private(set) var connectedAt: Date?
+    private(set) var isPoorConnection = false
+    private var unstableUntil: Date?
+    private(set) var isHeld = false
+    private var isMuted = false
+    private var heldRestore: (audio: Bool, video: Bool)?
+    private var remoteVideoLive = false
+    private var observers: [NSObjectProtocol] = []
+    private var uiTimer: Timer?
+    private var lastStats: (lost: Double, received: Double)?
+    private var lastStatsPoor = false
+    let stateLabel = UILabel()
+    let flipButton = UIButton(type: .system)
+    let backButton = UIButton(type: .system)
+    private var captions: [UIButton: UILabel] = [:]
+    private var routePicker: UIView?
+    private var pip: AnyObject?
 
     class InfoListener: TinodeEventListener {
         private weak var delegate: TinodeVideoCallDelegate?
@@ -632,61 +701,100 @@ class CallViewController: UIViewController {
         }
     }
 
-    override func viewDidLoad() {
-        self.videoToggleButton.addBlurEffect()
-        self.micToggleButton.addBlurEffect()
-        self.speakerToggleButton.addBlurEffect()
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        modalPresentationStyle = .fullScreen
+        modalTransitionStyle = .crossDissolve
+    }
 
-        if self.isAudioOnlyCall {
-            self.audioOutput = .none
-            self.videoToggleButton.setImage(UIImage(named: "vc.slash.fill", in: nil, with: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular)), for: .normal)
-            self.speakerToggleButton.setImage(UIImage(systemName: "speaker.wave.1.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular)), for: .normal)
-        } else {
-            self.audioOutput = .speaker
-        }
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        overrideUserInterfaceStyle = .dark
+        self.audioOutput = self.isAudioOnlyCall ? .none : .speaker
         self.listener = InfoListener(delegateEventsTo: self)
+        if callDirection == .incoming { ownsCall = true }
+        Linia2CallCenter.shared.register(self)
+        linia2BuildLayout()
         linia2SetupCallStatus()
 
         if let topic = topic {
-            peerNameLabel.text = topic.pub?.fn
-            peerNameLabel.sizeToFit()
+            peerNameLabel.text = topic.pub?.fn ?? "Собеседник"
             peerNameRemoteVideoLabel.text = peerNameLabel.text
-            peerNameRemoteVideoLabel.sizeToFit()
             peerAvatarImageView.set(pub: topic.pub, id: topic.name, deleted: false)
+            // Гостевой звонок по ссылке — имя гостя и название ссылки.
+            if Linia2GuestLinks.isGuest(topic.name), let g = Linia2GuestLinks.cachedInfo(seq: callSeqId) {
+                peerNameLabel.text = g.name
+                peerNameLabel.accessibilityValue = g.link.isEmpty ? "по ссылке" : "по ссылке «\(g.link)»"
+            }
+        }
+        linia2UpdateButtons()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        linia2StartIfNeeded()
+        linia2UpdateRoute()
+        Linia2CallCenter.shared.refreshBanner()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Свёрнут — показать плашку «Идёт звонок».
+        Linia2CallCenter.shared.refreshBanner()
+    }
+
+    /// Запуск звонка — один раз (экран может быть свёрнут и открыт снова).
+    /// Вызывается и без показа экрана: звонок, принятый на заблокированном экране.
+    func linia2StartIfNeeded() {
+        guard !started, !closed else { return }
+        started = true
+        loadViewIfNeeded()
+        self.permissionsCheck { result in
+            switch result {
+            case .ok:
+                DispatchQueue.main.async { self.setupCaptureSessionAndStartCall() }
+            case .micDenied:
+                Cache.log.error("No permission to access microphone")
+                DispatchQueue.main.async {
+                    UiUtils.showToast(message: "Нет доступа к микрофону. Разрешите его в Настройках iPhone.")
+                    self.handleCallClose()
+                }
+            case .cameraDenied:
+                Cache.log.error("No permission to access camera")
+                DispatchQueue.main.async {
+                    UiUtils.showToast(message: "Нет доступа к камере. Разрешите её в Настройках iPhone.")
+                    self.handleCallClose()
+                }
+            }
         }
     }
 
+    // MARK: Кнопки
+
     @IBAction func didToggleSpeaker(_ sender: Any) {
-        var newIconName: String
-        var newOutput: AVAudioSession.PortOverride
-        switch self.audioOutput {
-        case .none:
-            newIconName = "speaker.wave.3.fill"
-            newOutput = .speaker
-        case .speaker:
-            newIconName = "speaker.wave.1.fill"
-            newOutput = .none
-        default:
-            Cache.log.error("unknown AVAudioSession.PortOverride value: %d", self.audioOutput.rawValue)
-            return
-        }
-        let newimg = UIImage(systemName: newIconName, withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+        let newOutput: AVAudioSession.PortOverride = self.audioOutput == .speaker ? .none : .speaker
         Cache.log.info("User requested overridde audio output port to %d", newOutput.rawValue)
         CallManager.audioSessionChange { session in
             try session.overrideOutputAudioPort(newOutput)
-            self.speakerToggleButton.setImage(newimg, for: .normal)
             self.audioOutput = newOutput
         }
+        linia2UpdateRoute()
     }
 
     @IBAction func didToggleMic(_ sender: Any) {
-        let img = UIImage(systemName: self.webRTCClient.toggleAudio() ? "mic.fill" : "mic.slash.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
-        self.micToggleButton.setImage(img, for: .normal)
+        setMuted(!isMuted)
+        Cache.callManager.setMutedInSystem(isMuted)
+    }
+
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
+        if !isHeld { webRTCClient.setAudioEnabled(!muted) } else { heldRestore?.audio = !muted }
+        linia2UpdateButtons()
     }
 
     @IBAction func didToggleCamera(_ sender: Any) {
-        let newimg = UIImage(named: cameraManager.isCapturing ? "vc.slash.fill" : "vc.fill", in: nil, with: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
-
         videoToggleButton.isEnabled = false
         if cameraManager.isCapturing {
             cameraManager.stopCapture {
@@ -694,8 +802,7 @@ class CallViewController: UIViewController {
                     self.localView.isHidden = true
                     self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventMuted)
                     self.videoToggleButton.isEnabled = true
-                    self.videoToggleButton.setImage(newimg, for: .normal)
-                    self.videoToggleButton.imageEdgeInsets = UIEdgeInsets(top: 14, left: 14, bottom: 19, right: 15)
+                    self.linia2UpdateButtons()
                 }
             }
         } else {
@@ -704,16 +811,27 @@ class CallViewController: UIViewController {
                     self.localView.isHidden = false
                     self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventUnmuted)
                     self.videoToggleButton.isEnabled = true
-                    self.videoToggleButton.setImage(newimg, for: .normal)
-                    self.videoToggleButton.imageEdgeInsets = UIEdgeInsets(top: 14, left: 15, bottom: 20, right: 15)
+                    self.linia2UpdateButtons()
                 }
             }
         }
     }
 
+    @objc func didTapFlip() {
+        cameraManager.switchCamera()
+        UIView.transition(with: localView, duration: 0.3, options: .transitionFlipFromLeft, animations: nil)
+    }
+
+    /// «Чат»: свернуть экран звонка, звонок продолжается (сверху — плашка «Идёт звонок»).
+    @objc func didTapBack() {
+        Linia2CallCenter.shared.minimize()
+    }
+
     @IBAction func didTapHangUp(_ sender: Any) {
         self.handleCallClose()
     }
+
+    // MARK: Запуск
 
     private func setupCaptureSessionAndStartCall() {
         cameraManager.setupCamera()
@@ -755,11 +873,7 @@ class CallViewController: UIViewController {
 
     private func checkMicPermissions(completion: @escaping ((Bool) -> Void)) {
         AVAudioSession.sharedInstance().requestRecordPermission { granted in
-            if granted {
-                completion(true)  // success
-            } else {
-                completion(false)  // failure
-            }
+            completion(granted)
         }
     }
 
@@ -769,11 +883,7 @@ class CallViewController: UIViewController {
             completion(true)  // success
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
-                if granted {
-                    completion(true)  // success
-                } else {
-                    completion(false)  // failure
-                }
+                completion(granted)
             }
         case .denied, .restricted:
             fallthrough
@@ -804,55 +914,27 @@ class CallViewController: UIViewController {
         }
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        self.permissionsCheck { result in
-            switch result {
-            case .ok:
-                DispatchQueue.main.async { self.setupCaptureSessionAndStartCall() }
-            case .micDenied:
-                Cache.log.error("No permission to access microphone")
-                DispatchQueue.main.async {
-                    UiUtils.showToast(message: NSLocalizedString("No permission to access microphone", comment: "Error message when call cannot be started due to missing microphone permission"))
-                    self.handleCallClose()
-                }
-            case .cameraDenied:
-                Cache.log.error("No permission to access camera")
-                DispatchQueue.main.async {
-                    UiUtils.showToast(message: NSLocalizedString("No permission to access camera", comment: "Error message when call cannot be started due to missing camera permission"))
-                    self.handleCallClose()
-                }
-            }
-        }
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        self.handleCallClose()
-        Cache.tinode.removeListener(self.listener)
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        self.stopMedia()
-    }
-
     @objc func handleRouteChange(notification: Notification) {
         guard let info = notification.userInfo,
             let value = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
             let reason = AVAudioSession.RouteChangeReason(rawValue: value) else { return }
 
         switch reason {
-        case .categoryChange:
-            Cache.log.info("Audio route change: .categoryChange, restoring audio output to %d", self.audioOutput.rawValue)
-            CallManager.audioSessionChange { session in
-                try session.overrideOutputAudioPort(self.audioOutput)
+        case .categoryChange, .oldDeviceUnavailable:
+            // Наушники отключили / категория сменилась — вернуть выбранный выход (динамик или трубка).
+            if !Linia2CallCenter.hasExternalOutput() {
+                Cache.log.info("Audio route change: restoring audio output to %d", self.audioOutput.rawValue)
+                CallManager.audioSessionChange { session in
+                    try session.overrideOutputAudioPort(self.audioOutput)
+                }
             }
-        case .oldDeviceUnavailable:
-            Cache.log.info("Audio route change: .oldDeviceUnavailable, restoring audio output to %d", self.audioOutput.rawValue)
-            CallManager.audioSessionChange { session in
-                try session.overrideOutputAudioPort(self.audioOutput)
-            }
+        case .newDeviceAvailable:
+            // Подключили AirPods / гарнитуру — звук идёт в них (как на iPhone), динамик выключается.
+            self.audioOutput = .none
         default:
             Cache.log.debug("CallVC - audio route change: other - %@, reason: %d", value.description, reason.rawValue)
         }
+        DispatchQueue.main.async { self.linia2UpdateRoute() }
     }
 
     func setupViews() {
@@ -860,7 +942,7 @@ class CallViewController: UIViewController {
             // Using metal (arm64 only)
             let localRenderer = RTCMTLVideoView(frame: self.localView.frame)
             let remoteRenderer = RTCMTLVideoView(frame: self.remoteView.frame)
-            localRenderer.videoContentMode = .scaleAspectFit
+            localRenderer.videoContentMode = .scaleAspectFill
             remoteRenderer.videoContentMode = .scaleAspectFill
         #else
             // Using OpenGLES for the rest
@@ -878,6 +960,7 @@ class CallViewController: UIViewController {
         if self.isAudioOnlyCall {
             remoteView.isHidden = true
             peerNameRemoteVideoLabel.isHidden = true
+        localView.isHidden = isAudioOnlyCall
             localView.isHidden = true
         }
     }
@@ -886,34 +969,59 @@ class CallViewController: UIViewController {
         // Allow screen dimming/going to sleep.
         UIApplication.shared.isIdleTimerDisabled = false
 
+        if #available(iOS 15.0, *), let pip = self.pip as? Linia2CallPiP {
+            webRTCClient.removeRemoteRenderer(pip.renderer)
+            pip.stop()
+        }
+        self.pip = nil
         self.webRTCClient.disconnect()
         cameraManager.stopCapture()
         if let observer = self.routeChangeObserver {
             NotificationCenter.default.removeObserver(observer)
+            self.routeChangeObserver = nil
         }
     }
 
+    /// Завершить звонок и закрыть экран (в том числе свёрнутый). Повторные вызовы игнорируются.
     func handleCallClose() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.handleCallClose() }
+            return
+        }
+        guard !closed else { return }
+        closed = true
         playSoundEffect(nil)
+        uiTimer?.invalidate()
+        uiTimer = nil
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers.removeAll()
 
-        Cache.callManager.completeCallInProgress(reportToSystem: true, reportToPeer: false)
-        if self.callSeqId > 0 {
-            self.topic?.videoCall(event: "hang-up", seq: self.callSeqId)
+        if ownsCall {
+            Cache.callManager.completeCallInProgress(reportToSystem: true, reportToPeer: false)
+            if self.callSeqId > 0 {
+                self.topic?.videoCall(event: "hang-up", seq: self.callSeqId)
+            }
         }
         self.callSeqId = -1
-        DispatchQueue.main.async {
-            // Dismiss video call VC.
-            self.navigationController?.popViewController(animated: true)
+        Cache.tinode.removeListener(self.listener)
+        stopMedia()
+        Linia2CallCenter.shared.callDidEnd(self)
+        if self.presentingViewController != nil {
+            self.dismiss(animated: true)
+        } else if let nav = self.navigationController {
+            nav.popViewController(animated: true)
         }
     }
 
     func handleCallInvite() {
         switch self.callDirection {
         case .outgoing:
-            guard Cache.callManager.registerOutgoingCall(onTopic: self.topic!.name, isAudioOnly: self.isAudioOnlyCall) else {
+            guard Cache.callManager.registerOutgoingCall(onTopic: self.topic!.name, isAudioOnly: self.isAudioOnlyCall, peerName: self.topic?.pub?.fn) else {
+                UiUtils.showToast(message: "Уже идёт другой звонок")
                 self.handleCallClose()
                 return
             }
+            ownsCall = true
             playSoundEffect("dialing")
             // Send out a call invitation to the peer.
             self.topic?.publish(content: Drafty.videoCall(),
@@ -935,9 +1043,7 @@ class CallViewController: UIViewController {
             self.topic?.videoCall(event: "accept", seq: self.callSeqId)
             if !self.isAudioOnlyCall {
                 DispatchQueue.main.async {
-                    // Hide peer name & avatar.
-                    self.peerNameLabel.alpha = 0
-                    self.peerAvatarImageView.alpha = 0
+                    self.linia2SetAvatarVisible(false)
                 }
             }
         case .none:
@@ -952,17 +1058,12 @@ class CallViewController: UIViewController {
             return
         }
 
-        let path = Bundle.main.path(forResource: "\(effect).m4a", ofType: nil)!
+        guard let path = Bundle.main.path(forResource: "\(effect).m4a", ofType: nil) else { return }
         let url = URL(fileURLWithPath: path)
 
         do {
             audioPlayer = try AVAudioPlayer(contentsOf: url)
-            if loop {
-                // Play continously.
-                audioPlayer?.numberOfLoops = -1
-            } else {
-                audioPlayer?.numberOfLoops = 0
-            }
+            audioPlayer?.numberOfLoops = loop ? -1 : 0
             audioPlayer?.play()
         } catch {
             Cache.log.error("CallVC - Unable to play sound effect '%@': %@", effect, error.localizedDescription)
@@ -981,6 +1082,7 @@ class CallViewController: UIViewController {
 
     private func addDialingRipple(offset: CGFloat, opacity: Float) {
         let diameter: CGFloat = dialingAnimationContainer.bounds.width
+        guard diameter > 0 else { return }
 
         let layerRipple = CAShapeLayer()
         layerRipple.frame = dialingAnimationContainer.bounds
@@ -994,7 +1096,7 @@ class CallViewController: UIViewController {
         animation.duration = Constants.kDialingAnimationDuration
         animation.timingFunction = CAMediaTimingFunction(name: .linear)
         animation.repeatCount = .infinity
-        animation.fromValue = CGAffineTransform.identity
+        animation.fromValue = 1.0
         animation.toValue = (diameter + offset) / diameter
 
         layerRipple.add(animation, forKey: nil)
@@ -1040,7 +1142,13 @@ extension CallViewController: WebRTCClientDelegate {
     }
 
     func handleRemoteStream(_ client: WebRTCClient, receivedStream stream: RTCMediaStream) {
-        client.setupRemoteRenderer(self.remoteRenderer!, withTrack: stream.videoTracks.first)
+        DispatchQueue.main.async {
+            guard let renderer = self.remoteRenderer, !self.closed else { return }
+            client.setupRemoteRenderer(renderer, withTrack: stream.videoTracks.first)
+            if !self.isAudioOnlyCall {
+                self.linia2SetupPiP()
+            }
+        }
     }
 
     func canSendOffer() -> Bool {
@@ -1052,6 +1160,7 @@ extension CallViewController: WebRTCClientDelegate {
             self.micToggleButton.isEnabled = true
             self.videoToggleButton.isEnabled = true
             self.speakerToggleButton.isEnabled = true
+            self.linia2UpdateButtons()
         }
     }
 
@@ -1062,10 +1171,9 @@ extension CallViewController: WebRTCClientDelegate {
 
     func toggleRemoteVideo(remoteLive: Bool) {
         DispatchQueue.main.async {
+            self.remoteVideoLive = remoteLive
             self.remoteView.isHidden = !remoteLive
-            self.peerNameRemoteVideoLabel.isHidden = !remoteLive
-            self.peerNameLabel.alpha = !remoteLive ? 1 : 0
-            self.peerAvatarImageView.alpha = !remoteLive ? 1 : 0
+            self.linia2SetAvatarVisible(!remoteLive)
         }
     }
 }
@@ -1083,8 +1191,7 @@ extension CallViewController: TinodeVideoCallDelegate {
         // Stop animation, hide peer name & avatar.
         self.dialingAnimation(on: false)
         if !self.isAudioOnlyCall {
-            self.peerNameLabel.alpha = 0
-            self.peerAvatarImageView.alpha = 0
+            self.linia2SetAvatarVisible(false)
         }
         // The callee has informed us (the caller) of the call acceptance.
         guard self.webRTCClient.createPeerConnection(withDataChannel: true) else {
@@ -1144,42 +1251,403 @@ extension CallViewController: TinodeVideoCallDelegate {
 }
 
 
-// MARK: - LINIA2: состояние звонка и идентификаторы (для пользователя и автотестов)
+// MARK: - LINIA2: оформление, состояние звонка, удержание, качество связи, PiP
 
 extension Notification.Name {
     static let linia2CallConnected = Notification.Name("Linia2CallConnected")
+    static let linia2CallUnstable = Notification.Name("Linia2CallUnstable")
 }
 
 extension CallViewController {
-    private static let kL2StateTag = 0x4C3243
+    static let background = L2.hex(0x0A0E1B)
+    static let mint = L2.hex(0x7EE0C3)
+    static let red = L2.hex(0xFF3B30)
 
-    func linia2SetupCallStatus() {
+    /// Текст состояния: «Соединение…», «Идёт звонок мм:сс», «Плохая связь · мм:сс», «На удержании».
+    var linia2StatusText: String {
+        if isHeld { return "На удержании" }
+        guard let s = connectedAt else {
+            return callDirection == .outgoing && callSeqId > 0 ? "Вызов…" : "Соединение…"
+        }
+        let sec = Int(Date().timeIntervalSince(s))
+        let time = String(format: "%02d:%02d", sec / 60, sec % 60)
+        return isPoorConnection ? "Плохая связь · \(time)" : "Идёт звонок \(time)"
+    }
+
+    /// Строит экран поверх элементов из Main.storyboard (outlets и действия кнопок сохраняются).
+    func linia2BuildLayout() {
+        view.backgroundColor = Self.background
+        let stack = micToggleButton.superview as? UIStackView
+        let mine: [UIView?] = [remoteView, localView, peerNameLabel, peerAvatarImageView, peerNameRemoteVideoLabel, dialingAnimationContainer, stack]
+        let mineSet = Set(mine.compactMap { $0 }.map { ObjectIdentifier($0) })
+        NSLayoutConstraint.deactivate(view.constraints.filter { c in
+            if let a = c.firstItem as? UIView, mineSet.contains(ObjectIdentifier(a)) { return true }
+            if let b = c.secondItem as? UIView, mineSet.contains(ObjectIdentifier(b)) { return true }
+            return false
+        })
+        stack?.isHidden = true
+
+        // Видео собеседника — на весь экран, своё — маленькое окно справа сверху.
+        remoteView.backgroundColor = .clear
+        remoteView.isHidden = isAudioOnlyCall
+        localView.layer.cornerRadius = 16
+        localView.layer.cornerCurve = .continuous
+        localView.clipsToBounds = true
+        localView.backgroundColor = L2.hex(0x161D2E)
+        localViewWidthConstraint.constant = 108
+        localViewHeightConstraint.constant = 156
+        peerNameRemoteVideoLabel.isHidden = true
+
+        // Затемнение под кнопками (читаемость поверх видео).
+        let scrim = L2GradientView(colors: [Self.background.withAlphaComponent(0), Self.background.withAlphaComponent(0.85)])
+        scrim.translatesAutoresizingMaskIntoConstraints = false
+        scrim.isUserInteractionEnabled = false
+        view.insertSubview(scrim, aboveSubview: remoteView)
+        let topScrim = L2GradientView(colors: [Self.background.withAlphaComponent(0.7), Self.background.withAlphaComponent(0)])
+        topScrim.translatesAutoresizingMaskIntoConstraints = false
+        topScrim.isUserInteractionEnabled = false
+        view.insertSubview(topScrim, aboveSubview: remoteView)
+
+        peerNameLabel.backgroundColor = .clear
+        peerNameLabel.textColor = .white
+        peerNameLabel.font = L2.font(30, .semibold)
+        peerNameLabel.textAlignment = .center
+        peerNameLabel.numberOfLines = 1
+        peerNameLabel.adjustsFontSizeToFitWidth = true
+        peerNameLabel.minimumScaleFactor = 0.6
+        peerNameLabel.accessibilityIdentifier = "l2.call.name"
+        peerNameLabel.layer.shadowColor = UIColor.black.cgColor
+        peerNameLabel.layer.shadowOpacity = 0.4
+        peerNameLabel.layer.shadowRadius = 4
+        peerNameLabel.layer.shadowOffset = .zero
+
+        stateLabel.translatesAutoresizingMaskIntoConstraints = false
+        stateLabel.font = L2.font(17, .regular)
+        stateLabel.textColor = L2.hex(0xC9D1DE)
+        stateLabel.textAlignment = .center
+        stateLabel.accessibilityIdentifier = "l2.call.state"
+        stateLabel.text = "Соединение…"
+        view.addSubview(stateLabel)
+
+        // Кнопки: ряд 1 — Микрофон · Камера · Динамик; ряд 2 — Повернуть · Завершить · Чат.
+        flipButton.setImage(L2.symbol("arrow.triangle.2.circlepath.camera.fill", 24, .regular), for: .normal)
+        flipButton.accessibilityIdentifier = "l2.call.flip"
+        flipButton.accessibilityLabel = "Повернуть камеру"
+        flipButton.addTarget(self, action: #selector(didTapFlip), for: .touchUpInside)
+        backButton.setImage(L2.symbol("bubble.left.fill", 24, .regular), for: .normal)
+        backButton.accessibilityIdentifier = "l2.call.back"
+        backButton.accessibilityLabel = "Вернуться в чат"
+        backButton.addTarget(self, action: #selector(didTapBack), for: .touchUpInside)
+
+        let row1 = UIStackView(arrangedSubviews: [
+            linia2Item(micToggleButton, "Микрофон"),
+            linia2Item(videoToggleButton, "Камера"),
+            linia2Item(speakerToggleButton, "Динамик"),
+        ])
+        let row2 = UIStackView(arrangedSubviews: [
+            linia2Item(flipButton, "Повернуть"),
+            linia2Item(hangUpButton, "Завершить"),
+            linia2Item(backButton, "Чат"),
+        ])
+        for r in [row1, row2] {
+            r.axis = .horizontal
+            r.distribution = .equalSpacing
+            r.alignment = .top
+        }
+        let grid = UIStackView(arrangedSubviews: [row1, row2])
+        grid.axis = .vertical
+        grid.spacing = 22
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(grid)
+
+        // Маршрут звука (AirPods / Bluetooth / наушники): системный выбор поверх кнопки «Динамик».
+        let picker = AVRoutePickerView()
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.tintColor = .clear
+        picker.activeTintColor = .clear
+        picker.prioritizesVideoDevices = false
+        picker.accessibilityIdentifier = "l2.call.route"
+        picker.accessibilityLabel = "Аудиовыход"
+        picker.isHidden = true
+        speakerToggleButton.superview?.addSubview(picker)
+        NSLayoutConstraint.activate([
+            picker.leadingAnchor.constraint(equalTo: speakerToggleButton.leadingAnchor),
+            picker.trailingAnchor.constraint(equalTo: speakerToggleButton.trailingAnchor),
+            picker.topAnchor.constraint(equalTo: speakerToggleButton.topAnchor),
+            picker.bottomAnchor.constraint(equalTo: speakerToggleButton.bottomAnchor),
+        ])
+        routePicker = picker
+
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            remoteView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            remoteView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            remoteView.topAnchor.constraint(equalTo: view.topAnchor),
+            remoteView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            topScrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topScrim.topAnchor.constraint(equalTo: view.topAnchor),
+            topScrim.bottomAnchor.constraint(equalTo: stateLabel.bottomAnchor, constant: 30),
+
+            scrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scrim.topAnchor.constraint(equalTo: grid.topAnchor, constant: -60),
+
+            peerAvatarImageView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            peerAvatarImageView.topAnchor.constraint(equalTo: safe.topAnchor, constant: 56),
+            dialingAnimationContainer.centerXAnchor.constraint(equalTo: peerAvatarImageView.centerXAnchor),
+            dialingAnimationContainer.centerYAnchor.constraint(equalTo: peerAvatarImageView.centerYAnchor),
+
+            peerNameLabel.topAnchor.constraint(equalTo: peerAvatarImageView.bottomAnchor, constant: 20),
+            peerNameLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
+            peerNameLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24),
+            peerNameLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            stateLabel.topAnchor.constraint(equalTo: peerNameLabel.bottomAnchor, constant: 6),
+            stateLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            stateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+
+            localView.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16),
+            localView.bottomAnchor.constraint(equalTo: grid.topAnchor, constant: -28),
+
+            grid.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 36),
+            grid.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -36),
+            grid.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -20),
+        ])
+        // Порядок слоёв: видео собеседника → затемнение → имя/состояние → своё видео → кнопки.
+        for v in [topScrim, scrim, peerNameLabel, stateLabel, localView, grid] as [UIView] { view.bringSubviewToFront(v) }
         hangUpButton.accessibilityIdentifier = "l2.call.hangup"
         hangUpButton.accessibilityLabel = "Завершить"
         micToggleButton.accessibilityIdentifier = "l2.call.mic"
-        micToggleButton.accessibilityLabel = "Микрофон"
         videoToggleButton.accessibilityIdentifier = "l2.call.video"
         speakerToggleButton.accessibilityIdentifier = "l2.call.speaker"
-        let l = UILabel()
-        l.tag = Self.kL2StateTag
-        l.text = "Соединение…"
-        l.font = L2.font(15, .medium)
-        l.textColor = .white
-        l.textAlignment = .center
-        l.accessibilityIdentifier = "l2.call.state"
-        l.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(l)
-        NSLayoutConstraint.activate([l.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                                     l.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12)])
-        var started: Date?
-        NotificationCenter.default.addObserver(forName: .linia2CallConnected, object: nil, queue: .main) { [weak self, weak l] _ in
-            guard self != nil, started == nil else { return }
-            started = Date()
-            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-                guard let l = l, let s = started else { t.invalidate(); return }
-                let sec = Int(Date().timeIntervalSince(s))
-                l.text = String(format: "Идёт звонок %02d:%02d", sec / 60, sec % 60)
-            }.fire()
+    }
+
+    /// Круглая кнопка 72 pt с подписью.
+    private func linia2Item(_ button: UIButton, _ caption: String) -> UIView {
+        button.removeFromSuperview()
+        NSLayoutConstraint.deactivate(button.constraints.filter { ($0.firstItem as? UIView) === button && $0.secondItem == nil })
+        for sub in button.subviews where sub is UIVisualEffectView { sub.removeFromSuperview() }
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.layer.cornerRadius = 36
+        button.layer.masksToBounds = true
+        button.imageEdgeInsets = .zero
+        button.contentEdgeInsets = .zero
+        let label = UILabel()
+        label.text = caption
+        label.font = L2.font(13, .regular)
+        label.textColor = L2.hex(0xE6EAF2)
+        label.textAlignment = .center
+        label.isAccessibilityElement = false
+        captions[button] = label
+        if button.accessibilityLabel == nil { button.accessibilityLabel = caption }
+        let box = UIView()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(button)
+        box.addSubview(label)
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 72),
+            button.heightAnchor.constraint(equalToConstant: 72),
+            button.topAnchor.constraint(equalTo: box.topAnchor),
+            button.centerXAnchor.constraint(equalTo: box.centerXAnchor),
+            label.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8),
+            label.centerXAnchor.constraint(equalTo: box.centerXAnchor),
+            label.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+            box.widthAnchor.constraint(equalToConstant: 84),
+        ])
+        return box
+    }
+
+    private func linia2Style(_ b: UIButton, symbol: String, on: Bool, enabled: Bool = true) {
+        // Как на iPhone: обычная кнопка — полупрозрачный круг, включённая (без звука, динамик) — белая.
+        b.setImage(L2.symbol(symbol, 26, .regular)?.withRenderingMode(.alwaysTemplate), for: .normal)
+        b.backgroundColor = on ? .white : UIColor.white.withAlphaComponent(0.16)
+        b.tintColor = on ? Self.background : .white
+        b.alpha = enabled ? 1 : 0.45
+    }
+
+    func linia2UpdateButtons() {
+        guard isViewLoaded else { return }
+        linia2Style(micToggleButton, symbol: isMuted ? "mic.slash.fill" : "mic.fill", on: isMuted, enabled: micToggleButton.isEnabled)
+        micToggleButton.accessibilityLabel = isMuted ? "Включить микрофон" : "Выключить микрофон"
+        micToggleButton.accessibilityValue = isMuted ? "выключен" : "включён"
+        let camOn = cameraManager.isCapturing
+        linia2Style(videoToggleButton, symbol: camOn ? "video.fill" : "video.slash.fill", on: !camOn, enabled: videoToggleButton.isEnabled)
+        videoToggleButton.accessibilityLabel = camOn ? "Выключить камеру" : "Включить камеру"
+        linia2Style(flipButton, symbol: "arrow.triangle.2.circlepath.camera.fill", on: false, enabled: camOn)
+        flipButton.isEnabled = camOn
+        linia2Style(backButton, symbol: "bubble.left.fill", on: false)
+        hangUpButton.setImage(L2.symbol("phone.down.fill", 30, .regular)?.withRenderingMode(.alwaysTemplate), for: .normal)
+        hangUpButton.backgroundColor = Self.red
+        hangUpButton.tintColor = .white
+        linia2UpdateRoute()
+    }
+
+    /// Кнопка «Динамик»: при подключённых AirPods / Bluetooth / наушниках — системный выбор выхода.
+    func linia2UpdateRoute() {
+        guard isViewLoaded else { return }
+        let external = Linia2CallCenter.hasExternalOutput()
+        routePicker?.isHidden = !external
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType }
+        let symbol: String
+        let caption: String
+        var on = false
+        if outputs.contains(where: { [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE].contains($0) }) {
+            symbol = "airpodspro"; caption = "Аудио"
+        } else if outputs.contains(.headphones) || outputs.contains(.usbAudio) {
+            symbol = "headphones"; caption = "Аудио"
+        } else if outputs.contains(.carAudio) {
+            symbol = "car.fill"; caption = "Аудио"
+        } else if outputs.contains(.builtInSpeaker) || (outputs.isEmpty && audioOutput == .speaker) {
+            symbol = "speaker.wave.3.fill"; caption = external ? "Аудио" : "Динамик"; on = !external
+        } else {
+            symbol = "speaker.wave.1.fill"; caption = external ? "Аудио" : "Динамик"
+        }
+        linia2Style(speakerToggleButton, symbol: UIImage(systemName: symbol) != nil ? symbol : "speaker.wave.2.fill", on: on, enabled: speakerToggleButton.isEnabled)
+        speakerToggleButton.accessibilityValue = on ? "включён" : "выключен"
+        captions[speakerToggleButton]?.text = caption
+    }
+
+    func linia2SetAvatarVisible(_ visible: Bool) {
+        peerAvatarImageView.alpha = visible ? 1 : 0
+        dialingAnimationContainer.alpha = visible ? 1 : 0
+    }
+
+    func linia2SetupCallStatus() {
+        stateLabel.text = linia2StatusText
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: .linia2CallConnected, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, !self.closed else { return }
+            self.unstableUntil = nil
+            if self.connectedAt == nil {
+                self.connectedAt = Date()
+                Cache.callManager.reportConnected()
+                // Если CallKit не включил звук (сбой) — включаем сами.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { CallManager.ensureAudioEnabled() }
+            }
+            self.linia2Tick()
+        })
+        observers.append(nc.addObserver(forName: .linia2CallUnstable, object: nil, queue: .main) { [weak self] _ in
+            self?.unstableUntil = Date().addingTimeInterval(4)
+            self?.linia2Tick()
+        })
+        observers.append(nc.addObserver(forName: .linia2CallEnded, object: nil, queue: .main) { [weak self] n in
+            guard let self = self, self.ownsCall else { return }
+            // Звонок завершён системой (экран блокировки, CallKit, другой звонок) — закрыть экран.
+            if let topic = n.userInfo?["topic"] as? String, topic != self.topic?.name { return }
+            self.handleCallClose()
+        })
+        observers.append(nc.addObserver(forName: .linia2CallHeld, object: nil, queue: .main) { [weak self] n in
+            self?.setHeld((n.userInfo?["held"] as? Bool) ?? false)
+        })
+        observers.append(nc.addObserver(forName: .linia2CallMuted, object: nil, queue: .main) { [weak self] n in
+            self?.setMuted((n.userInfo?["muted"] as? Bool) ?? false)
+        })
+        observers.append(nc.addObserver(forName: .linia2CallAudioActivated, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            CallManager.audioSessionChange { s in try s.overrideOutputAudioPort(self.audioOutput) }
+            self.linia2UpdateRoute()
+        })
+        // Свернули приложение: своё видео на паузе (камера в фоне недоступна), вернулись — продолжить.
+        observers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.cameraManager.isCapturing else { return }
+            self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventMuted)
+        })
+        observers.append(nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.cameraManager.isCapturing, !self.isHeld else { return }
+            self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventUnmuted)
+        })
+        uiTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.linia2Tick() }
+    }
+
+    private func linia2Tick() {
+        if let u = unstableUntil, u < Date() { unstableUntil = nil }
+        isPoorConnection = unstableUntil != nil || (connectedAt != nil && lastStatsPoor)
+        stateLabel.text = linia2StatusText
+        stateLabel.textColor = isPoorConnection || isHeld ? L2.hex(0xFFB547) : L2.hex(0xC9D1DE)
+        if connectedAt != nil, Int(Date().timeIntervalSince1970) % 2 == 0 { linia2CheckQuality() }
+    }
+
+    /// «Плохая связь»: потери входящих пакетов > 10% или RTT > 800 мс (статистика WebRTC, каждые 2 с).
+    private func linia2CheckQuality() {
+        webRTCClient.statistics { [weak self] report in
+            var rtt: Double = 0
+            var lost: Double = 0, received: Double = 0
+            var fraction: Double = 0
+            for (_, st) in report.statistics {
+                let v = st.values
+                switch st.type {
+                case "candidate-pair":
+                    if (v["state"] as? String) == "succeeded", (v["nominated"] as? NSNumber)?.boolValue ?? true,
+                       let r = (v["currentRoundTripTime"] as? NSNumber)?.doubleValue {
+                        rtt = max(rtt, r)
+                    }
+                case "inbound-rtp":
+                    lost += (v["packetsLost"] as? NSNumber)?.doubleValue ?? 0
+                    received += (v["packetsReceived"] as? NSNumber)?.doubleValue ?? 0
+                case "remote-inbound-rtp":
+                    fraction = max(fraction, (v["fractionLost"] as? NSNumber)?.doubleValue ?? 0)
+                    if let r = (v["roundTripTime"] as? NSNumber)?.doubleValue { rtt = max(rtt, r) }
+                default:
+                    break
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                var loss = fraction
+                if let prev = self.lastStats {
+                    let dl = lost - prev.lost, dr = received - prev.received
+                    if dl + dr > 0 { loss = max(loss, dl / (dl + dr)) }
+                }
+                self.lastStats = (lost, received)
+                let poor = loss > 0.10 || rtt > 0.8
+                self.lastStatsPoor = poor
+                self.isPoorConnection = poor || self.unstableUntil != nil
+                self.stateLabel.text = self.linia2StatusText
+                self.stateLabel.textColor = self.isPoorConnection || self.isHeld ? L2.hex(0xFFB547) : L2.hex(0xC9D1DE)
+            }
         }
     }
+
+    /// Удержание (входящий GSM-звонок, «Удержать» в системном экране): не отправляем звук и видео.
+    func setHeld(_ held: Bool) {
+        guard held != isHeld else { return }
+        isHeld = held
+        if held {
+            heldRestore = (audio: !isMuted, video: webRTCClient.isVideoTrackEnabled)
+            webRTCClient.setAudioEnabled(false)
+            webRTCClient.setVideoEnabled(false)
+            if cameraManager.isCapturing { webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventMuted) }
+        } else {
+            let r = heldRestore ?? (audio: !isMuted, video: true)
+            webRTCClient.setAudioEnabled(r.audio && !isMuted)
+            webRTCClient.setVideoEnabled(r.video)
+            if cameraManager.isCapturing { webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventUnmuted) }
+            heldRestore = nil
+        }
+        linia2Tick()
+    }
+
+    /// Картинка-в-картинке для видеозвонка (iOS 15+): при сворачивании приложения видео собеседника — в окне PiP.
+    func linia2SetupPiP() {
+        guard pip == nil else { return }
+        if #available(iOS 15.0, *), AVPictureInPictureController.isPictureInPictureSupported() {
+            let p = Linia2CallPiP(sourceView: remoteView)
+            webRTCClient.addRemoteRenderer(p.renderer)
+            pip = p
+        }
+    }
+}
+
+/// Вертикальный градиент (затемнение под кнопками звонка).
+final class L2GradientView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    init(colors: [UIColor]) {
+        super.init(frame: .zero)
+        (layer as? CAGradientLayer)?.colors = colors.map { $0.cgColor }
+    }
+    required init?(coder: NSCoder) { return nil }
 }

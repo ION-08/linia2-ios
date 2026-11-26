@@ -21,6 +21,8 @@ private struct Linia2CallItem {
     let state: MsgServerData.WebRTC?
     /// Длительность разговора в секундах (если звонок состоялся).
     let duration: Int?
+    /// Гостевой звонок по ссылке: имя гостя и название ссылки.
+    let guest: (name: String, link: String)?
 
     /// Пропущенный входящий: собеседник звонил, а разговор не состоялся —
     /// состояние `missed` (не ответили) или `busy` (были заняты другим звонком).
@@ -47,6 +49,11 @@ private struct Linia2CallItem {
         isVideo = !m.isAudioOnlyCall
         self.state = state
         duration = Linia2CallItem.durationSeconds(m.head?["webrtc-duration"])
+        if Linia2GuestLinks.isGuest(topic) || m.head?["linia2-guest"] != nil {
+            guest = Linia2GuestLinks.info(fromHead: m.head, seq: m.seqId) ?? ("Гость по ссылке", "")
+        } else {
+            guest = nil
+        }
     }
 
     /// `webrtc-duration` хранится в миллисекундах; JSON-число может прийти как int, int64, double или строка.
@@ -79,6 +86,8 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
     }()
     private let footer = UIView()
     private let linkButton = L2Button("Создать ссылку", kind: .outline, symbol: "link")
+    private let guestLinkButton = L2Button("Создать ссылку на звонок", kind: .outline, symbol: "link.badge.plus")
+    private let myLinksButton = L2Button("Мои ссылки на звонок", kind: .secondary, symbol: "list.bullet")
     private lazy var emptyView = l2EmptyState("Звонков пока нет",
                                               "Здесь появятся входящие, исходящие и пропущенные звонки",
                                               symbol: "phone")
@@ -148,6 +157,10 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
         footer.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 28 + 52 + 16)
         // LINIA2: «Создать ссылку» можно выключить в удалённых настройках.
         tableView.tableFooterView = Linia2Config.shared.feature("createLink") ? footer : UIView()
+        installGuestButtons()
+        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.installGuestButtons()
+        }
 
         header.install(in: tableView)
 
@@ -177,8 +190,52 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
             lastHeaderWidth = w
             header.install(in: tableView)
             footer.frame.size.width = w
-            tableView.tableFooterView = footer
+            tableView.tableFooterView = (Linia2Config.shared.feature("createLink") || Linia2GuestLinks.enabled) ? footer : UIView()
         }
+    }
+
+    /// LINIA2: гостевые ссылки на звонок (флаг features.guestCalls) — в подвале под «Создать ссылку».
+    private func installGuestButtons() {
+        let on = Linia2GuestLinks.enabled
+        let showProfileLink = Linia2Config.shared.feature("createLink")
+        guestLinkButton.accessibilityIdentifier = "l2.calls.createGuestLink"
+        myLinksButton.accessibilityIdentifier = "l2.calls.myLinks"
+        if guestLinkButton.allTargets.isEmpty {
+            guestLinkButton.addTarget(self, action: #selector(createGuestLinkTapped), for: .touchUpInside)
+            myLinksButton.addTarget(self, action: #selector(myLinksTapped), for: .touchUpInside)
+        }
+        guestLinkButton.removeFromSuperview()
+        myLinksButton.removeFromSuperview()
+        linkButton.isHidden = !showProfileLink
+        var h: CGFloat = showProfileLink ? 28 + 52 + 16 : 0
+        if on {
+            guestLinkButton.translatesAutoresizingMaskIntoConstraints = false
+            myLinksButton.translatesAutoresizingMaskIntoConstraints = false
+            footer.addSubview(guestLinkButton)
+            footer.addSubview(myLinksButton)
+            let top: CGFloat = showProfileLink ? 28 + 52 + 12 : 28
+            NSLayoutConstraint.activate([
+                guestLinkButton.topAnchor.constraint(equalTo: footer.topAnchor, constant: top),
+                guestLinkButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
+                guestLinkButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
+                myLinksButton.topAnchor.constraint(equalTo: guestLinkButton.bottomAnchor, constant: 12),
+                myLinksButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
+                myLinksButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
+            ])
+            h = top + 52 + 12 + 52 + 16
+        }
+        footer.frame.size.height = h
+        tableView.tableFooterView = (showProfileLink || on) ? footer : UIView()
+    }
+
+    @objc private func createGuestLinkTapped() {
+        L2.haptic()
+        navigationController?.pushViewController(Linia2GuestLinkCreateViewController(), animated: true)
+    }
+
+    @objc private func myLinksTapped() {
+        L2.haptic()
+        navigationController?.pushViewController(Linia2GuestLinksViewController(), animated: true)
     }
 
     @objc private func appWillEnterForeground() {
@@ -222,7 +279,9 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
         let item = items[indexPath.row]
         let t = topic(item.topicName)
         cell.configure(item: item, pub: t?.pub, timeText: Linia2CallsViewController.timeText(item.date))
-        cell.onInfo = { Linia2Root.openChat(item.topicName) }
+        cell.onInfo = item.guest != nil ? { [weak self] in
+            self?.navigationController?.pushViewController(Linia2GuestLinksViewController(), animated: true)
+        } : { Linia2Root.openChat(item.topicName) }
         return cell
     }
 
@@ -232,6 +291,11 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
         tableView.deselectRow(at: indexPath, animated: true)
         let item = items[indexPath.row]
         L2.haptic()
+        if item.guest != nil {
+            // Гостю перезвонить нельзя — открыть «Мои ссылки».
+            navigationController?.pushViewController(Linia2GuestLinksViewController(), animated: true)
+            return
+        }
         // Перезвонить тем же типом звонка.
         Linia2Root.openChat(item.topicName, call: item.isVideo ? .video : .audio)
     }
@@ -399,7 +463,8 @@ private final class Linia2CallCell: UITableViewCell {
     }
 
     func configure(item: Linia2CallItem, pub: TheCard?, timeText: String) {
-        let name = (pub?.fn?.isEmpty == false ? pub?.fn : nil) ?? "Неизвестный контакт"
+        var name = (pub?.fn?.isEmpty == false ? pub?.fn : nil) ?? "Неизвестный контакт"
+        if let g = item.guest { name = "🔗 " + g.name }
         nameLabel.text = name
         timeLabel.text = timeText
 
@@ -455,6 +520,9 @@ private final class Linia2CallCell: UITableViewCell {
                 default: break
                 }
             }
+        }
+        if let g = item.guest {
+            text += g.link.isEmpty ? " · по ссылке" : " · по ссылке «\(g.link)»"
         }
         kindIcon.image = L2.symbol(symbol, 15, .semibold)
         kindIcon.tintColor = iconColor

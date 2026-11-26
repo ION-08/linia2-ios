@@ -250,6 +250,7 @@ class UiUtils {
 
     public static func logoutAndRouteToLoginVC() {
         Linia2AppLock.shared.resetOnLogout()
+        Linia2Voip.shared.unregister()   // LINIA2: после выхода звонки на это устройство не приходят
         Cache.log.info("UiUtils - Invalidating cache and logging out.")
         SharedUtils.removeAuthToken()
         Cache.invalidate()
@@ -302,10 +303,9 @@ class UiUtils {
 
     // Returns true if the app is showing the CallVC for the specified topic.
     public static func isShowingCallVC(forTopic topic: String) -> Bool {
-        guard let rootVC = Linia2Root.chatsNavigator() else {
-            return false
-        }
-        return rootVC.viewControllers.contains(where: { ($0 as? CallViewController)?.topic?.name == topic })
+        // LINIA2: экран звонка — модальный и живёт в Linia2CallCenter (может быть свёрнут в плашку).
+        guard let vc = Linia2CallCenter.shared.active else { return false }
+        return vc.topic?.name == topic && vc.viewIfLoaded?.window != nil
     }
 
     public static func routeToMessageVC(forTopic topicId: String, completion: ((MessageViewController?) -> (Void))? = nil) {

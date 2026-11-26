@@ -2382,7 +2382,7 @@
                         <segue destination="ZxW-bT-ZdQ" kind="show" identifier="Messages2TopicInfo" id="IuA-m3-U07"/>
                         <segue destination="a2m-CR-0Zc" kind="show" identifier="ShowImagePreview" id="je5-0n-CJ3"/>
                         <segue destination="ZTN-Oj-COh" kind="show" identifier="ShowFilePreview" id="9mM-mX-cFC"/>
-                        <segue destination="Cib-aE-hH5" kind="show" identifier="Messages2Call" id="IVW-H4-90m"/>
+                        <segue destination="Cib-aE-hH5" kind="presentation" identifier="Messages2Call" modalPresentationStyle="fullScreen" modalTransitionStyle="crossDissolve" id="IVW-H4-90m"/>
                         <segue destination="gfT-SI-43h" kind="show" identifier="ShowVideoPreview" id="Sf1-B5-1DJ"/>
                     </connections>
                 </viewController>

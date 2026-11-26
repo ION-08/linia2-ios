@@ -9,7 +9,7 @@ name: UI tests
 # Загрузка в TestFlight — только вручную (testflight.yml), когда выполнены все задания и e2e прошёл 2 раза подряд.
 on:
   push:
-    branches: [main]
+    branches: [main, calls]   # TEMP calls: проверка сборки ветки звонков — убрать перед вливанием
   workflow_dispatch:
   workflow_call:
     outputs:

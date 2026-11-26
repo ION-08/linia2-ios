@@ -15,6 +15,8 @@
 		656085FF6BACD5541A8FF72C /* Linia2Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83DE4AB614966AF4346B9084 /* Linia2Settings.swift */; };
 		6780B5EBF34258EB9E41DE34 /* Linia2Contacts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA26E52B1337E281CDDE425 /* Linia2Contacts.swift */; };
 		729CCD6B3B916DA92C9AF56E /* Linia2ChatStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68B60F82B15F88CC5E60340D /* Linia2ChatStyle.swift */; };
+		B825D83F8D8AFE987371E249 /* Linia2CallCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE4F4232FE63CEA20092230 /* Linia2CallCenter.swift */; };
+		9245D91E07B5ACCE9DCFB757 /* Linia2GuestLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D2C8A8B69A6BC2C47959CB /* Linia2GuestLinks.swift */; };
 		235AAB905D6A5F2C681BB244 /* Linia2Calls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2297F90730C549B4E30C649B /* Linia2Calls.swift */; };
 		507210AB113F5F7990BA4959 /* Linia2TabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B2FA87504BF1F3EDFDD69D /* Linia2TabBar.swift */; };
 		4E9B6D4E2D1136D729B8E4C4 /* Linia2Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9495154D6AB9C403D137D704 /* Linia2Theme.swift */; };
@@ -208,6 +210,8 @@
 		83DE4AB614966AF4346B9084 /* Linia2Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Settings.swift; sourceTree = "<group>"; };
 		AFA26E52B1337E281CDDE425 /* Linia2Contacts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Contacts.swift; sourceTree = "<group>"; };
 		68B60F82B15F88CC5E60340D /* Linia2ChatStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2ChatStyle.swift; sourceTree = "<group>"; };
+		0DE4F4232FE63CEA20092230 /* Linia2CallCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2CallCenter.swift; sourceTree = "<group>"; };
+		A5D2C8A8B69A6BC2C47959CB /* Linia2GuestLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2GuestLinks.swift; sourceTree = "<group>"; };
 		2297F90730C549B4E30C649B /* Linia2Calls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Calls.swift; sourceTree = "<group>"; };
 		F6B2FA87504BF1F3EDFDD69D /* Linia2TabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2TabBar.swift; sourceTree = "<group>"; };
 		9495154D6AB9C403D137D704 /* Linia2Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Theme.swift; sourceTree = "<group>"; };
@@ -468,6 +472,8 @@
 				AFA26E52B1337E281CDDE425 /* Linia2Contacts.swift */,
 				68B60F82B15F88CC5E60340D /* Linia2ChatStyle.swift */,
 				2297F90730C549B4E30C649B /* Linia2Calls.swift */,
+				A5D2C8A8B69A6BC2C47959CB /* Linia2GuestLinks.swift */,
+				0DE4F4232FE63CEA20092230 /* Linia2CallCenter.swift */,
 				F6B2FA87504BF1F3EDFDD69D /* Linia2TabBar.swift */,
 				9495154D6AB9C403D137D704 /* Linia2Theme.swift */,
 				20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */,
@@ -1033,6 +1039,8 @@
 				6780B5EBF34258EB9E41DE34 /* Linia2Contacts.swift in Sources */,
 				729CCD6B3B916DA92C9AF56E /* Linia2ChatStyle.swift in Sources */,
 				235AAB905D6A5F2C681BB244 /* Linia2Calls.swift in Sources */,
+				9245D91E07B5ACCE9DCFB757 /* Linia2GuestLinks.swift in Sources */,
+				B825D83F8D8AFE987371E249 /* Linia2CallCenter.swift in Sources */,
 				507210AB113F5F7990BA4959 /* Linia2TabBar.swift in Sources */,
 				4E9B6D4E2D1136D729B8E4C4 /* Linia2Theme.swift in Sources */,
 				387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */,

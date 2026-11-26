@@ -53,6 +53,7 @@ enum Linia2Auth {
                     SharedUtils.saveAuthToken(for: login, token: tinode.authToken, expires: tinode.authTokenExpires)
                     if let token = tinode.authToken { tinode.setAutoLoginWithToken(token: token) }
                     Linia2Turn.shared.prefetch()
+                    Linia2Voip.shared.register()
                     DispatchQueue.main.async { completion(nil) }
                     return nil
                 }, onFailure: { err in

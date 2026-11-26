@@ -534,10 +534,23 @@ final class Linia2NotificationsViewController: Linia2GroupedTableViewController 
 // MARK: - Конфиденциальность
 
 final class Linia2PrivacyViewController: Linia2GroupedTableViewController {
+    fileprivate let recentsSwitch = UISwitch()
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        l2CellForRow(tableView, cellForRowAt: indexPath)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Конфиденциальность"
+        recentsSwitch.onTintColor = L2.accentStrong
+        recentsSwitch.isOn = CallProviderDelegate.includesCallsInRecents
+        recentsSwitch.accessibilityIdentifier = "l2.settings.callsInRecents"
+        recentsSwitch.addTarget(self, action: #selector(recentsChanged), for: .valueChanged)
         groups = [
+            Group(header: nil, footer: "Звонки Линии 2.0 появятся в приложении «Телефон» → «Недавние» и синхронизируются с iCloud.", rows: [
+                Row(symbol: "phone.fill", color: L2.hex(0x2FB39A), title: "Показывать звонки в истории iPhone") {},
+            ]),
             Group(header: nil, footer: "PIN-код и Face ID защищают переписку, если телефон попал в чужие руки.", rows: [
                 Row(symbol: "faceid", color: L2.hex(0x2FB39A), title: "Блокировка приложения", subtitle: "PIN-код, Face ID") { [weak self] in
                     self?.navigationController?.pushViewController(Linia2AppLockSettingsViewController(), animated: true)
@@ -549,6 +562,25 @@ final class Linia2PrivacyViewController: Linia2GroupedTableViewController {
                 },
             ]),
         ]
+    }
+}
+
+extension Linia2PrivacyViewController {
+    fileprivate func l2CellForRow(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = super.tableView(tableView, cellForRowAt: indexPath)
+        if indexPath.section == 0 && indexPath.row == 0 {
+            cell.accessoryView = recentsSwitch
+            cell.accessoryType = .none
+            cell.selectionStyle = .none
+        } else {
+            cell.accessoryView = nil
+        }
+        return cell
+    }
+
+    @objc fileprivate func recentsChanged() {
+        CallProviderDelegate.includesCallsInRecents = recentsSwitch.isOn
+        Cache.callManager.callDelegate.applySettings()
     }
 }
 
