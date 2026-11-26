@@ -891,7 +891,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = ""${SRCROOT}/Scripts/crashlytics_upload.sh"\n";
+			shellScript = "\"${SRCROOT}/Scripts/crashlytics_upload.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 		37009181C8B2B0198CE4CBBA /* [CP] Copy Pods Resources */ = {

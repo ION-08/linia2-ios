@@ -26,7 +26,7 @@ on:
         value: ${{ jobs.uitest.outputs.crashed }}
 
 concurrency:
-  group: uitest-${{ github.workflow }}-${{ github.ref }}
+  group: uitest-${{ github.workflow }}-${{ github.ref }}-${{ inputs.design || 'main' }}
   cancel-in-progress: true
 
 jobs:
