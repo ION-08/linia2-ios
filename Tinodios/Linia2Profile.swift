@@ -32,6 +32,10 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
         title = "Профиль"
         navigationItem.largeTitleDisplayMode = .never
         stack.spacing = 12
+        // Под плавающим нижним меню: без запаса снизу «Удалить аккаунт» оказывалась под меню
+        // и не нажималась (прокрутить было некуда — содержимое ровно по высоте экрана).
+        scroll.contentInset.bottom = Linia2TabBarController.reservedBottom
+        scroll.verticalScrollIndicatorInsets.bottom = Linia2TabBarController.reservedBottom
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(textViewBegan(_:)),
                                                name: UITextView.textDidBeginEditingNotification, object: aboutView)
