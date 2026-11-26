@@ -600,4 +600,51 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         if back.exists { back.tap() }
         wait(app.textViews["l2.chat.input"].firstMatch, "возврат в чат", timeout: 10)
     }
+
+    // MARK: - Меню долгого нажатия: реакции в экране, «+» по центру, закрытие
+
+    private func openMenu(on text: String) {
+        labelContains(text).press(forDuration: 1.0)
+        wait(any("l2.menu.reactions"), "панель реакций", timeout: 5)
+    }
+
+    private func assertMenuClosed(_ how: String) {
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: any("l2.menu.reactions"))
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.textViews["l2.chat.input"].firstMatch.exists, "после закрытия (\(how)) нет чата")
+    }
+
+    func testU2_MessageMenuFitsAndCloses() {
+        openPeerChat()
+        let width = app.windows.firstMatch.frame.width
+        let text = "Меню " + Self.stamp
+        send(text)
+        openMenu(on: text)
+        let box = any("l2.menu.reactions")
+        XCTAssertGreaterThanOrEqual(box.frame.minX, 11, "панель реакций вылезает за левый край: \(box.frame)")
+        XCTAssertLessThanOrEqual(box.frame.maxX, width - 11, "панель реакций вылезает за правый край: \(box.frame)")
+        let plus = any("l2.react.more")
+        if plus.exists {
+            XCTAssertLessThanOrEqual(plus.frame.maxX, width - 12, "«+» обрезан справа")
+            XCTAssertLessThan(abs(plus.frame.midY - box.frame.midY), 4, "«+» не по центру панели по вертикали")
+            XCTAssertTrue(box.frame.contains(plus.frame), "«+» не целиком в панели")
+        }
+        screenshot("menu-open")
+        // 1) тап по затемнённому фону
+        any("l2.menu.backdrop").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        assertMenuClosed("тап по фону")
+        // 2) свайп вниз
+        openMenu(on: text)
+        any("l2.menu.backdrop").swipeDown()
+        assertMenuClosed("свайп вниз")
+        // 3) после выбора реакции
+        openMenu(on: text)
+        let first = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'l2.react.' AND identifier != 'l2.react.more' AND identifier != 'l2.react.all'")).firstMatch
+        wait(first, "эмодзи в панели").tap()
+        assertMenuClosed("выбор реакции")
+        // 4) после выбора пункта
+        openMenu(on: text)
+        wait(any("l2.menu.copy"), "«Копировать»").tap()
+        assertMenuClosed("выбор пункта")
+    }
 }
