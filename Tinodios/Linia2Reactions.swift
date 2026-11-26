@@ -295,7 +295,10 @@ final class Linia2MessageMenuViewController: UIViewController {
                 wrap.translatesAutoresizingMaskIntoConstraints = false
                 plus.translatesAutoresizingMaskIntoConstraints = false
                 wrap.addSubview(plus)
+                // Высота обёртки обязательна: в ряду с alignment .center у пустого UIView она 0 —
+                // «+» рисовался за её пределами, не нажимался и не был виден VoiceOver/XCUITest.
                 NSLayoutConstraint.activate([wrap.widthAnchor.constraint(equalToConstant: 48),
+                                             wrap.heightAnchor.constraint(equalToConstant: 48),
                                              plus.centerXAnchor.constraint(equalTo: wrap.centerXAnchor),
                                              plus.centerYAnchor.constraint(equalTo: wrap.centerYAnchor)])
                 items.append(wrap)
