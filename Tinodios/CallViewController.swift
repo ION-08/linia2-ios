@@ -1586,8 +1586,10 @@ extension CallViewController {
         localView.layer.cornerCurve = .continuous
         localView.clipsToBounds = true
         localView.backgroundColor = L2.hex(0x161D2E)
-        localViewWidthConstraint.constant = 108
-        localViewHeightConstraint.constant = 156
+        // Узкие экраны (SE): окно поменьше, чтобы не касаться аватара по центру.
+        let narrow = UIScreen.main.bounds.width < 390
+        localViewWidthConstraint.constant = narrow ? 92 : 108
+        localViewHeightConstraint.constant = narrow ? 132 : 156
         peerNameRemoteVideoLabel.isHidden = true
 
         // Затемнение под кнопками (читаемость поверх видео).
@@ -1702,7 +1704,8 @@ extension CallViewController {
             stateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
 
             localView.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16),
-            localView.bottomAnchor.constraint(equalTo: grid.topAnchor, constant: -28),
+            // Вёрстка: своё видео — справа сверху (как FaceTime/Telegram); внизу оно перекрывало имя собеседника на SE.
+            localView.topAnchor.constraint(equalTo: safe.topAnchor, constant: 16),
 
             grid.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 36),
             grid.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -36),
