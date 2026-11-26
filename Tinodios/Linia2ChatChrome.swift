@@ -158,7 +158,7 @@ extension MessageViewController {
         // Дизайн: подпись «Назад» отнимала место у имени («Диз…» даже на Pro Max, на SE — «‹ …»).
         // Кнопка — круглая «‹» 38×38, как в iOS 26 / Telegram; подпись «Назад» остаётся для VoiceOver и тестов.
         // Вернуть текст на широких экранах: features.chatBackTitle = true в app-config.
-        let compact = (Linia2Config.shared.section("features")["chatBackTitle"] as? Bool) != true
+        let compact = !Linia2Config.shared.feature("chatBackTitle", default: false)
         if !compact { b.setTitle(" " + L2T("l2.chat.back", "Назад"), for: .normal) }
         b.titleLabel?.font = L2.font(16, .medium)
         b.tintColor = L2.accent
