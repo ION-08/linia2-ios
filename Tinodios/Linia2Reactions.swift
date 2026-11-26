@@ -187,6 +187,10 @@ final class Linia2MessageMenuViewController: UIViewController {
     private let moreRow = UIStackView()
     private var reactButtons: [UIButton] = []
     private var listHeight: NSLayoutConstraint?
+    /// Дизайн: верх меню и допустимые границы (меню целиком в экране и над строкой ввода).
+    private var columnTop: NSLayoutConstraint?
+    private var minTop: CGFloat = 0
+    private var maxBottom: CGFloat = 0
     private weak var listHolder: UIView?
 
     init(anchor: CGRect, primary: [String], more: [String], fullList: Bool, selected: Set<String>, actions: [Linia2MenuAction]) {
@@ -401,18 +405,24 @@ final class Linia2MessageMenuViewController: UIViewController {
 
         let safe = view.safeAreaLayoutGuide.layoutFrame.isEmpty ? view.bounds.insetBy(dx: 0, dy: 50) : view.safeAreaLayoutGuide.layoutFrame
         // Список действий не выше экрана (SE, крупный шрифт) — иначе прокрутка.
-        let reactH: CGFloat = primary.isEmpty ? 0 : 66
-        let listMax = max(140, safe.height - 16 - reactH)
+        // Дизайн: строка ввода чата остаётся поверх меню — низ меню держим над ней (~64 pt + зазор).
+        let bottomLimit = safe.maxY - 72
+        minTop = safe.minY + 8
+        maxBottom = bottomLimit
+        let reactH: CGFloat = primary.isEmpty ? 0 : 66 + column.spacing
+        let listMax = max(140, bottomLimit - minTop - reactH)
         let listH = min(CGFloat(actions.count) * 46.5, listMax)
         listHeight?.constant = listH
-        let height = reactH + listH + 4
+        let height = reactH + listH
         var y = anchor.maxY + 8
-        if y + height > safe.maxY - 8 { y = anchor.minY - height - 8 }
-        y = max(safe.minY + 8, min(y, safe.maxY - height - 8))
+        if y + height > bottomLimit { y = anchor.minY - height - 8 }
+        y = max(minTop, min(y, bottomLimit - height))
+        let top = column.topAnchor.constraint(equalTo: view.topAnchor, constant: y)
+        columnTop = top
         NSLayoutConstraint.activate([
             column.widthAnchor.constraint(equalToConstant: width),
             column.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            column.topAnchor.constraint(equalTo: view.topAnchor, constant: y)])
+            top])
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -448,6 +458,18 @@ final class Linia2MessageMenuViewController: UIViewController {
         inner.addArrangedSubview(sc)
         moreRow.tag = 1
         inner.addSubview(moreRow)   // признак, что второй ряд уже показан
+        // Дизайн: второй ряд делает меню выше — сдвигаем вверх, а если не хватает места, укорачиваем список
+        // (раньше «Информация» уходила под строку ввода).
+        view.layoutIfNeeded()
+        var overflow = column.frame.maxY - maxBottom
+        if overflow > 0, let top = columnTop {
+            let up = min(overflow, top.constant - minTop)
+            top.constant -= up
+            overflow -= up
+        }
+        if overflow > 0, let lh = listHeight {
+            lh.constant = max(140, lh.constant - overflow)
+        }
         UIView.animate(withDuration: 0.25) { sc.alpha = 1; self.view.layoutIfNeeded() }
         for b in reactButtons.suffix(more.count) {
             b.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
