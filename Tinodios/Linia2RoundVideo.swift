@@ -299,7 +299,8 @@ extension MessageViewController {
 
     /// Кружок поверх содержимого ячейки.
     func linia2RenderRound(cell: MessageCell, message: Message) {
-        guard !message.isDeleted, let (idx, entity) = Linia2Round.roundEntity(message) else { return }
+        guard !message.isDeleted, let found = Linia2Round.roundEntity(message) else { return }
+        let (idx, entity) = found
         let key = (topicName ?? "t") + "-" + String(message.seqId > 0 ? message.seqId : Int(message.msgId) + 1_000_000_000)
         let v = Linia2RoundVideoView.view(for: key)
         v.removeFromSuperview()
