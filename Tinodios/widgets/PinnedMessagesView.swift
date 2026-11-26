@@ -84,6 +84,11 @@ class PinnedMessagesView: UICollectionReusableView {
             cancel.accessibilityIdentifier = "l2.pinned.unpin"
             cancel.accessibilityLabel = "Открепить"
             cancel.tintColor = L2.textSecondary
+            // Дизайн: значок «×» фиксированного размера — при крупном шрифте он раздувался до 44 pt.
+            cancel.setImage(UIImage(systemName: "xmark.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), for: .normal)
+            let w = cancel.widthAnchor.constraint(equalToConstant: 32)
+            w.priority = .required
+            w.isActive = true
         }
     }
 
