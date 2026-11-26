@@ -281,6 +281,16 @@ class MessageCell: UICollectionViewCell {
         return true
     }
 
+    /// LINIA2: пилюли реакций стоят под пузырём — в отступе между ячейками, за границами ячейки.
+    /// Без этого касание (и проверка доступности XCUITest) до них не доходило: снять/поставить реакцию было нельзя.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if super.point(inside: point, with: event) { return true }
+        if let chips = contentView.viewWithTag(MessageViewController.kL2ChipTag), !chips.isHidden, chips.alpha > 0.01 {
+            return chips.frame.contains(contentView.convert(point, from: self))
+        }
+        return false
+    }
+
     override func resignFirstResponder() -> Bool {
         super.resignFirstResponder()
         return true

@@ -21,7 +21,7 @@ extension MessageViewController {
     static let kL2PrimaryReactions = ["👍", "🤝", "🔥", "✅", "❤️", "👏", "😂", "🙏"]
     static let kL2MoreReactions = ["👎", "❌", "💯", "🤔", "👀", "💰", "🚀", "😮", "😢", "🎉", "⏳", "📌"]
     static let kL2DefaultMessageMenu = ["reply", "copy", "forward", "edit", "pin", "delete", "deleteAll", "report"]
-    private static let kL2ChipTag = 0x4C52
+    static let kL2ChipTag = 0x4C52   // ряд пилюль реакций под пузырём (MessageCell.point(inside:) учитывает его)
 
     /// Первый ряд реакций (reactions.primary; старое reactions.emoji — тоже первый ряд).
     static var l2PrimaryReactions: [String] { Linia2Config.shared.reactionList("primary") ?? Linia2Config.shared.reactionEmoji ?? kL2PrimaryReactions }
