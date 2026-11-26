@@ -286,6 +286,9 @@ class MessageViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(self.linia2DidTakeScreenshot),
             name: UIApplication.userDidTakeScreenshotNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(self.linia2PlaybackChanged),
+            name: Linia2Playback.changed, object: nil)
     }
     private func removeAppStateObservers() {
         NotificationCenter.default.removeObserver(
@@ -483,6 +486,8 @@ class MessageViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         linia2RestorePopGesture()
+        // LINIA2: уход с экрана чата — голосовое и кружок останавливаются.
+        Linia2Playback.shared.stopAll()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -749,6 +754,7 @@ extension MessageViewController: UICollectionViewDataSource {
         linia2RenderReactions(cell: cell, message: message)
         linia2LayoutMetaPill(cell: cell, message: message)
         linia2RenderRound(cell: cell, message: message)
+        linia2LayoutVoicePlay(cell: cell, message: message)
 
         return cell
     }
@@ -1214,6 +1220,16 @@ extension MessageViewController: UICollectionViewDelegate {
             UIView.transition(with: self.goToLatestButton, duration: 0.4, options: .transitionCrossDissolve, animations: {
                 self.goToLatestButton.isHidden = isHidden
             }, completion: nil)
+        }
+    }
+
+    /// LINIA2: кружок ушёл за экран — стоп (если он не переехал в новую ячейку того же сообщения).
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        guard let r = (cell as? MessageCell)?.linia2Round else { return }
+        DispatchQueue.main.async { [weak collectionView, weak r] in
+            guard let r = r, let cv = collectionView else { return }
+            let shown = cv.visibleCells.contains { ($0 as? MessageCell)?.linia2Round === r && r.window != nil }
+            if !shown { r.pause() }
         }
     }
 

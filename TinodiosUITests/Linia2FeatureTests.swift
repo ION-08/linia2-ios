@@ -196,15 +196,19 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         while Date() < end && roundElements().count <= before { usleep(500_000) }
         XCTAssertGreaterThan(roundElements().count, before, "кружок не появился в чате")
         let mine = roundElements().element(boundBy: roundElements().count - 1)
-        let playing = NSPredicate(format: "value CONTAINS 'играет'")
-        expectation(for: playing, evaluatedWith: mine)
+        // Без автозапуска: превью с ▶, «остановлено»; по нажатию — «играет», повторно — «пауза».
+        expectation(for: NSPredicate(format: "value == 'остановлено'"), evaluatedWith: mine)
         waitForExpectations(timeout: 30)
+        sleep(2)
+        XCTAssertFalse((mine.value as? String ?? "").contains("играет"), "кружок запустился сам")
         XCTAssertTrue(mine.label.contains("исчезнет через"), "нет значка «исчезнет через N дн.»: \(mine.label)")
         screenshot("round-sent")
         mine.tap()
-        expectation(for: NSPredicate(format: "value CONTAINS 'со звуком'"), evaluatedWith: mine)
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: mine)
         waitForExpectations(timeout: 10)
-        mine.tap()   // снова без звука
+        mine.tap()
+        expectation(for: NSPredicate(format: "value == 'пауза'"), evaluatedWith: mine)
+        waitForExpectations(timeout: 5)
         rec.tap()    // вернуть микрофон
         sleep(1)
 
@@ -220,13 +224,90 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         XCTAssertNotNil(seq, "собеседник не смог отправить кружок")
         let got = any("l2.round.\(seq ?? -1)")
         wait(got, "полученный кружок", timeout: 30)
-        expectation(for: playing, evaluatedWith: got)
+        expectation(for: NSPredicate(format: "value == 'остановлено'"), evaluatedWith: got)
         waitForExpectations(timeout: 40)
         got.tap()
-        expectation(for: NSPredicate(format: "value CONTAINS 'со звуком'"), evaluatedWith: got)
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: got)
         waitForExpectations(timeout: 10)
         screenshot("round-received-playing")
-        got.tap()
+        // Одновременно — только один кружок: запуск своего ставит полученный на паузу.
+        if mine.isHittable {
+            mine.tap()
+            expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: mine)
+            waitForExpectations(timeout: 10)
+            XCTAssertNotEqual(got.value as? String, "играет", "играют два кружка сразу")
+            mine.tap()
+        } else {
+            got.tap()
+        }
+        // Уход с экрана — стоп.
+        any("l2.chat.back").tap()
+        sleep(1)
+        openChat(with: peerName)
+        let again = any("l2.round.\(seq ?? -1)")
+        if again.waitForExistence(timeout: 10) {
+            XCTAssertNotEqual(again.value as? String, "играет", "кружок играет после ухода с экрана")
+        }
+    }
+
+    // MARK: - Голосовые: одно за другим, никогда одновременно
+
+    /// WAV 8 кГц, 8 бит, моно — тишина заданной длительности (VLC играет без сети).
+    static func silentWav(seconds: Int) -> Data {
+        let rate = 8000, n = rate * seconds
+        var d = Data()
+        func u32(_ v: Int) { var x = UInt32(v).littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func u16(_ v: Int) { var x = UInt16(v).littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        d.append("RIFF".data(using: .ascii)!); u32(36 + n); d.append("WAVE".data(using: .ascii)!)
+        d.append("fmt ".data(using: .ascii)!); u32(16); u16(1); u16(1); u32(rate); u32(rate); u16(1); u16(8)
+        d.append("data".data(using: .ascii)!); u32(n)
+        d.append(Data(repeating: 0x80, count: n))
+        return d
+    }
+
+    static func voiceDrafty(seconds: Int) -> [String: Any] {
+        let bars = Data((0..<48).map { UInt8(20 + ($0 * 37) % 80) })
+        return ["txt": " ", "fmt": [["at": -1, "len": 0, "key": 0]],
+                "ent": [["tp": "AU", "data": ["mime": "audio/wav", "name": "voice.wav", "duration": seconds * 1000,
+                                               "val": silentWav(seconds: seconds).base64EncodedString(),
+                                               "preview": bars.base64EncodedString()]]]]
+    }
+
+    func testM1_VoiceOneAtATimeAutoNext() throws {
+        openPeerChat()
+        let (b, topic) = try peer()
+        let s1 = b.publish(topic, content: Self.voiceDrafty(seconds: 3), head: ["mime": "text/x-drafty"])
+        let s2 = b.publish(topic, content: Self.voiceDrafty(seconds: 5), head: ["mime": "text/x-drafty"])
+        XCTAssertNotNil(s1, "собеседник не отправил голосовое 1")
+        XCTAssertNotNil(s2, "собеседник не отправил голосовое 2")
+        let v1 = wait(any("l2.voice.\(s1 ?? -1)"), "голосовое 1 в ленте", timeout: 30)
+        let v2 = wait(any("l2.voice.\(s2 ?? -1)"), "голосовое 2 в ленте", timeout: 30)
+        XCTAssertEqual(v1.value as? String, "не играет")
+        screenshot("voice-two")
+        v1.tap()
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: v1)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(v2.value as? String, "не играет", "при запуске первого играет и второе")
+        // Дослушали первое — автоматически второе; одновременно — никогда.
+        let end = Date().addingTimeInterval(20)
+        var both = false
+        while Date() < end && (v2.value as? String) != "играет" {
+            if (v1.value as? String) == "играет" && (v2.value as? String) == "играет" { both = true }
+            usleep(200_000)
+        }
+        XCTAssertFalse(both, "два голосовых играли одновременно")
+        XCTAssertEqual(v2.value as? String, "играет", "после первого не запустилось следующее голосовое")
+        XCTAssertEqual(v1.value as? String, "не играет", "первое не остановилось")
+        screenshot("voice-auto-next")
+        // Запуск другого останавливает текущее.
+        v1.tap()
+        expectation(for: NSPredicate(format: "value == 'играет'"), evaluatedWith: v1)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(v2.value as? String, "не играет", "запуск первого не остановил второе")
+        // Повторное нажатие — пауза.
+        v1.tap()
+        expectation(for: NSPredicate(format: "value == 'не играет'"), evaluatedWith: v1)
+        waitForExpectations(timeout: 5)
     }
 
     // MARK: - Самоуничтожение: включить → отправить → прочитали → исчезло

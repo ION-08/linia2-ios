@@ -495,3 +495,73 @@ extension MessageViewController: PinnedMessagesDelegate {
         present(sheet, animated: true)
     }
 }
+
+// MARK: - LINIA2: голосовые — одно за другим, как в Telegram
+
+extension MessageViewController {
+    /// Индекс сущности AU в сообщении.
+    func linia2VoiceKey(_ m: Message) -> Int? {
+        guard !m.isDeleted else { return nil }
+        return m.content?.entities?.firstIndex(where: { $0.tp == "AU" })
+    }
+
+    /// Дослушали голосовое seq — запустить следующее голосовое ниже (если есть).
+    func linia2PlayNextVoice(after seq: Int) {
+        guard view.window != nil, let i = messageSeqIdIndex[seq], i + 1 < messages.count else { return }
+        for j in (i + 1)..<messages.count {
+            let m = messages[j]
+            guard let key = linia2VoiceKey(m) else { continue }
+            let path = IndexPath(item: j, section: 0)
+            if collectionView.cellForItem(at: path) == nil {
+                collectionView.scrollToItem(at: path, at: .centeredVertically, animated: false)
+                collectionView.layoutIfNeeded()
+            }
+            let next = m.seqId
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.view.window != nil,
+                      let idx = self.messageSeqIdIndex[next],
+                      let cell = self.collectionView.cellForItem(at: IndexPath(item: idx, section: 0)) as? MessageCell,
+                      cell.seqId == next else { return }
+                self.didTapContent(in: cell, url: URL(string: "tinode:///audio/toggle-play?key=\(key)"))
+            }
+            return
+        }
+    }
+
+    /// Область кнопки ▶ голосового в ячейке (VoiceOver, автотесты); значение — «играет» / «не играет».
+    func linia2LayoutVoicePlay(cell: MessageCell, message: Message) {
+        guard linia2VoiceKey(message) != nil, let text = cell.content.attributedText, text.length > 0 else {
+            cell.linia2VoicePlay.isHidden = true
+            return
+        }
+        var rect = CGRect(x: 0, y: 0, width: 36, height: 36)
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length), options: []) { v, range, stop in
+            guard let a = v as? EntityTextAttachment, a.type == "audio/toggle-play" else { return }
+            let lm = cell.content.layoutManager
+            let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var r = lm.boundingRect(forGlyphRange: glyphs, in: cell.content.textContainer)
+            r.origin.x += cell.content.textContainerInset.left
+            r.origin.y += cell.content.textContainerInset.top
+            if r.width > 0 && r.height > 0 { rect = r }
+            stop.pointee = true
+        }
+        let inContainer = cell.content.convert(rect, to: cell.containerView).insetBy(dx: -4, dy: -4)
+        cell.linia2VoicePlay.frame = inContainer
+        cell.linia2VoicePlay.isHidden = false
+        cell.linia2VoicePlay.accessibilityIdentifier = "l2.voice.\(message.seqId)"
+        cell.containerView.bringSubviewToFront(cell.linia2VoicePlay)
+        linia2UpdateVoiceValue(cell)
+    }
+
+    func linia2UpdateVoiceValue(_ cell: MessageCell) {
+        let on = Linia2Playback.shared.isVoicePlaying(seq: cell.seqId)
+        cell.linia2VoicePlay.accessibilityValue = on ? "играет" : "не играет"
+        cell.linia2VoicePlay.accessibilityHint = on ? "Пауза" : "Прослушать"
+    }
+
+    @objc func linia2PlaybackChanged() {
+        for case let cell as MessageCell in collectionView.visibleCells where !cell.linia2VoicePlay.isHidden {
+            linia2UpdateVoiceValue(cell)
+        }
+    }
+}
