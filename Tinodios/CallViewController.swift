@@ -667,6 +667,8 @@ class CallViewController: UIViewController {
     private var uiTimer: Timer?
     private var lastStats: (lost: Double, received: Double)?
     private var lastStatsPoor = false
+    private var micDenied = false
+    private var cameraDenied = false
     let stateLabel = UILabel()
     let flipButton = UIButton(type: .system)
     let backButton = UIButton(type: .system)
@@ -752,23 +754,48 @@ class CallViewController: UIViewController {
         started = true
         loadViewIfNeeded()
         self.permissionsCheck { result in
-            switch result {
-            case .ok:
-                DispatchQueue.main.async { self.setupCaptureSessionAndStartCall() }
-            case .micDenied:
-                Cache.log.error("No permission to access microphone")
-                DispatchQueue.main.async {
-                    UiUtils.showToast(message: "Нет доступа к микрофону. Разрешите его в Настройках iPhone.")
-                    self.handleCallClose()
+            DispatchQueue.main.async {
+                switch result {
+                case .ok:
+                    break
+                case .micDenied:
+                    // Звонок не обрываем: собеседник вас не слышит, пока не разрешите микрофон.
+                    Cache.log.error("No permission to access microphone")
+                    self.micDenied = true
+                    self.linia2PermissionHint("Нет доступа к микрофону — собеседник вас не слышит. Разрешите доступ в Настройках iPhone.")
+                case .cameraDenied:
+                    // Видео без своей камеры: собеседника видно, вас — нет.
+                    Cache.log.error("No permission to access camera")
+                    self.cameraDenied = true
+                    self.linia2PermissionHint("Нет доступа к камере — собеседник вас не видит. Разрешите доступ в Настройках iPhone.")
                 }
-            case .cameraDenied:
-                Cache.log.error("No permission to access camera")
-                DispatchQueue.main.async {
-                    UiUtils.showToast(message: "Нет доступа к камере. Разрешите её в Настройках iPhone.")
-                    self.handleCallClose()
-                }
+                self.setupCaptureSessionAndStartCall()
             }
         }
+    }
+
+    /// Подсказка о доступе (звонок продолжается) с кнопкой «Настройки».
+    private func linia2PermissionHint(_ text: String) {
+        let hint = UIButton(type: .system)
+        hint.setTitle(text + " Открыть Настройки", for: .normal)
+        hint.titleLabel?.numberOfLines = 0
+        hint.titleLabel?.textAlignment = .center
+        hint.titleLabel?.font = L2.font(14, .medium)
+        hint.setTitleColor(.white, for: .normal)
+        hint.backgroundColor = L2.hex(0xB5462F, 0.92)
+        hint.layer.cornerRadius = 14
+        hint.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+        hint.accessibilityIdentifier = "l2.call.permissionHint"
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        hint.addAction(UIAction { _ in
+            if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+        }, for: .touchUpInside)
+        view.addSubview(hint)
+        NSLayoutConstraint.activate([
+            hint.topAnchor.constraint(equalTo: stateLabel.bottomAnchor, constant: 14),
+            hint.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            hint.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
+        ])
     }
 
     // MARK: Кнопки
@@ -835,7 +862,7 @@ class CallViewController: UIViewController {
 
     private func setupCaptureSessionAndStartCall() {
         cameraManager.setupCamera()
-        if (!self.isAudioOnlyCall) {
+        if !self.isAudioOnlyCall && !cameraDenied {
             cameraManager.startCapture()
         }
         setupViews()
