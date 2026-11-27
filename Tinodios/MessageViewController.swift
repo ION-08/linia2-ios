@@ -1082,6 +1082,11 @@ extension MessageViewController: MessageViewLayoutDelegate {
         attr.contentFrame = CGRect(x: contentInset.left, y: contentInset.top, width: attr.containerFrame.width - contentInset.left - contentInset.right, height: attr.containerFrame.height - contentInset.top - contentInset.bottom - (showUploadProgress ? Constants.kProgressViewHeight : 0))
 
         var rightEdge = CGPoint(x: attr.containerFrame.width - Constants.kDeliveryMarkerPadding, y: attr.containerFrame.height - Constants.kDeliveryMarkerSize)
+        if linia2IsPureMedia(message) {
+            // Дизайн: время на снимке — плашкой внутри, а не на срезе края пузыря.
+            rightEdge.x -= 6
+            rightEdge.y -= 10
+        }
         if isOutgoing && !isCentered {
             rightEdge.x -= Constants.kDeliveryMarkerSize
             attr.deliveryMarkerFrame = CGRect(x: rightEdge.x, y: rightEdge.y, width: Constants.kDeliveryMarkerSize, height: Constants.kDeliveryMarkerSize)
@@ -1238,6 +1243,14 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // FIXME: storedMessage may contain an image surrounded by text. In such cases,
         // size calculations may be wrong. Handle it.
         if storedMessage.isVisualMedia {
+            // Дизайн: фото без подписи — размер ровно по снимку (строка текста добавляла полосу снизу).
+            if linia2IsPureMedia(message) {
+                var imageSize: CGSize?
+                attributedText.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributedText.length)) { v, _, stop in
+                    if let a = v as? NSTextAttachment, a.bounds.width > 0 { imageSize = a.bounds.size; stop.pointee = true }
+                }
+                if let sz = imageSize { return CGSize(width: ceil(sz.width), height: ceil(sz.height)) }
+            }
             return attributedText.boundingRect(with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
                                                options: [.usesLineFragmentOrigin, .usesFontLeading],
                                                context: nil).integral.size
