@@ -192,7 +192,11 @@ final class Linia2CallDiag {
             func n(_ k: String) -> Double { (s[k] as? NSNumber)?.doubleValue ?? 0 }
             var ev: [String: Any] = ["type": "stats", "engine": "web", "arx": Int(n("aIn")), "atx": Int(n("aOut")),
                                      "vrx": Int(n("vIn")), "vtx": Int(n("vOut")), "alevel": n("level"), "llevel": n("micLevel"),
-                                     "lost": Int(n("lost")), "rtt": Int(n("rtt") * 1000), "lt": (s["pair"] as? String) ?? "?"]
+                                     "lost": Int(n("lost")), "rtt": Int(n("rtt") * 1000), "lt": (s["pair"] as? String) ?? "?",
+                                     "akind": (s["aKind"] as? String) ?? "", "ein": n("energyIn"),
+                                     "aout": AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none",
+                                     "ain": AVAudioSession.sharedInstance().currentRoute.inputs.first?.portType.rawValue ?? "none",
+                                     "acat": AVAudioSession.sharedInstance().category.rawValue]
             for (k, v) in rtcState { ev[k] = v }
             ev["ice"] = client.iceStateName
             for (k, v) in stateProvider?() ?? [:] { ev[k] = v }

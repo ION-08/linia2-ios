@@ -174,6 +174,14 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
         if !Linia2CallCenter.hasExternalOutput() {
             try? audioSession.overrideOutputAudioPort(audioOnly ? .none : .speaker)
         }
+        CallManager.linia2AudioActive = true
+        if CallManager.linia2WebAudio {
+            // Вариант Б: звук ведёт WebKit — RTCAudioSession не трогаем; странице — «звук включён» (play, проверка микрофона).
+            Linia2CallCenter.shared.active?.diag?.add(["type": "audio", "state": "activated", "engine": "web",
+                                                       "route": audioSession.currentRoute.outputs.first?.portType.rawValue ?? "none"])
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallAudioActivated, object: nil) }
+            return
+        }
         let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidActivate(audioSession)
         rtc.isAudioEnabled = true
@@ -182,6 +190,12 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        CallManager.linia2AudioActive = false
+        if CallManager.linia2WebAudio {
+            Linia2CallCenter.shared.active?.diag?.add(["type": "audio", "state": "deactivated", "engine": "web"])
+            CallManager.linia2WebAudio = false   // звонок на WKWebView закончился
+            return
+        }
         let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidDeactivate(audioSession)
         rtc.isAudioEnabled = false
