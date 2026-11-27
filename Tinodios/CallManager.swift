@@ -294,6 +294,14 @@ class CallManager {
             let timeout = (tinode.getServerParam(for: "callTimeout")?.asInt() ?? CallManager.kCallTimeout) + 5
             self.timer = self.makeCallTimeoutTimer(withDeadline: TimeInterval(timeout))
             DispatchQueue.main.async {
+                // Автотест «ответ из фона» (L2_TEST_BG_ANSWER): приложение не активно — принять сразу, как CallKit.
+                if Linia2TestHook.bgAnswer && UIApplication.shared.applicationState != .active {
+                    Linia2TestProbe.incomingShown += 1
+                    Linia2TestProbe.bgAnswers += 1
+                    CallManager.activateAudioSession(withSpeaker: !audioOnly)
+                    _ = self.acceptPendingCall()
+                    return
+                }
                 let alert = UIAlertController(title: "Входящий звонок",
                                               message: isGuestCall && guestInfo != nil ? Linia2GuestLinks.incomingText(guestInfo!) : senderName,
                                               preferredStyle: .alert)

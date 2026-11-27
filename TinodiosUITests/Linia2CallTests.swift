@@ -576,3 +576,98 @@ final class Linia2CallPeerTests: Linia2CallTestBase {
         assertInCallLog(name: env["L2_A_NAME"] ?? "Тест CI", video: false, what)
     }
 }
+
+// MARK: - Гость по ссылке → приложение iOS (ci/web-tests/guest-to-ios.mjs)
+//
+// Владелец ссылки — пользователь A (L2_LOGIN); веб-скрипт создаёт аудиоссылку, headless Chrome (гость) звонит по ней.
+// Синхронизация — $L2_SYNC_DIR: guest-ready-N (iOS готов) → гость звонит → guest-connected-N (ICE у гостя) →
+// ios-phase-N (iOS проверил у себя) → iOS кладёт трубку. Сценарии:
+//   1 — приложение на экране: входящий (алерт под -l2-uitest) → «Принять» → движок по серверному флагу;
+//   2 — приложение в фоне (Home перед звонком): CallKit в симуляторе нет — крючок L2_TEST_BG_ANSWER принимает
+//       звонок сразу, как «Ответить» CallKit на заблокированном экране; разговор на нативном движке (native-bg),
+//       соединяется в фоне; потом приложение открывается — звук в обе стороны, перехода нет;
+//   3 — то же + L2_FORCE_WEB_SWITCH: после выхода на экран переход «нативный → WKWebView» посреди звонка
+//       (новое соединение, offer/answer заново по той же сигнализации) — ICE нового соединения и звук в обе стороны.
+final class Linia2GuestLinkCallTests: Linia2CallTestBase {
+    private func login() { ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD")) }
+
+    /// Ждать файл синхронизации от гостя (метка не раньше `after`).
+    private func waitSync(_ name: String, after: Date, timeout: TimeInterval) -> Date? {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if let d = syncRead(name), d >= after.addingTimeInterval(-1) { return d }
+            usleep(500_000)
+        }
+        return nil
+    }
+
+    /// Соединено, звук в обе стороны; затем гость перепроверяет у себя, и трубку кладёт iOS.
+    private func finishCall(_ n: Int, _ what: String) {
+        let end = Date().addingTimeInterval(40)
+        while connectedSeconds() == nil && any("l2.call.hangup").exists && Date() < end { usleep(300_000) }
+        XCTAssertNotNil(connectedSeconds(), "\(what): не соединилось (\(callStateLabel))")
+        let dt = waitAudioBothWays(timeout: 25)
+        let b = audioBytes()
+        screenshot(dt == nil ? "нет-звука" : "audio-both-ways")
+        XCTAssertNotNil(dt, "\(what): нет звука в обе стороны (\(callStateLabel), \(b.map { "rx=\($0.rx) tx=\($0.tx)" } ?? "нет байтов"))")
+        syncWrite("ios-phase-\(n)", Date())
+        sleep(9)   // гость перепроверяет ICE и байты у себя
+        XCTAssertNotNil(connectedSeconds(), "\(what): звонок оборвался во время проверки гостя (\(callStateLabel))")
+        hangUp(what)
+    }
+
+    func test1_GuestToIOSForeground() {
+        let what = "гость по ссылке → iOS (на экране)"
+        login()
+        tab("l2.tab.chats").tap()
+        syncWrite("guest-ready-1", Date())
+        acceptIncoming(timeout: 240)
+        note("\(what): движок \(callHook("eng")["eng"] ?? -1) (1 — нативный, 2 — WKWebView)")
+        finishCall(1, what)
+    }
+
+    func test2_GuestToIOSBackgroundNative() { background(2, forceSwitch: false) }
+    func test3_GuestToIOSBackgroundSwitchToWeb() { background(3, forceSwitch: true) }
+
+    private func background(_ n: Int, forceSwitch: Bool) {
+        let what = forceSwitch ? "гость по ссылке → iOS (в фоне → переход на WKWebView)" : "гость по ссылке → iOS (в фоне, нативный движок)"
+        app.launchEnvironment["L2_TEST_BG_ANSWER"] = "1"
+        if forceSwitch { app.launchEnvironment["L2_FORCE_WEB_SWITCH"] = "1" }
+        login()
+        tab("l2.tab.chats").tap()
+        sleep(2)
+        XCUIDevice.shared.press(.home)
+        sleep(1)
+        let ready = Date()
+        syncWrite("guest-ready-\(n)", ready)
+        // Ответ уходит в фоне, нативный движок соединяется в фоне (ICE у гостя — guest-connected).
+        let connected = waitSync("guest-connected-\(n)", after: ready, timeout: 75)
+        note("\(what): ICE у гостя, пока приложение в фоне: " + (connected.map { String(format: "%.1f с", $0.timeIntervalSince(ready)) } ?? "нет за 75 с"))
+        sleep(3)
+        app.activate()
+        dismissSpringboardAlerts()
+        // Звонок пришёл уже после открытия (фоновая задача истекла) — принять алерт, сценарий не тот, но звонок проверим.
+        let alert = app.alerts["Входящий звонок"].firstMatch
+        if alert.waitForExistence(timeout: 2) { screenshot("incoming-after-activate"); alert.buttons["Принять"].tap() }
+        wait(any("l2.call.state"), "экран звонка после открытия приложения", timeout: 20)
+        screenshot("activated")
+        if forceSwitch {
+            // Переход: через ~2 с после выхода на экран — новое соединение WKWebView, ICE connected.
+            let end = Date().addingTimeInterval(30)
+            var h = callHook("switch")
+            while ((h["wsw"] ?? 0) < 1 || (h["wswice"] ?? -1) < 0) && Date() < end { sleep(1); h = callHook("switch") }
+            note("\(what): переходов \(h["wsw"] ?? -1), ICE после перехода через \(h["wswice"] ?? -1) мс, движок \(h["eng"] ?? -1)")
+            XCTAssertGreaterThanOrEqual(h["wsw"] ?? 0, 1, "\(what): перехода на WKWebView не было")
+            XCTAssertGreaterThanOrEqual(h["wswice"] ?? -1, 0, "\(what): после перехода ICE нового соединения не connected за 30 с")
+            XCTAssertEqual(h["eng"] ?? -1, 2, "\(what): движок после перехода не WKWebView")
+            sleep(3)   // статистика страницы (раз в 2 с)
+        }
+        let h = callHook("bg")
+        note("\(what): ответов из фона \(h["bga"] ?? -1), native-bg \(h["nbg"] ?? -1), движок \(h["eng"] ?? -1)")
+        finishCall(n, what)
+        XCTAssertGreaterThanOrEqual(h["bga"] ?? 0, 1, "\(what): звонок не был принят в фоне (крючок L2_TEST_BG_ANSWER)")
+        XCTAssertGreaterThanOrEqual(h["nbg"] ?? 0, 1, "\(what): в фоне не выбран нативный движок сразу (native-bg)")
+        XCTAssertNotNil(connected, "\(what): пока приложение в фоне, соединение не установилось (guest-connected)")
+        if !forceSwitch { XCTAssertEqual(callHook("end")["wsw"] ?? -1, 0, "\(what): лишний переход на WKWebView при соединённом нативном") }
+    }
+}
