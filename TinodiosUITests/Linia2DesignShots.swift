@@ -204,6 +204,22 @@ final class Linia2DesignShots: Linia2CallTestBase {
             goBack()
         }
 
+        // Заставка запуска: бегущий импульс по кардиограмме, кадр из середины цикла
+        // (-l2-splash-hold: держится 6 с, анимация остановлена на 0,6 с из 1,2 с).
+        app.terminate()
+        app.launchArguments += ["-l2-splash-hold"]
+        app.launch()
+        if any("l2.splash").waitForExistence(timeout: 5) {
+            usleep(500_000)
+            let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            a.name = "design-launch-pulse"
+            a.lifetime = .keepAlways
+            add(a)
+        } else {
+            shot("launch", "pulse-notfound")
+        }
+        app.launchArguments.removeAll { $0 == "-l2-splash-hold" }
+
         // PIN при повторном запуске.
         app.terminate()
         app.launch()
