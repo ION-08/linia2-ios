@@ -358,7 +358,10 @@ class CallManager {
         if let cur = callInProgress, cur.topic == topic, cur.seq == seq || seq <= 0 {
             Linia2EndedCalls.mark(topic, cur.seq)
             reportToSystem(uuid: cur.uuid, topic: topic, handle: name, audioOnly: cur.audioOnly) { _ in
-                if !self.currentCallIsOutgoing {
+                if cur.accepted || self.currentCallIsOutgoing {
+                    // LINIA2: «отбой» по уже принятому / исходящему звонку — завершить и его (раньше только неотвеченный).
+                    self.endCallInProgressRemotely(topic: cur.topic, seq: cur.seq, why: "voip-" + (event.isEmpty ? "end" : event))
+                } else {
                     self.dismissIncomingCall(onTopic: cur.topic, withSeqId: cur.seq)
                 }
                 completion()
