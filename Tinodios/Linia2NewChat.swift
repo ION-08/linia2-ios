@@ -496,7 +496,7 @@ final class Linia2NewChatViewController: UIViewController, UITableViewDataSource
 
     private func loadContacts() {
         let topics = Cache.tinode.getFilteredTopics(filter: { (t: TopicProto) in
-            t.topicType == .p2p && !t.deleted && t.isJoiner
+            t.topicType == .p2p && !t.deleted && t.isJoiner && Linia2Horizon.isVisible(t)
         }) ?? []
         contacts = topics.compactMap { $0 as? DefaultComTopic }
             .map { Linia2NewChatViewController.person(from: $0) }

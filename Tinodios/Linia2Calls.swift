@@ -521,7 +521,7 @@ private final class Linia2CallContactPicker: UITableViewController {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "c")
         navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .cancel, target: self, action: #selector(cancel))
 
-        topics = (Cache.tinode.getFilteredTopics(filter: { $0.topicType == .p2p && !$0.isBlocked }) ?? [])
+        topics = (Cache.tinode.getFilteredTopics(filter: { $0.topicType == .p2p && !$0.isBlocked && Linia2Horizon.isVisible($0) }) ?? [])
             .compactMap { $0 as? DefaultComTopic }
         if topics.isEmpty {
             tableView.backgroundView = l2EmptyState("Нет контактов", "Начните чат с кем-нибудь, чтобы позвонить", symbol: "person.2")

@@ -10,6 +10,7 @@
 		9CE5CE763666556D89E1ED2A /* Linia2Report.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBAECFCEC38A1354A855B9F /* Linia2Report.swift */; };
 		4C32B0A1C0DE000000000006 /* Linia2RoundVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE000000000005 /* Linia2RoundVideo.swift */; };
 		4C32B0A1C0DE000000000004 /* Linia2Burn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE000000000003 /* Linia2Burn.swift */; };
+		4C32B0A1C0DE0000000000D8 /* Linia2WipeExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D7 /* Linia2WipeExecutor.swift */; };
 		4C32B0A1C0DE0000000000D6 /* Linia2Wipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D5 /* Linia2Wipe.swift */; };
 		4C32B0A1C0DE0000000000D4 /* Linia2Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D3 /* Linia2Storage.swift */; };
 		4C32B0A1C0DE0000000000A2 /* Linia2ChatChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000A1 /* Linia2ChatChrome.swift */; };
@@ -216,6 +217,7 @@
 		0DBAECFCEC38A1354A855B9F /* Linia2Report.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Report.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE000000000005 /* Linia2RoundVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2RoundVideo.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE000000000003 /* Linia2Burn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Burn.swift; sourceTree = "<group>"; };
+		4C32B0A1C0DE0000000000D7 /* Linia2WipeExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2WipeExecutor.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000D5 /* Linia2Wipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Wipe.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000D3 /* Linia2Storage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Storage.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000A1 /* Linia2ChatChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2ChatChrome.swift; sourceTree = "<group>"; };
@@ -488,6 +490,7 @@
 				0DBAECFCEC38A1354A855B9F /* Linia2Report.swift */,
 				4C32B0A1C0DE000000000005 /* Linia2RoundVideo.swift */,
 				4C32B0A1C0DE000000000003 /* Linia2Burn.swift */,
+				4C32B0A1C0DE0000000000D7 /* Linia2WipeExecutor.swift */,
 				4C32B0A1C0DE0000000000D5 /* Linia2Wipe.swift */,
 				4C32B0A1C0DE0000000000D3 /* Linia2Storage.swift */,
 				4C32B0A1C0DE0000000000A1 /* Linia2ChatChrome.swift */,
@@ -1091,6 +1094,7 @@
 				9CE5CE763666556D89E1ED2A /* Linia2Report.swift in Sources */,
 				4C32B0A1C0DE000000000006 /* Linia2RoundVideo.swift in Sources */,
 				4C32B0A1C0DE000000000004 /* Linia2Burn.swift in Sources */,
+				4C32B0A1C0DE0000000000D8 /* Linia2WipeExecutor.swift in Sources */,
 				4C32B0A1C0DE0000000000D6 /* Linia2Wipe.swift in Sources */,
 				4C32B0A1C0DE0000000000D4 /* Linia2Storage.swift in Sources */,
 				4C32B0A1C0DE0000000000A2 /* Linia2ChatChrome.swift in Sources */,

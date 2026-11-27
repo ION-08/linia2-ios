@@ -99,7 +99,7 @@ public class Utils {
 
     public static func fetchTopics(archived: Bool) -> [DefaultComTopic]? {
         return Cache.tinode.getFilteredTopics(filter: {(topic: TopicProto) in
-            return topic.topicType.matches(TopicType.user) && topic.isArchived == archived && topic.isJoiner
+            return topic.topicType.matches(TopicType.user) && topic.isArchived == archived && topic.isJoiner && Linia2Horizon.isVisible(topic)
         })?.map {
             // Must succeed.
             $0 as! DefaultComTopic

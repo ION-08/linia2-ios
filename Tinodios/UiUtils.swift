@@ -288,6 +288,8 @@ class UiUtils {
 
     public static func logoutAndRouteToLoginVC() {
         Linia2AppLock.shared.resetOnLogout()
+        Linia2WipeStore.forgetCode()   // настройка принадлежит пользователю
+        Linia2WipeStore.failures = 0
         Linia2Voip.shared.unregister()   // LINIA2: после выхода звонки на это устройство не приходят
         Cache.log.info("UiUtils - Invalidating cache and logging out.")
         SharedUtils.removeAuthToken()

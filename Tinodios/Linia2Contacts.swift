@@ -225,7 +225,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
 
     private func reload() {
         let topics = Cache.tinode.getFilteredTopics(filter: { (t: TopicProto) in
-            t.topicType == .p2p && !t.deleted && t.isJoiner
+            t.topicType == .p2p && !t.deleted && t.isJoiner && Linia2Horizon.isVisible(t)
         }) ?? []
         allTopics = topics.compactMap { $0 as? DefaultComTopic }
         applyFilter()

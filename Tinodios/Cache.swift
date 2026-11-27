@@ -41,6 +41,18 @@ class Cache {
             Cache.shared.tinodeInstance = nil
         }
     }
+    /// LINIA2: стирание данных — отключить и забыть экземпляр Tinode БЕЗ выхода на сервере
+    /// (токен и FCM-токен остаются: приложение переподключится с пустой базой).
+    public static func resetForWipe() {
+        Cache.shared.queue.sync {
+            if let t = Cache.shared.tinodeInstance {
+                t.remoteAllListeners()
+                t.disconnect()
+                Cache.shared.tinodeInstance = nil
+            }
+        }
+        Cache.shared.timer.suspend()
+    }
     public static func isContactSynchronizerActive() -> Bool {
         return Cache.shared.timer.state == .resumed
     }
@@ -91,7 +103,7 @@ class Cache {
             return 0
         }
         return topics.reduce(into: 0, { result, topic in
-            result += topic.isReader && !topic.isMuted ? topic.unread : 0
+            result += topic.isReader && !topic.isMuted && Linia2Horizon.isVisible(topic) ? topic.unread : 0
         })
     }
 

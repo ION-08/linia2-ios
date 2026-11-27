@@ -104,6 +104,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2Theme.apply(to: window)
         // LINIA2: блокировка приложения PIN-кодом (Face ID отключён).
         Linia2AppLock.shared.start()
+        Linia2WipeExecutor.install()
         Linia2WipeSync.shared.start()
 
         let baseDb = BaseDb.sharedInstance
@@ -134,6 +135,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             reachability.start(queue: DispatchQueue.global(qos: .background))
             reachability.pathUpdateHandler = { path in
                 let tinode = Cache.tinode
+                if path.status == .satisfied { Linia2WipeExecutor.flush() }   // LINIA2: неотправленные отчёты
                 if path.status == .satisfied, !tinode.isConnected {
                     Cache.log.info("NWPathMonitor: network available - reconnecting")
                     tinode.reconnectNow(interactively: false, reset: false)

@@ -20,7 +20,7 @@ class ArchivedChatsTableViewController: UITableViewController {
 
     private func reloadData() {
         self.topics = Cache.tinode.getFilteredTopics(filter: {(topic: TopicProto) in
-            return topic.topicType.matches(TopicType.user) && topic.isArchived && topic.isJoiner
+            return topic.topicType.matches(TopicType.user) && topic.isArchived && topic.isJoiner && Linia2Horizon.isVisible(topic)
         })?.map {
             // Must succeed.
             $0 as! DefaultComTopic
