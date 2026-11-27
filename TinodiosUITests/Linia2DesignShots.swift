@@ -106,7 +106,14 @@ final class Linia2DesignShots: Linia2CallTestBase {
         for (mark, state) in marks {
             if scrollTo(labelContains(mark)) {
                 // Метка — над содержимым: сдвинуть, чтобы содержимое было в кадре.
-                app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+                // Метку — к верху ленты (под шапку), чтобы содержимое под ней целиком было в кадре.
+                let m = labelContains(mark)
+                if m.exists {
+                    m.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                        .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)))
+                } else {
+                    app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+                }
                 sleep(1)
                 if !labelContains(mark).isHittable { _ = scrollTo(labelContains(mark), attempts: 3) }
                 shot("chat", state)
