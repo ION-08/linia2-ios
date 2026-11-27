@@ -201,6 +201,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
+          # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
+          for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
           if [ -z "$XR" ]; then
             # `xcodebuild test` не оставляет .xctestrun — дособираем для test-without-building (продукты уже собраны, быстро).
@@ -250,6 +252,8 @@ jobs:
         run: |
           set -o pipefail
           OUT="$RUNNER_TEMP/out/calls"; mkdir -p "$OUT/web"
+          # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
+          for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
           if [ -z "$XR" ]; then
             # `xcodebuild test` не оставляет .xctestrun — дособираем для test-without-building (продукты уже собраны, быстро).
