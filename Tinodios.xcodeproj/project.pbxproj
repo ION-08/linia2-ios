@@ -30,6 +30,8 @@
 		4E9B6D4E2D1136D729B8E4C4 /* Linia2Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9495154D6AB9C403D137D704 /* Linia2Theme.swift */; };
 		387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */; };
 		A8B8E15FA8E4A59F7FFF758B /* Linia2Turn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18572233191F3D4D0A49B213 /* Linia2Turn.swift */; };
+		A1B2C3D4E5F60718293A4B01 /* Linia2WebCallEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B02 /* Linia2WebCallEngine.swift */; };
+		A1B2C3D4E5F60718293A4B03 /* linia2-call.html in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B04 /* linia2-call.html */; };
 		6776A1BEBBD9582FF686DABE /* Linia2Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BC684DF14089B05276DFE9 /* Linia2Diagnostics.swift */; };
 		FC8D3A743D8C755A24A130A1 /* Linia2Registration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41FBEE60918E737D7D78F23F /* Linia2Registration.swift */; };
 		0A0016E721E7236900088188 /* MessageInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0016E621E7236900088188 /* MessageInteractor.swift */; };
@@ -239,6 +241,8 @@
 		9495154D6AB9C403D137D704 /* Linia2Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Theme.swift; sourceTree = "<group>"; };
 		20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2AppLock.swift; sourceTree = "<group>"; };
 		18572233191F3D4D0A49B213 /* Linia2Turn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Turn.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B02 /* Linia2WebCallEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2WebCallEngine.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B04 /* linia2-call.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "linia2-call.html"; sourceTree = "<group>"; };
 		56BC684DF14089B05276DFE9 /* Linia2Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Diagnostics.swift; sourceTree = "<group>"; };
 		41FBEE60918E737D7D78F23F /* Linia2Registration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Registration.swift; sourceTree = "<group>"; };
 		0A0016E621E7236900088188 /* MessageInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInteractor.swift; sourceTree = "<group>"; };
@@ -514,6 +518,8 @@
 				9495154D6AB9C403D137D704 /* Linia2Theme.swift */,
 				20ABF2BB7FB352D4F4F9FBC9 /* Linia2AppLock.swift */,
 				18572233191F3D4D0A49B213 /* Linia2Turn.swift */,
+				A1B2C3D4E5F60718293A4B02 /* Linia2WebCallEngine.swift */,
+				A1B2C3D4E5F60718293A4B04 /* linia2-call.html */,
 				56BC684DF14089B05276DFE9 /* Linia2Diagnostics.swift */,
 				41FBEE60918E737D7D78F23F /* Linia2Registration.swift */,
 				0A4E1D3122829C52006C0912 /* account */,
@@ -858,6 +864,7 @@
 				B0BE302727B831D400B04631 /* MultilineAlertView.xib in Resources */,
 				0A0380E221B3CC8200A3FA0E /* LaunchScreen.storyboard in Resources */,
 				B052ABCD2863F7E700A7D550 /* call-end.m4a in Resources */,
+				A1B2C3D4E5F60718293A4B03 /* linia2-call.html in Resources */,
 				B012599D229CEBE600688FCE /* SelectedMemberViewCell.xib in Resources */,
 				0A6AC322229FAA130025A4EC /* PermissionsEditView.xib in Resources */,
 				B052ABD12863F82000A7D550 /* dialing.m4a in Resources */,
@@ -1120,6 +1127,7 @@
 				4E9B6D4E2D1136D729B8E4C4 /* Linia2Theme.swift in Sources */,
 				387DD5718BBAB0D844AB1539 /* Linia2AppLock.swift in Sources */,
 				A8B8E15FA8E4A59F7FFF758B /* Linia2Turn.swift in Sources */,
+				A1B2C3D4E5F60718293A4B01 /* Linia2WebCallEngine.swift in Sources */,
 				6776A1BEBBD9582FF686DABE /* Linia2Diagnostics.swift in Sources */,
 				FC8D3A743D8C755A24A130A1 /* Linia2Registration.swift in Sources */,
 				B008593C22741B8A002C5168 /* FullFormatter.swift in Sources */,
