@@ -270,9 +270,9 @@ class UiUtils {
         }
         UNUserNotificationCenter.current().delegate = appDelegate
 
-        let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
-        UNUserNotificationCenter.current().requestAuthorization(options: authOptions) { granted, error in
-            L2Log.event("l2_push_permission", ["granted": granted ? 1 : 0, "error": error != nil ? 1 : 0])
+        // LINIA2: после первого входа — по очереди уведомления, микрофон, камера (с пояснением перед системным окном).
+        Linia2Permissions.shared.requestNotifications { _ in
+            Linia2Permissions.shared.requestMediaIfNeeded()
         }
 
         application.registerForRemoteNotifications()

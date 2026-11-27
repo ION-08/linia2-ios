@@ -4,6 +4,8 @@
 //
 
 import UIKit
+import AVFoundation
+import UserNotifications
 import SafariServices
 import TinodeSDK
 import TinodiosDB
@@ -1282,5 +1284,122 @@ final class Linia2StorageViewController: Linia2GroupedTableViewController {
         a.addAction(UIAlertAction(title: "Отмена", style: .cancel))
         a.addAction(UIAlertAction(title: "Очистить", style: .destructive) { _ in Linia2Storage.clearCache() })
         present(a, animated: true)
+    }
+}
+
+
+// MARK: - LINIA2: разрешения после первого входа (уведомления → микрофон → камера)
+
+/// После первого успешного входа — по очереди: уведомления, микрофон, камера. Перед каждым системным
+/// запросом — короткое пояснение. Доступ уже есть или уже запрещён — не спрашиваем (запрещённый микрофон
+/// при звонке — подсказка «Открыть Настройки» на экране звонка). Тексты — из удалённых настроек
+/// (texts: perm.push.*, perm.mic.*, perm.camera.*), выключение — feature «permissionsOnboarding».
+final class Linia2Permissions {
+    static let shared = Linia2Permissions()
+    private var running = false
+    private static let kSkipped = "linia2.perm.skipped"   // «Не сейчас» на пояснении: [вид]
+
+    private static var isUITest: Bool { ProcessInfo.processInfo.arguments.contains("-l2-uitest") }
+
+    /// Уведомления: системный запрос (с пояснением, если ещё не спрашивали). completion — главный поток.
+    func requestNotifications(_ completion: @escaping (Bool) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { st in
+            DispatchQueue.main.async {
+                let ask = {
+                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+                        L2Log.event("l2_push_permission", ["granted": granted ? 1 : 0, "error": error != nil ? 1 : 0])
+                        DispatchQueue.main.async { completion(granted) }
+                    }
+                }
+                guard st.authorizationStatus == .notDetermined, !Linia2Permissions.isUITest,
+                      Linia2Config.shared.feature("permissionsOnboarding", default: true) else {
+                    // Уже решено (или автотест) — системный вызов вернётся сразу, без окна.
+                    ask()
+                    return
+                }
+                self.explain(kind: "push", title: "Уведомления",
+                             text: "Чтобы вы не пропустили сообщения и звонки, «Линия 2.0» покажет уведомления. Разрешите их в следующем окне.",
+                             proceed: ask, skip: { completion(false) })
+            }
+        }
+    }
+
+    /// Микрофон и камера — после уведомлений, по очереди.
+    func requestMediaIfNeeded() {
+        guard !running, !Linia2Permissions.isUITest, Linia2Config.shared.feature("permissionsOnboarding", default: true) else { return }
+        running = true
+        whenReady {
+            self.requestMic {
+                self.requestCamera { self.running = false }
+            }
+        }
+    }
+
+    private func requestMic(_ done: @escaping () -> Void) {
+        let s = AVAudioSession.sharedInstance()
+        guard s.recordPermission == .undetermined, !skipped("mic") else { done(); return }
+        explain(kind: "mic", title: "Микрофон",
+                text: "Микрофон нужен для звонков и голосовых сообщений — без него собеседник вас не услышит.",
+                proceed: {
+                    s.requestRecordPermission { ok in
+                        L2Log.event("l2_mic_permission", ["granted": ok ? 1 : 0, "where": "onboarding"])
+                        DispatchQueue.main.async { done() }
+                    }
+                }, skip: done)
+    }
+
+    private func requestCamera(_ done: @escaping () -> Void) {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined, !skipped("camera") else { done(); return }
+        explain(kind: "camera", title: "Камера",
+                text: "Камера нужна для видеозвонков, видеосообщений и фото в чатах.",
+                proceed: {
+                    AVCaptureDevice.requestAccess(for: .video) { ok in
+                        L2Log.event("l2_camera_permission", ["granted": ok ? 1 : 0, "where": "onboarding"])
+                        DispatchQueue.main.async { done() }
+                    }
+                }, skip: done)
+    }
+
+    private func skipped(_ kind: String) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: Self.kSkipped) ?? []).contains(kind)
+    }
+
+    /// Пояснение перед системным окном. «Не сейчас» — больше не показываем при входе (спросим при звонке).
+    private func explain(kind: String, title: String, text: String, proceed: @escaping () -> Void, skip: @escaping () -> Void) {
+        whenReady {
+            guard let top = Linia2Permissions.topController() else { proceed(); return }
+            let cfg = Linia2Config.shared
+            let a = UIAlertController(title: cfg.text("perm.\(kind).title") ?? title,
+                                      message: cfg.text("perm.\(kind).text") ?? text, preferredStyle: .alert)
+            a.addAction(UIAlertAction(title: "Не сейчас", style: .cancel) { _ in
+                var list = UserDefaults.standard.stringArray(forKey: Self.kSkipped) ?? []
+                if !list.contains(kind) { list.append(kind) }
+                UserDefaults.standard.set(list, forKey: Self.kSkipped)
+                L2Log.event("l2_perm_explain", ["kind": kind, "ok": 0])
+                skip()
+            })
+            a.addAction(UIAlertAction(title: "Продолжить", style: .default) { _ in
+                L2Log.event("l2_perm_explain", ["kind": kind, "ok": 1])
+                proceed()
+            })
+            a.preferredAction = a.actions.last
+            top.present(a, animated: true)
+        }
+    }
+
+    /// Приложение на экране, PIN введён, нет звонка, ничего не показано модально поверх — тогда спрашиваем.
+    private func whenReady(_ action: @escaping () -> Void, attempts: Int = 120) {
+        let ready = UIApplication.shared.applicationState == .active && !Linia2AppLock.shared.isLocked
+            && Cache.callManager.callInProgress == nil && Linia2Permissions.topController() != nil
+            && !(Linia2Permissions.topController() is UIAlertController)
+        if ready { action(); return }
+        guard attempts > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.whenReady(action, attempts: attempts - 1) }
+    }
+
+    private static func topController() -> UIViewController? {
+        guard var top = Linia2Root.window?.rootViewController else { return nil }
+        while let p = top.presentedViewController, !p.isBeingDismissed { top = p }
+        return top
     }
 }
