@@ -729,6 +729,12 @@ final class Linia2Failover: TinodeEventListener {
 
     private func use(_ host: String, why: String) {
         guard host != SharedUtils.linia2ActiveHost || !connected else { return }
+        // Живое (открытое или авторизованное) соединение не рвём ради другого адреса — никогда.
+        let t = Cache.tinode
+        guard !t.isConnected, !t.isConnectionAuthenticated else {
+            L2Log.event("l2_switch_host_skip", ["why": why])
+            return
+        }
         Cache.log.info("Linia2: адрес сервера → %@ (%@)", host, why)
         SharedUtils.linia2ActiveHost = host
         attemptStarted = Date()

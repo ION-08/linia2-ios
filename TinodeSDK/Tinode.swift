@@ -1051,6 +1051,12 @@ public class Tinode {
     public func linia2SwitchHost(to host: String) {
         let changed: Bool = operationsQueue.sync {
             guard host != hostName else { return false }
+            // LINIA2 (сборка 1011, iPhone 17, чистая установка: смена адреса через 4 с после входа по живому
+            // сокету и цикл): при открытом или авторизованном соединении адрес не меняем никогда.
+            if isConnectionAuthenticated || (connection?.isConnected ?? false) {
+                Tinode.linia2Event?("switch-host-skip", ["authed": isConnectionAuthenticated ? 1 : 0])
+                return false
+            }
             Tinode.linia2Event?("switch-host", [:])
             hostName = host
             // LINIA2 (сборка 1011): события старого соединения (отмена, -999) больше не доходят до Tinode —
