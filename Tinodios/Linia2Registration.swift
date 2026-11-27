@@ -112,6 +112,9 @@ class Linia2FormViewController: UIViewController {
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .default }   // Дизайн: по теме (в светлой «белые часы» были невидимы)
 
+    /// Поля экрана: 28 — экраны входа/регистрации (крупный центрированный блок); карточки настроек — 16 (Профиль).
+    var sideMargin: CGFloat { 28 }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = L2.background
@@ -133,8 +136,8 @@ class Linia2FormViewController: UIViewController {
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.topAnchor.constraint(greaterThanOrEqualTo: scroll.contentLayoutGuide.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -28),
+            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: sideMargin),
+            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -sideMargin),
             scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
             // Содержимое всегда вмещает весь блок — если он выше видимой области (клавиатура, iPhone SE), его можно прокрутить.
             scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: stack.heightAnchor, constant: 48),

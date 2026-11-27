@@ -26,6 +26,8 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
     private var me: DefaultMeTopic? { Cache.tinode.getMeTopic() }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .default }
+    /// Дизайн: единая сетка — карточки настроек в 16 pt от края (как «Настройки»), было 28.
+    override var sideMargin: CGFloat { 16 }
 
     override func viewDidLoad() {
         super.viewDidLoad()
