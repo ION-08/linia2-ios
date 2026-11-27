@@ -186,6 +186,7 @@ jobs:
             -only-testing:TinodiosUITests \
             -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests \
             -skip-testing:TinodiosUITests/Linia2DesignShots -skip-testing:TinodiosUITests/Linia2LaunchTests \
+            -skip-testing:TinodiosUITests/Linia2PanicTests \
             -parallel-testing-enabled NO \
             -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
@@ -308,18 +309,50 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && [ "$PRC" = 0 ] && [ "$WRC" = 0 ] && [ "$SK" = 0 ]
 
+      # Стирание по коду на экране PIN (уровни 1–4, 10 неверных PIN, Face ID нигде): после звонков —
+      # серверная проверка уровня 4 удалила бы пользователя A. Код — из L2_WIPE_OVERRIDE (в тесте);
+      # серверная проверка (код через /panic/settings, удаление у собеседника) — L2_WIPE_SERVER=1.
+      - name: Стирание данных по коду (Linia2PanicTests)
+        id: panic
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
+          DD="$RUNNER_TEMP/dd-steps"
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+          if [ -z "$XR" ]; then
+            xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
+              -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
+              CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+              > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -30 "$RUNNER_TEMP/bft-$$.log"
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+          fi
+          [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/out/panic"
+          xcrun simctl terminate "$UDID" info.codix.liniya2 2>/dev/null || true
+          export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
+          export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
+          export TEST_RUNNER_L2_WIPE_SERVER="${L2_WIPE_SERVER:-0}" TEST_RUNNER_L2_WIPE_SERVER_LEVEL="${L2_WIPE_SERVER_LEVEL:-2}"
+          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -only-testing:TinodiosUITests/Linia2PanicTests -resultBundlePath "$RUNNER_TEMP/panic.xcresult" \
+            2>&1 | tee "$RUNNER_TEMP/out/panic/panic.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|\*\* TEST' || true
+          P=$(grep -c "Test Case .* passed" "$RUNNER_TEMP/out/panic/panic.log" || true)
+          SK=$(grep -c "Test Case .* skipped" "$RUNNER_TEMP/out/panic/panic.log" || true)
+          echo "### Стирание по коду: пройдено $P из 6, пропущено $SK $(grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/panic/panic.log" && [ "$SK" = 0 ] && echo ✅ || echo ❌)" >> "$GITHUB_STEP_SUMMARY"
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/panic/panic.log" && [ "$SK" = 0 ]
+
       - name: Отчёт, скриншоты падений
         id: report
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/failures" "$RUNNER_TEMP/out/crashes"
-          for r in unit ui launch calls peer; do
+          for r in unit ui launch calls peer panic; do
             X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
             xcrun xcresulttool get test-results tests --path "$X" > "$RUNNER_TEMP/out/$r-tests.json" 2>/dev/null || true
             xcrun xcresulttool export attachments --path "$X" --output-path "$RUNNER_TEMP/out/failures/$r" --only-failures >/dev/null 2>&1 || true
           done
           [ -d "$RUNNER_TEMP/ui.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" >/dev/null 2>&1 || true
-          for r in launch calls peer; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
+          for r in launch calls peer panic; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
           cp "$RUNNER_TEMP"/unit.log "$RUNNER_TEMP"/test.log "$RUNNER_TEMP/out/" 2>/dev/null || true
           python3 ci/test-report.py "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/out/report.md" >> "$GITHUB_STEP_SUMMARY"

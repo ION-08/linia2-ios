@@ -10,6 +10,7 @@
 		9CE5CE763666556D89E1ED2A /* Linia2Report.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBAECFCEC38A1354A855B9F /* Linia2Report.swift */; };
 		4C32B0A1C0DE000000000006 /* Linia2RoundVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE000000000005 /* Linia2RoundVideo.swift */; };
 		4C32B0A1C0DE000000000004 /* Linia2Burn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE000000000003 /* Linia2Burn.swift */; };
+		4C32B0A1C0DE0000000000DA /* Linia2TestHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D9 /* Linia2TestHook.swift */; };
 		4C32B0A1C0DE0000000000D8 /* Linia2WipeExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D7 /* Linia2WipeExecutor.swift */; };
 		4C32B0A1C0DE0000000000D6 /* Linia2Wipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D5 /* Linia2Wipe.swift */; };
 		4C32B0A1C0DE0000000000D4 /* Linia2Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D3 /* Linia2Storage.swift */; };
@@ -81,6 +82,7 @@
 		4C32CA11C0DE000000000002 /* Linia2CallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32CA11C0DE000000000001 /* Linia2CallTests.swift */; };
 		4C32B0A1C0DE000000000008 /* Linia2FeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE000000000007 /* Linia2FeatureTests.swift */; };
 		4C32B0A1C0DE0000000000C2 /* Linia2LaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000C1 /* Linia2LaunchTests.swift */; };
+		4C32B0A1C0DE0000000000DC /* Linia2PanicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000DB /* Linia2PanicTests.swift */; };
 		4C32B0A1C0DE00000000DE52 /* Linia2DesignShots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE00000000DE51 /* Linia2DesignShots.swift */; };
 		0AE21E4E28D21849008F486C /* TinodiosUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21E4D28D21849008F486C /* TinodiosUITests.swift */; };
 		0AE21E5028D21849008F486C /* TinodiosUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */; };
@@ -217,6 +219,7 @@
 		0DBAECFCEC38A1354A855B9F /* Linia2Report.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Report.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE000000000005 /* Linia2RoundVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2RoundVideo.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE000000000003 /* Linia2Burn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Burn.swift; sourceTree = "<group>"; };
+		4C32B0A1C0DE0000000000D9 /* Linia2TestHook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2TestHook.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000D7 /* Linia2WipeExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2WipeExecutor.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000D5 /* Linia2Wipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Wipe.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000D3 /* Linia2Storage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Storage.swift; sourceTree = "<group>"; };
@@ -292,6 +295,7 @@
 		4C32CA11C0DE000000000001 /* Linia2CallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2CallTests.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE000000000007 /* Linia2FeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2FeatureTests.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE0000000000C1 /* Linia2LaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2LaunchTests.swift; sourceTree = "<group>"; };
+		4C32B0A1C0DE0000000000DB /* Linia2PanicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2PanicTests.swift; sourceTree = "<group>"; };
 		4C32B0A1C0DE00000000DE51 /* Linia2DesignShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2DesignShots.swift; sourceTree = "<group>"; };
 		0AE21E4D28D21849008F486C /* TinodiosUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinodiosUITests.swift; sourceTree = "<group>"; };
 		0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinodiosUITestsLaunchTests.swift; sourceTree = "<group>"; };
@@ -490,6 +494,7 @@
 				0DBAECFCEC38A1354A855B9F /* Linia2Report.swift */,
 				4C32B0A1C0DE000000000005 /* Linia2RoundVideo.swift */,
 				4C32B0A1C0DE000000000003 /* Linia2Burn.swift */,
+				4C32B0A1C0DE0000000000D9 /* Linia2TestHook.swift */,
 				4C32B0A1C0DE0000000000D7 /* Linia2WipeExecutor.swift */,
 				4C32B0A1C0DE0000000000D5 /* Linia2Wipe.swift */,
 				4C32B0A1C0DE0000000000D3 /* Linia2Storage.swift */,
@@ -617,6 +622,7 @@
 				4C32CA11C0DE000000000001 /* Linia2CallTests.swift */,
 				4C32B0A1C0DE000000000007 /* Linia2FeatureTests.swift */,
 				4C32B0A1C0DE0000000000C1 /* Linia2LaunchTests.swift */,
+				4C32B0A1C0DE0000000000DB /* Linia2PanicTests.swift */,
 				4C32B0A1C0DE00000000DE51 /* Linia2DesignShots.swift */,
 				0AE21E4F28D21849008F486C /* TinodiosUITestsLaunchTests.swift */,
 			);
@@ -1094,6 +1100,7 @@
 				9CE5CE763666556D89E1ED2A /* Linia2Report.swift in Sources */,
 				4C32B0A1C0DE000000000006 /* Linia2RoundVideo.swift in Sources */,
 				4C32B0A1C0DE000000000004 /* Linia2Burn.swift in Sources */,
+				4C32B0A1C0DE0000000000DA /* Linia2TestHook.swift in Sources */,
 				4C32B0A1C0DE0000000000D8 /* Linia2WipeExecutor.swift in Sources */,
 				4C32B0A1C0DE0000000000D6 /* Linia2Wipe.swift in Sources */,
 				4C32B0A1C0DE0000000000D4 /* Linia2Storage.swift in Sources */,
@@ -1233,6 +1240,7 @@
 				4C32CA11C0DE000000000002 /* Linia2CallTests.swift in Sources */,
 				4C32B0A1C0DE000000000008 /* Linia2FeatureTests.swift in Sources */,
 				4C32B0A1C0DE0000000000C2 /* Linia2LaunchTests.swift in Sources */,
+				4C32B0A1C0DE0000000000DC /* Linia2PanicTests.swift in Sources */,
 				4C32B0A1C0DE00000000DE52 /* Linia2DesignShots.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

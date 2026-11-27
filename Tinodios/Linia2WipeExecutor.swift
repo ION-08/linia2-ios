@@ -73,8 +73,10 @@ enum Linia2WipeExecutor {
         }
 
         // 3. Tinode и база.
-        Cache.resetForWipe()
+        // Сначала новая база, потом новый Tinode: экземпляр, созданный после этого (в т.ч. другим потоком),
+        // уже работает с пустой базой.
         BaseDb.wipeAndRecreate(keepAccount: !logout)
+        Cache.resetForWipe()
         L2Vault.bootstrap()
         Linia2Storage.wipeVisibleNow()
         Linia2TestProbe.wipes += 1

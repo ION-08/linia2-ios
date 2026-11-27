@@ -106,6 +106,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2AppLock.shared.start()
         Linia2WipeExecutor.install()
         Linia2WipeSync.shared.start()
+        Linia2TestHook.install()   // только под -l2-uitest
 
         let baseDb = BaseDb.sharedInstance
         if baseDb.isReady {
