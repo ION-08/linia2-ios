@@ -108,6 +108,19 @@ jobs:
           DIST_CERT_ID: ${{ secrets.DIST_CERT_ID }}
         run: node ci/profiles.mjs
 
+      - name: Кэш сборки (Pods, CocoaPods specs, DerivedData)
+        uses: actions/cache@v4
+        with:
+          path: |
+            Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods/repos
+            ~/Library/Developer/Xcode/DerivedData
+          key: ios-build-${{ runner.os }}-testflight-${{ hashFiles('Podfile.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ios-build-${{ runner.os }}-testflight-${{ hashFiles('Podfile.lock') }}-
+            ios-build-${{ runner.os }}-testflight-
+
       - name: CocoaPods
         run: |
           which pod || sudo gem install cocoapods --no-document

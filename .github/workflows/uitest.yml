@@ -67,6 +67,19 @@ jobs:
           sudo xcode-select -s "$XC"; xcodebuild -version
           xcrun simctl list runtimes available | grep -i ios || true
 
+      - name: Кэш сборки (Pods, CocoaPods specs, DerivedData)
+        uses: actions/cache@v4
+        with:
+          path: |
+            Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods/repos
+            ~/Library/Developer/Xcode/DerivedData
+          key: ios-build-${{ runner.os }}-uitest-${{ hashFiles('Podfile.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ios-build-${{ runner.os }}-uitest-${{ hashFiles('Podfile.lock') }}-
+            ios-build-${{ runner.os }}-uitest-
+
       - name: Подготовка
         run: |
           cp ci/GoogleService-Info.stub.plist GoogleService-Info.plist
@@ -435,6 +448,19 @@ jobs:
           XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
           [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
           sudo xcode-select -s "$XC"; xcodebuild -version
+
+      - name: Кэш сборки (Pods, CocoaPods specs, DerivedData)
+        uses: actions/cache@v4
+        with:
+          path: |
+            Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods/repos
+            ~/Library/Developer/Xcode/DerivedData
+          key: ios-build-${{ runner.os }}-uitest-${{ hashFiles('Podfile.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ios-build-${{ runner.os }}-uitest-${{ hashFiles('Podfile.lock') }}-
+            ios-build-${{ runner.os }}-uitest-
 
       - name: Подготовка
         run: |
