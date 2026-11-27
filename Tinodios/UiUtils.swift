@@ -404,8 +404,12 @@ class UiUtils {
                 rootVC = chatsNav
                 Linia2TabBarController.current?.selectTab(.chats)
                 // The app is in the foreground.
-                while !(rootVC.topViewController is ChatListViewController) {
-                    rootVC.popViewController(animated: false)
+                // LINIA2 (зависания): раньше — цикл popViewController, пока сверху не список чатов. Во время
+                // перехода (анимация, показ/закрытие экрана звонка) pop ничего не делает — цикл становился
+                // бесконечным и главный поток зависал (в т.ч. при входящем звонке). Теперь — одной операцией.
+                if let idx = rootVC.viewControllers.firstIndex(where: { $0 is ChatListViewController }),
+                   idx < rootVC.viewControllers.count - 1 {
+                    rootVC.setViewControllers(Array(rootVC.viewControllers.prefix(idx + 1)), animated: false)
                 }
                 shouldReplaceRootVC = false
             } else {
