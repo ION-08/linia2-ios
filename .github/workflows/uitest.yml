@@ -202,6 +202,11 @@ jobs:
         run: |
           set -o pipefail
           # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
+          # Служба симуляторов после XCUITest бывает «мёртвой» (Mach -308 server died, No matching device) —
+          # перезапускаем её и заново включаем нужный iPhone.
+          xcrun simctl shutdown all 2>/dev/null || true
+          killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+          sleep 5
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
           if [ -z "$XR" ]; then
@@ -253,6 +258,11 @@ jobs:
           set -o pipefail
           OUT="$RUNNER_TEMP/out/calls"; mkdir -p "$OUT/web"
           # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
+          # Служба симуляторов после XCUITest бывает «мёртвой» (Mach -308 server died, No matching device) —
+          # перезапускаем её и заново включаем нужный iPhone.
+          xcrun simctl shutdown all 2>/dev/null || true
+          killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+          sleep 5
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
           if [ -z "$XR" ]; then
