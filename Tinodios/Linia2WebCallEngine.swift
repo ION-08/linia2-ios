@@ -61,6 +61,7 @@ final class Linia2WebCallEngine: NSObject {
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.allowsAirPlayForMediaPlayback = false
+        cfg.websiteDataStore = WKWebsiteDataStore.nonPersistent()   // LINIA2: ничего от движка звонка на диск (кэш, хранилище страницы)
         cfg.userContentController.add(WeakHandler(self), name: "l2call")
         let wv = WKWebView(frame: UIScreen.main.bounds, configuration: cfg)
         wv.isOpaque = false

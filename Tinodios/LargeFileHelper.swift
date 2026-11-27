@@ -183,6 +183,15 @@ public class LargeFileHelper: NSObject {
         return !keys.isEmpty
     }
 
+    /// LINIA2 (код паники): отменить все выгрузки и загрузки, забыть их и закрыть сессию.
+    public func cancelAllForWipe() {
+        let uploads = activeUploads
+        activeUploads.removeAll()
+        downloadCallbacks.removeAll()
+        for (_, u) in uploads { u.task?.cancel() }
+        urlSession.invalidateAndCancel()
+    }
+
     public func getActiveUpload(for taskId: String) -> Upload? {
         return self.activeUploads[taskId]
     }

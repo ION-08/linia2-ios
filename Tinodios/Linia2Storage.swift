@@ -6,8 +6,14 @@
 //  * Видео-кружки: в кэше — зашифрованный файл .l2v, для проигрывания расшифровывается во временную
 //    папку tmp/l2play (защита Complete, чистится при каждом запуске и при стирании).
 //  * URLCache на диске отключён (только память) — HTTP-ответы не оседают в Library/Caches.
-//  * Каталоги Documents, Caches, tmp: защита файлов iOS (Complete / CompleteUnlessOpen) и
-//    исключение из резервной копии.
+//  * Каталоги: защита файлов iOS и исключение из резервной копии (isExcludedFromBackup):
+//      кэш картинок, кружки, tmp/l2play — Complete (нужны только на разблокированном экране);
+//      Documents (сохранённые вложения), Caches (запись голосового) — CompleteUnlessOpen: загрузка
+//      фоновой URLSession и запись голосового продолжаются, если экран заблокировали во время них;
+//      tmp — CompleteUntilFirstUserAuthentication: тело выгрузки вложения читает nsurlsessiond в фоне
+//      на заблокированном телефоне (Complete оборвал бы отправку);
+//      база в общем контейнере — CompleteUntilFirstUserAuthentication (push/звонок, см. BaseDb.excludeFromBackup).
+//  * WKWebView (движок звонка, страницы документов) — WKWebsiteDataStore.nonPersistent().
 //  * Миграция: при первом запуске версии с шифрованием открытые значения в базе зашифровываются
 //    на месте (BaseDb.encryptLegacyRows), старый незашифрованный кэш картинок и кружков удаляется
 //    (он перезагружается с сервера по мере просмотра).
@@ -56,9 +62,7 @@ enum Linia2Storage {
         DispatchQueue.global(qos: .utility).async {
             try? fm.removeItem(at: tmp.appendingPathComponent("l2play", isDirectory: true))
             BaseDb.purgeTrash()
-            protect(documents, .completeUnlessOpen)
-            protect(kingfisherDir, .complete)
-            _ = roundDir
+            protectAll()
         }
         simulateUpgradeIfRequested()
     }
@@ -130,6 +134,16 @@ enum Linia2Storage {
     }
 
     // MARK: - Каталоги
+
+    /// Классы защиты и «не в резервную копию» для всех каталогов приложения (при запуске и после стирания).
+    static func protectAll() {
+        protect(documents, .completeUnlessOpen)
+        protect(caches, .completeUnlessOpen)
+        protect(tmp, .completeUntilFirstUserAuthentication)
+        protect(kingfisherDir, .complete)
+        protect(roundDir, .complete)
+        protect(playDir, .complete)
+    }
 
     @discardableResult
     private static func dir(_ u: URL, _ protection: FileProtectionType) -> URL {
@@ -238,7 +252,7 @@ enum Linia2Storage {
                 removeContents(of: group.appendingPathComponent("Library", isDirectory: true), keep: ["Preferences"])
             }
             BaseDb.purgeTrash()
-            protect(documents, .completeUnlessOpen)
+            protectAll()
             DispatchQueue.main.async { completion?() }
         }
     }

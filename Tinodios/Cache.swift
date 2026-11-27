@@ -50,8 +50,20 @@ class Cache {
                 t.disconnect()
                 Cache.shared.tinodeInstance = nil
             }
+            // LINIA2 (код паники): незавершённые загрузки/выгрузки вложений — отменить. Иначе фоновая
+            // URLSession (nsurlsessiond) дослала бы файл неотправленного сообщения после стирания, а помощник
+            // со ссылкой на старый Tinode оставался бы в памяти.
+            Cache.shared.largeFileHelper?.cancelAllForWipe()
+            Cache.shared.largeFileHelper = nil
         }
         Cache.shared.timer.suspend()
+    }
+    /// LINIA2 (код паники): сразу оборвать связь текущего Tinode (до замены базы), не создавая новый экземпляр —
+    /// чтобы ни одно сообщение из очереди (outbox) не ушло между уничтожением ключей и заменой базы.
+    public static func disconnectForWipe() {
+        let t = Cache.shared.queue.sync { Cache.shared.tinodeInstance }
+        t?.remoteAllListeners()
+        t?.disconnect()
     }
     public static func isContactSynchronizerActive() -> Bool {
         return Cache.shared.timer.state == .resumed

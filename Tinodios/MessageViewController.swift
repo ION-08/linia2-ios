@@ -591,6 +591,9 @@ class MessageViewController: UIViewController {
             Cache.log.error("MessageVC - failed to read audio record: %@", error.localizedDescription)
             return
         }
+        // LINIA2: незашифрованная запись голосового не остаётся на диске — данные уже в памяти (дальше —
+        // в зашифрованной базе или в выгрузке).
+        try? FileManager.default.removeItem(at: url)
 
         let previewSize = preview?.count ?? 0
         if data.count < previewSize {
@@ -632,6 +635,9 @@ class MessageViewController: UIViewController {
             Cache.log.error("MessageVC - failed to read audio record: %@", error.localizedDescription)
             return
         }
+        // LINIA2: незашифрованная запись голосового не остаётся на диске — данные уже в памяти (дальше —
+        // в зашифрованной базе или в выгрузке).
+        try? FileManager.default.removeItem(at: url)
 
         let mime = Utils.mimeForUrl(url: url, ifMissing: "audio/m4a")
         if data.count > maxInbandSize {

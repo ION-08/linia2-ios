@@ -462,6 +462,7 @@ final class Linia2HTMLPageViewController: UIViewController, WKNavigationDelegate
         view.backgroundColor = L2.background
         let cfg = WKWebViewConfiguration()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = false   // только разметка, без кода
+        cfg.websiteDataStore = WKWebsiteDataStore.nonPersistent()   // LINIA2: без кэша страниц на диске
         let web = WKWebView(frame: .zero, configuration: cfg)
         web.isOpaque = false
         web.backgroundColor = L2.background
