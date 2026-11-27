@@ -234,7 +234,7 @@ jobs:
           touch "$PUSHDIR/stop"
           P=$(grep -c "Test Case .* passed" "$RUNNER_TEMP/out/launch/launch.log" || true)
           SK=$(grep -c "Test Case .* skipped" "$RUNNER_TEMP/out/launch/launch.log" || true)
-          echo "### Запуск из уведомления: пройдено $P из 4, пропущено $SK $(grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/launch/launch.log" && [ "$SK" = 0 ] && echo ✅ || echo ❌)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Запуск из уведомления + баги 1006: пройдено $P из 7, пропущено $SK $(grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/launch/launch.log" && [ "$SK" = 0 ] && echo ✅ || echo ❌)" >> "$GITHUB_STEP_SUMMARY"
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/out/launch/launch.log" && [ "$SK" = 0 ]
 
       - name: Итог звонка iOS ↔ веб

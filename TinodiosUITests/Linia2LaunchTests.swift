@@ -10,6 +10,15 @@
 //          → нажатие на баннер / уведомление в Центре уведомлений → PIN → открыт чат с B.
 //  test3 — короткий фон (< 30 с, без PIN): Home → сообщения + push → activate → живо.
 //  test4 — длинный фон (> 30 с, таймаут PIN): Home → 35 с → сообщения + push → нажатие на уведомление → PIN → чат.
+//  Баги сборки 1006 (состояние — тестовый крючок «l2.test.state», Tinodios/Linia2TestHook.swift):
+//  test5 — старт после обновления: база «старой версии» (-l2-simulate-upgrade: открытый текст, флаг миграции снят)
+//          → PIN → интерфейс сразу, вкладки отзываются, пока база шифруется в фоне → plain=0, mig=1; без «Связь
+//          с сервером потеряна»; после перезапуска переписка читается.
+//  test6 — старт при недоступном сервере (L2_TEST_UNREACHABLE=8): интерфейс с кэшем (вкладки, чат в списке) ≤ 3 с
+//          от запуска, без ошибки первые 5 с (только «Подключение…»), затем подключение (conn=1) без перезапуска.
+//  test7 — повторный VoIP push по завершённому звонку (L2_TEST_VOIP_REPLAY=1, без CallKit): «started» → входящий;
+//          повтор того же topic+seq — без второго; «hang-up» — входящий закрыт; снова «started» по тому же звонку
+//          и устаревший «started» — экран звонка не появляется, приложение живо и отзывается.
 //  «Нет вылета»: app.state == .runningForeground на всём пути (опрос), плюс шаг workflow ловит crash .ips.
 //
 //  `simctl push` делает workflow (шаг «Запуск приложения из уведомления»): тест кладёт payload в L2_PUSH_DIR
@@ -371,5 +380,180 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         waitForeground("возврат-после-второго-фона")
         passPin(required: true, "второй-длинный-фон")
         watchAlive("после-второго-фона", seconds: 4)
+    }
+
+    // MARK: - Баги сборки 1006
+
+    /// Значения тестового крючка (msgs, plain, ui, lost, conn, mig, vpush, vign, vshown, vstep, …).
+    private func hook(_ step: String) -> [String: Int] {
+        let e = any("l2.test.state")
+        guard e.waitForExistence(timeout: 10), let v = e.value as? String else {
+            XCTFail("нет тестового крючка l2.test.state — \(step)")
+            return [:]
+        }
+        var out: [String: Int] = [:]
+        for part in v.split(separator: " ") {
+            let kv = part.split(separator: "=")
+            if kv.count == 2, let n = Int(kv[1]) { out[String(kv[0])] = n }
+        }
+        let a = XCTAttachment(string: v)
+        a.name = "state-" + step
+        a.lifetime = .keepAlways
+        add(a)
+        return out
+    }
+
+    @discardableResult
+    private func waitHook(_ step: String, timeout: TimeInterval, _ ok: ([String: Int]) -> Bool) -> [String: Int] {
+        let end = Date().addingTimeInterval(timeout)
+        var s = hook(step)
+        while !ok(s) && Date() < end {
+            assertAlive(step)
+            usleep(700_000)
+            s = hook(step)
+        }
+        return s
+    }
+
+    /// Тост «Связь с сервером потеряна» (ru/en) на экране.
+    private var lostToast: XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@ OR label CONTAINS[c] %@",
+                                                             "Связь с сервером", "Connection to server lost")).firstMatch
+    }
+
+    /// Интерфейс отзывается: переключение вкладок — каждое ≤ 2 с.
+    private func assertTabsRespond(_ step: String) {
+        for id in ["l2.tab.calls", "l2.tab.chats"] {
+            let t0 = Date()
+            tab(id).tap()
+            assertAlive(step)
+            XCTAssertLessThan(Date().timeIntervalSince(t0), 2.5, "вкладка \(id) отозвалась медленно — \(step)")
+        }
+    }
+
+    func test5_StartAfterUpgradeMigration() throws {
+        let (c, topic) = try peer()
+        loginA()
+        let tag = "L5-" + Self.stamp
+        sendBotMessages(c, to: topic, tag: tag, count: 3)
+        // История в локальной базе: открыть чат с B.
+        let row = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", peerName)).firstMatch
+        wait(row, "чат с «\(peerName)»", timeout: 30).tap()
+        wait(labelContains("\(tag)-3"), "сообщения в чате", timeout: 30)
+        backToList()
+        app.terminate()
+
+        // «Первый запуск новой версии»: база в открытом виде, миграция не выполнялась.
+        app.launchArguments += ["-l2-simulate-upgrade"]
+        app.launch()
+        let before = waitHook("до-миграции", timeout: 10) { ($0["plain"] ?? 0) > 0 }
+        XCTAssertGreaterThan(before["plain"] ?? 0, 0, "эмуляция старой базы не сработала (нет открытых записей)")
+        passPin(required: true, "после-обновления")
+        wait(tab("l2.tab.chats"), "вкладки сразу после PIN", timeout: 3)
+        XCTAssertFalse(lostToast.exists, "«Связь с сервером потеряна» сразу после PIN")
+        // Пока идёт миграция — интерфейс отзывается, ошибок нет.
+        let end = Date().addingTimeInterval(60)
+        var st = hook("миграция")
+        while Date() < end && !((st["plain"] ?? 1) == 0 && (st["mig"] ?? 0) == 1) {
+            assertTabsRespond("во-время-миграции")
+            XCTAssertFalse(lostToast.exists, "«Связь с сервером потеряна» во время миграции")
+            sleep(1)
+            st = hook("миграция")
+        }
+        XCTAssertEqual(st["plain"], 0, "база не зашифрована за 60 с")
+        XCTAssertEqual(st["mig"], 1, "миграция не завершилась")
+        XCTAssertEqual(st["lost"], 0, "показано «Связь с сервером потеряна»")
+        screenshot("after-migration")
+
+        // Следующий запуск — обычный; переписка читается.
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "-l2-simulate-upgrade" }
+        app.launch()
+        passPin(required: true, "после-миграции")
+        wait(tab("l2.tab.chats"), "вкладки", timeout: 10)
+        wait(row, "чат с «\(peerName)» после миграции", timeout: 20).tap()
+        wait(labelContains("\(tag)-3"), "сообщения читаются после миграции", timeout: 30)
+        watchAlive("чат-после-миграции", seconds: 3)
+        app.terminate()
+    }
+
+    func test6_StartWithServerUnreachable() throws {
+        loginA()
+        let row = app.cells.firstMatch
+        wait(row, "в списке есть чат (кэш)", timeout: 20)
+        app.terminate()
+
+        app.launchEnvironment["L2_TEST_UNREACHABLE"] = "8"
+        let t0 = Date()
+        app.launch()
+        // Интерфейс (вкладки под экраном PIN) — из кэша, без сервера: ≤ 3 с от запуска.
+        let s0 = waitHook("старт", timeout: 5) { ($0["ui"] ?? -1) >= 0 }
+        XCTAssertGreaterThanOrEqual(s0["ui"] ?? -1, 0, "интерфейс не построен")
+        XCTAssertLessThanOrEqual(s0["ui"] ?? 99_999, 3000, "интерфейс построен дольше 3 с")
+        XCTAssertEqual(s0["conn"], 0, "сервер должен быть недоступен первые 8 с")
+        passPin(required: true, "недоступный-сервер")
+        wait(tab("l2.tab.chats"), "вкладки без сервера", timeout: 3)
+        wait(app.cells.firstMatch, "список чатов из кэша без сервера", timeout: 3)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 12, "интерфейс с кэшем не показан вовремя")
+        // Первые 5 с после запуска — никаких ошибок.
+        while Date().timeIntervalSince(t0) < 5 {
+            XCTAssertFalse(lostToast.exists, "ошибка соединения в первые 5 с")
+            assertAlive("первые-5-с")
+            usleep(250_000)
+        }
+        screenshot("unreachable-ui")
+        // Сервер «вернулся» через 8 с — подключение само, без перезапуска.
+        let s1 = waitHook("подключение", timeout: 40) { ($0["conn"] ?? 0) == 1 }
+        XCTAssertEqual(s1["conn"], 1, "не подключились после того, как сервер стал доступен")
+        XCTAssertEqual(s1["lost"], 0, "показано «Связь с сервером потеряна» при запуске")
+        let banner = any("l2.connection.status")
+        let gone = Date().addingTimeInterval(10)
+        while Date() < gone && banner.exists { usleep(300_000) }
+        XCTAssertFalse(banner.exists, "«Подключение…» не исчезло после подключения")
+        assertTabsRespond("после-подключения")
+        screenshot("unreachable-connected")
+        app.terminate()
+        app.launchEnvironment["L2_TEST_UNREACHABLE"] = nil
+    }
+
+    func test7_RepeatedVoipPushForEndedCall() throws {
+        loginA()
+        app.terminate()
+        app.launchEnvironment["L2_TEST_VOIP_REPLAY"] = "1"
+        app.launch()
+        passPin(required: true, "voip-replay")
+        wait(tab("l2.tab.chats"), "вкладки", timeout: 10)
+        let incoming = app.alerts["Входящий звонок"].firstMatch
+        // 1: «started» — входящий показан (крючок работает).
+        wait(incoming, "входящий по VoIP push", timeout: 20)
+        screenshot("voip-incoming")
+        // 2: повтор того же topic+seq — второго входящего нет.
+        let s2 = waitHook("повтор", timeout: 6) { ($0["vstep"] ?? 0) >= 2 }
+        XCTAssertEqual(s2["vdup"], 1, "повтор push по тому же звонку не распознан")
+        XCTAssertEqual(s2["vshown"], 1, "повтор push показал второй входящий")
+        // 3: «hang-up» — входящий закрыт.
+        waitHook("отбой", timeout: 6) { ($0["vstep"] ?? 0) >= 3 }
+        let closed = Date().addingTimeInterval(4)
+        while Date() < closed && incoming.exists { usleep(200_000) }
+        XCTAssertFalse(incoming.exists, "push «hang-up» не закрыл входящий")
+        // 4–5: тот же звонок после завершения и устаревший push — экран звонка не появляется.
+        let end = Date().addingTimeInterval(8)
+        var st = hook("после-отбоя")
+        while Date() < end && (st["vstep"] ?? 0) < 6 {
+            XCTAssertFalse(incoming.exists, "фантомный входящий после завершения звонка")
+            XCTAssertFalse(any("l2.call.hangup").exists, "экран звонка после завершения")
+            assertAlive("повторный-push")
+            usleep(300_000)
+            st = hook("после-отбоя")
+        }
+        XCTAssertEqual(st["vstep"], 6, "сценарий крючка не дошёл до конца")
+        XCTAssertEqual(st["vshown"], 1, "по завершённому звонку снова показан входящий")
+        XCTAssertGreaterThanOrEqual(st["vign"] ?? 0, 2, "push по завершённому / устаревшему звонку не отброшен")
+        XCTAssertFalse(incoming.exists, "фантомный входящий")
+        assertTabsRespond("после-повторного-push")
+        watchAlive("после-повторного-push", seconds: 3)
+        screenshot("voip-replay-done")
+        app.terminate()
+        app.launchEnvironment["L2_TEST_VOIP_REPLAY"] = nil
     }
 }
