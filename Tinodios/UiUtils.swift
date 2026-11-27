@@ -81,6 +81,8 @@ enum Linia2ConnectionNotice {
 // Can't use AttributedString.boundingRect(with CGSize) per
 // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/TextLayout/Tasks/StringHeight.html
 class TextSizeHelper {
+    /// LINIA2: последний расчёт с местом под время — время влезло в последнюю строку текста.
+    var lastTimeInline = false
     private let textStorage: NSTextStorage
     private let textContainer: NSTextContainer
     private let layoutManager: NSLayoutManager
@@ -124,6 +126,7 @@ class TextSizeHelper {
         let lastLineEnd = min(lineRect.maxX, glyphRect.maxX)
         if lastLineEnd + trailingReserve <= maxWidth {
             size.width = max(size.width, ceil(lastLineEnd + trailingReserve))
+            lastTimeInline = true
         } else {
             size.height += extraLine
         }

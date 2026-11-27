@@ -117,6 +117,9 @@ class MessageViewController: UIViewController {
         // Дизайн: пузырь без «хвостика» — поля по 12 pt с обеих сторон, как в Telegram (было 18/14 — текст «уезжал» вправо).
         static let kIncomingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
         static let kOutgoingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
+        // LINIA2 (дизайн, как в вебе): время на одной строке с текстом — поля сверху и снизу равные,
+        // текст по центру пузыря; время не влезло — оно под текстом справа (поля kOutgoing/kIncoming…).
+        static let kInlineTimeContentInset = UIEdgeInsets(top: 7, left: 12, bottom: 7, right: 12)
         static let kDeletedMessageContentInset = UIEdgeInsets(top: 4, left: 14, bottom: 0, right: 14)
         // Дизайн: фото/видео без подписи — почти до края пузыря (как в Telegram), время — плашкой на снимке.
         static let kL2MediaInset = UIEdgeInsets(top: 3, left: 3, bottom: 3, right: 3)
@@ -1047,6 +1050,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // Size of the message bubble.
         let showUploadProgress = shouldShowProgressBar(for: message)
         let containerSize = calcContainerSize(for: message, avatarsVisible: hasAvatars, progressVisible: showUploadProgress)
+        let timeInline = textSizeHelper.lastTimeInline && !isCentered
         // Get cell size.
         let cellSize = !isDeleted ? calcCellSize(forItemAt: indexPath) : containerSize
         attr.cellSpacing = Constants.kVerticalCellSpacing
@@ -1085,10 +1089,15 @@ extension MessageViewController: MessageViewLayoutDelegate {
             isService && !isDeleted ? Constants.kServiceContentInset :
             isCentered ? Constants.kDeletedMessageContentInset :
             linia2IsPureMedia(message) ? Constants.kL2MediaInset :
+            timeInline ? Constants.kInlineTimeContentInset :
             isOutgoing ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
         attr.contentFrame = CGRect(x: contentInset.left, y: contentInset.top, width: attr.containerFrame.width - contentInset.left - contentInset.right, height: attr.containerFrame.height - contentInset.top - contentInset.bottom - (showUploadProgress ? Constants.kProgressViewHeight : 0))
 
         var rightEdge = CGPoint(x: attr.containerFrame.width - Constants.kDeliveryMarkerPadding, y: attr.containerFrame.height - Constants.kDeliveryMarkerSize)
+        if timeInline && !showUploadProgress {
+            // Время — на последней строке текста (по её нижнему краю), а не ниже текста.
+            rightEdge.y = attr.containerFrame.height - contentInset.bottom - Constants.kDeliveryMarkerSize - 1
+        }
         if linia2IsPureMedia(message) {
             // Дизайн: время на снимке — плашкой внутри, а не на срезе края пузыря.
             rightEdge.x -= 6
@@ -1199,13 +1208,14 @@ extension MessageViewController: MessageViewLayoutDelegate {
             return linia2RoundContainerSize(maxWidth: maxWidth, progressVisible: progressVisible)
         }
         let isService = !message.isDeleted && linia2IsServiceMessage(message)
-        let insets =
+        let baseInsets =
             isService ? Constants.kServiceContentInset :
             message.isDeleted ? Constants.kDeletedMessageContentInset :
             linia2IsPureMedia(message) ? Constants.kL2MediaInset :
             isFromCurrentSender(message: message) ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
 
         var size = calcContentSize(for: message, maxWidth: maxWidth)
+        let insets = textSizeHelper.lastTimeInline ? Constants.kInlineTimeContentInset : baseInsets
 
         size.width += insets.left + insets.right
         if !isService {
@@ -1222,6 +1232,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
 
     /// Calculate size of message content.
     func calcContentSize(for message: Message, maxWidth: CGFloat) -> CGSize {
+        textSizeHelper.lastTimeInline = false
         let attributedText = NSMutableAttributedString()
 
         let carveout = isFromCurrentSender(message: message) ? Constants.kOutgoingMetadataCarveout : Constants.kIncomingMetadataCarveout
