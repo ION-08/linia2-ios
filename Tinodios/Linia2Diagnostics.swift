@@ -197,6 +197,7 @@ final class Linia2CallDiag {
                                      "vrx": Int(n("vIn")), "vtx": Int(n("vOut")), "alevel": n("level"), "llevel": n("micLevel"),
                                      "lost": Int(n("lost")), "rtt": Int(n("rtt") * 1000), "lt": (s["pair"] as? String) ?? "?",
                                      "akind": (s["aKind"] as? String) ?? "", "ein": n("energyIn"),
+                                     "rtp": (s["rtp"] as? String) ?? "", "tr": (s["tr"] as? String) ?? "",
                                      "aout": AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none",
                                      "ain": AVAudioSession.sharedInstance().currentRoute.inputs.first?.portType.rawValue ?? "none",
                                      "acat": AVAudioSession.sharedInstance().category.rawValue]
