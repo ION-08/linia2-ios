@@ -1,0 +1,380 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<!-- Линия 2.0: звонковый движок WebRTC для WKWebView (features.webCallEngine). Локальный файл из бандла —
+     никакой код с сервера не загружается. Сигнализацию (Tinode videoCall: offer/answer/ice-candidate/hang-up),
+     CallKit, кнопки и TURN-данные ведёт нативный код (Linia2WebCallEngine.swift); здесь — только медиа и
+     RTCPeerConnection по той же схеме, что и веб-CallPanel Tinode / гостевая страница:
+     звонящий: pc + канал данных «events» после «accept», затем offer; принимающий отвечает на offer на том же pc;
+     удалённые кандидаты копятся до применения удалённого описания. -->
+<style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;-webkit-user-select:none}
+#remote{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;display:none}
+#remote.on{display:block}
+#local{position:fixed;object-fit:cover;border-radius:14px;background:#111;display:none;transform:scaleX(-1)}
+#local.on{display:block}
+#local.back{transform:none}
+audio{display:none}
+</style></head>
+<body>
+<video id="remote" playsinline autoplay muted></video>
+<video id="local" playsinline autoplay muted></video>
+<audio id="raudio" autoplay playsinline></audio>
+<script>
+(function () {
+  'use strict';
+  var S = {
+    q: Promise.resolve(), pc: null, dc: null, stream: null, cache: [], cfg: {}, closed: false,
+    established: false, initialOfferSent: false, facing: 'user', wantVideo: false, audioOn: true,
+    remoteLive: false, localRect: null, statsTimer: null, lastBytes: 0
+  };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function post(m) {
+    try {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.l2call) {
+        window.webkit.messageHandlers.l2call.postMessage(m);
+      }
+    } catch (e) {}
+  }
+  function diag(ev) { post({ t: 'diag', ev: ev }); }
+  function err(where, e) { post({ t: 'diag', ev: { type: 'error', where: where, msg: String(e && (e.name || e.message) || e) } }); }
+  // Все операции — строго по очереди (как поток signaling у нативного WebRTC): offer/answer/кандидаты не обгоняют друг друга.
+  function q(name, fn) {
+    S.q = S.q.then(function () { if (!S.closed) return fn(); }).catch(function (e) { err(name, e); });
+    return S.q;
+  }
+  function failed(stage) {
+    // Как нативный движок: не соединились ни разу — завершаем звонок; соединялись — экран делает ICE restart.
+    if (S.established) post({ t: 'negFailed', stage: stage }); else post({ t: 'close', why: stage });
+  }
+
+  // ---------- Медиа ----------
+  function emptyVideoTrack() {
+    try {
+      var c = Object.assign(document.createElement('canvas'), { width: 320, height: 240 });
+      c.getContext('2d').fillRect(0, 0, 320, 240);
+      var t = c.captureStream(0).getVideoTracks()[0];
+      if (t) t.enabled = false;
+      return t || null;
+    } catch (e) { return null; }
+  }
+  function audioConstraints() { return { echoCancellation: true, noiseSuppression: true, autoGainControl: true }; }
+  function videoConstraints() { return { facingMode: S.facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } }; }
+  function gum(c) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error('nomedia'));
+    return navigator.mediaDevices.getUserMedia(c);
+  }
+  function liveTrack(kind) {
+    var st = S.stream; if (!st) return null;
+    var a = kind === 'audio' ? st.getAudioTracks() : st.getVideoTracks();
+    for (var i = 0; i < a.length; i++) if (a[i].readyState === 'live') return a[i];
+    return null;
+  }
+  function sender(kind) {
+    if (!S.pc) return null;
+    var tr = S.pc.getTransceivers ? S.pc.getTransceivers() : [];
+    for (var i = 0; i < tr.length; i++) {
+      var r = tr[i].receiver && tr[i].receiver.track;
+      if (r && r.kind === kind) return tr[i].sender;
+    }
+    return null;
+  }
+  function showLocal() {
+    var v = $('local'), t = liveTrack('video');
+    var on = !!(t && t.enabled && S.wantVideo && S.localRect);
+    if (on) {
+      if (v.srcObject !== S.stream) v.srcObject = S.stream;
+      var r = S.localRect;
+      v.style.left = r.x + 'px'; v.style.top = r.y + 'px'; v.style.width = r.w + 'px'; v.style.height = r.h + 'px';
+      v.classList.toggle('back', S.facing !== 'user');
+      try { var p = v.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
+    }
+    v.classList.toggle('on', on);
+  }
+  function startMedia() {
+    var wantV = !!S.cfg.video;
+    S.wantVideo = wantV;
+    return gum({ audio: audioConstraints(), video: wantV ? videoConstraints() : false })
+      .catch(function (e) {
+        err('gum', e);
+        // Камера недоступна — только микрофон; микрофон недоступен — слушаем без него (как нативный экран).
+        return (wantV ? gum({ audio: audioConstraints() }) : Promise.reject(e)).catch(function (e2) {
+          err('gum-audio', e2);
+          return new MediaStream();
+        });
+      })
+      .then(function (st) {
+        S.stream = st;
+        var a = st.getAudioTracks()[0];
+        if (a) a.enabled = S.audioOn;
+        post({ t: 'media', audio: !!a, video: st.getVideoTracks().length > 0 });
+        showLocal();
+      });
+  }
+
+  // ---------- Соединение ----------
+  function createPC(ice, policy, withDC) {
+    if (S.pc) return;
+    S.cache = [];
+    var pc = S.pc = new RTCPeerConnection({ iceServers: ice || [], iceTransportPolicy: policy || 'all', bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+    pc.onicecandidate = function (e) {
+      if (e.candidate && e.candidate.candidate) {
+        var c = e.candidate.toJSON ? e.candidate.toJSON() : e.candidate;
+        post({ t: 'ice', c: { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex } });
+      }
+    };
+    pc.oniceconnectionstatechange = function () {
+      if (pc !== S.pc) return;
+      var s = pc.iceConnectionState;
+      if (s === 'connected' || s === 'completed') S.established = true;
+      post({ t: 'iceState', state: s });
+    };
+    pc.onconnectionstatechange = function () { if (pc === S.pc) diag({ type: 'conn', state: pc.connectionState }); };
+    pc.onsignalingstatechange = function () { if (pc === S.pc) post({ t: 'signaling', state: pc.signalingState }); };
+    // Перенастройку не начинаем сами: первый offer — явно (makeOffer), ICE restart — по команде экрана.
+    pc.onnegotiationneeded = function () {};
+    // Звук — отдельным <audio> (только аудиотреки), <video> — только картинка без звука (исправление гостевой страницы).
+    pc.ontrack = function (e) {
+      var st = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+      var v = $('remote'), a = $('raudio');
+      if (e.track.kind === 'video') {
+        if (v.srcObject !== st) { v.srcObject = st; v.muted = true; }
+        try { var pv = v.play(); if (pv && pv.catch) pv.catch(function () {}); } catch (x) {}
+      }
+      var at = st.getAudioTracks()[0] || (e.track.kind === 'audio' ? e.track : null);
+      if (at) {
+        var cur = a.srcObject && a.srcObject.getAudioTracks()[0];
+        if (!cur || cur.id !== at.id) a.srcObject = new MediaStream([at]);
+        a.muted = false;
+        var p; try { p = a.play(); } catch (x) { p = null; }
+        if (p && p.catch) p.catch(function (x) { err('audio-play', x); });
+      }
+      diag({ type: 'track', kind: e.track.kind });
+    };
+    pc.ondatachannel = function (e) { bindDC(e.channel); };
+
+    var st = S.stream || new MediaStream();
+    var a = liveTrack('audio');
+    if (a) pc.addTrack(a, st); else pc.addTransceiver('audio', { direction: 'sendrecv', streams: [st] });
+    var v = liveTrack('video') || emptyVideoTrack();
+    if (v) pc.addTrack(v, st); else pc.addTransceiver('video', { direction: 'sendrecv', streams: [st] });
+    if (withDC) bindDC(pc.createDataChannel('events', { ordered: true }));
+    diag({ type: 'pc', iceServers: (ice || []).length, turn: (ice || []).some(function (s) { return [].concat(s.urls).some(function (u) { return /^turns?:/.test(u); }); }) });
+    if (!S.statsTimer) S.statsTimer = setInterval(stats, 2000);
+  }
+  function bindDC(dc) {
+    S.dc = dc;
+    dc.onopen = function () { if (!S.cfg.audioOnly && camOn()) sendDC('video:unmuted'); };
+    dc.onmessage = function (e) { post({ t: 'dc', ev: String(e.data) }); };
+  }
+  function sendDC(ev) { try { if (S.dc && S.dc.readyState === 'open') S.dc.send(ev); } catch (e) {} }
+  function camOn() { var t = liveTrack('video'); return !!(t && t.enabled); }
+
+  function drainCache() {
+    var pc = S.pc, list = S.cache; S.cache = [];
+    diag({ type: 'candidates', drained: list.length });
+    return Promise.all(list.map(function (c) { return pc.addIceCandidate(c).catch(function (e) { err('drainIceCandidates', e); }); }));
+  }
+  function offer(restart) {
+    var pc = S.pc;
+    return pc.createOffer(restart ? { iceRestart: true } : {})
+      .then(function (o) { return pc.setLocalDescription(o); })
+      .then(function () { post({ t: 'offer', sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }); })
+      .catch(function (e) { err(restart ? 'restartOffer' : 'offer', e); failed(restart ? 'restartOffer' : 'offer'); });
+  }
+  function applyOffer(desc) {
+    var pc = S.pc;
+    return pc.setRemoteDescription(desc)
+      .then(drainCache)
+      .then(function () { return pc.createAnswer(); })
+      .then(function (a) { return pc.setLocalDescription(a); })
+      .then(function () {
+        post({ t: 'answer', sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } });
+        post({ t: 'setupComplete', remoteOffer: true });
+      })
+      .catch(function (e) { err('remoteOffer', e); failed('remoteOffer'); });
+  }
+
+  // ---------- Команды нативного кода ----------
+  var api = {
+    start: function (cfg) {
+      S.cfg = cfg || {};
+      S.closed = false;
+      return q('start', startMedia);
+    },
+    createPC: function (o) { return q('createPC', function () { createPC(o.ice, o.policy, !!o.dc); }); },
+    makeOffer: function () {
+      return q('makeOffer', function () {
+        if (!S.pc || S.initialOfferSent) return;
+        S.initialOfferSent = true;
+        return offer(false);
+      });
+    },
+    remoteOffer: function (desc) {
+      return q('remoteOffer', function () {
+        var pc = S.pc; if (!pc) return;
+        if (pc.signalingState === 'have-local-offer') {
+          // Встречные offer (оба переподключаются): звонящий («невежливый») игнорирует, принимающий откатывает свой.
+          if (S.cfg.caller) { diag({ type: 'glare', action: 'ignore' }); return; }
+          diag({ type: 'glare', action: 'rollback' });
+          return pc.setLocalDescription({ type: 'rollback' }).catch(function () {}).then(function () { return applyOffer(desc); });
+        }
+        return applyOffer(desc);
+      });
+    },
+    remoteAnswer: function (desc) {
+      return q('remoteAnswer', function () {
+        var pc = S.pc; if (!pc) return;
+        if (pc.signalingState !== 'have-local-offer') { diag({ type: 'answer-ignored', signaling: pc.signalingState }); return; }
+        return pc.setRemoteDescription(desc)
+          .then(drainCache)
+          .then(function () { post({ t: 'setupComplete', remoteOffer: false }); })
+          .catch(function (e) { err('remoteAnswer', e); failed('remoteAnswer'); });
+      });
+    },
+    remoteIce: function (c) {
+      return q('remoteIce', function () {
+        if (!c || !c.candidate) return;
+        var init = { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex };
+        if (!S.pc || !S.pc.remoteDescription) { S.cache.push(init); return; }
+        return S.pc.addIceCandidate(init).catch(function (e) { err('addIceCandidate', e); });
+      });
+    },
+    restartIce: function (o) {
+      return q('restartIce', function () {
+        var pc = S.pc; if (!pc) return;
+        try {
+          var cfg = pc.getConfiguration();
+          if (o.ice && o.ice.length) cfg.iceServers = o.ice;
+          if (o.relay) cfg.iceTransportPolicy = 'relay';
+          pc.setConfiguration(cfg);
+        } catch (e) { err('setConfiguration', e); }
+        diag({ type: 'ice-restart', relay: !!o.relay, signaling: pc.signalingState });
+        var pre = pc.signalingState === 'have-local-offer' ? pc.setLocalDescription({ type: 'rollback' }).catch(function () {}) : Promise.resolve();
+        return pre.then(function () { return offer(true); });
+      });
+    },
+    setAudio: function (on) {
+      S.audioOn = !!on;
+      return q('setAudio', function () {
+        var t = liveTrack('audio');
+        if (t) { t.enabled = S.audioOn; return; }
+        if (!S.audioOn) return;
+        // Микрофон разрешили во время звонка — берём его и подставляем в уже согласованный sender (без перенастройки).
+        return gum({ audio: audioConstraints() }).then(function (st) {
+          var nt = st.getAudioTracks()[0]; if (!nt) return;
+          if (!S.stream) S.stream = new MediaStream();
+          S.stream.addTrack(nt);
+          var s = sender('audio');
+          if (s) return s.replaceTrack(nt);
+        }).then(function () { post({ t: 'media', audio: !!liveTrack('audio'), video: !!liveTrack('video') }); });
+      });
+    },
+    setCamera: function (on) {
+      S.wantVideo = !!on;
+      return q('setCamera', function () {
+        var t = liveTrack('video');
+        var s = sender('video');
+        if (!on) {
+          if (t) { t.enabled = false; t.stop(); S.stream.removeTrack(t); }
+          if (s) s.replaceTrack(emptyVideoTrack()).catch(function () {});
+          sendDC('video:muted');
+          showLocal();
+          return;
+        }
+        if (t) { t.enabled = true; showLocal(); sendDC('video:unmuted'); return; }
+        return gum({ video: videoConstraints() }).then(function (st) {
+          var nt = st.getVideoTracks()[0]; if (!nt) return;
+          if (!S.stream) S.stream = new MediaStream();
+          S.stream.addTrack(nt);
+          showLocal();
+          return (s ? s.replaceTrack(nt) : Promise.resolve()).then(function () { sendDC('video:unmuted'); });
+        }).catch(function (e) { err('camera', e); post({ t: 'cameraFailed' }); });
+      });
+    },
+    setVideoEnabled: function (on) { var t = liveTrack('video'); if (t) t.enabled = !!on; showLocal(); },
+    switchCamera: function () {
+      return q('switchCamera', function () {
+        var old = liveTrack('video'); if (!old) return;
+        S.facing = S.facing === 'user' ? 'environment' : 'user';
+        old.stop(); S.stream.removeTrack(old);
+        return gum({ video: videoConstraints() }).then(function (st) {
+          var nt = st.getVideoTracks()[0];
+          S.stream.addTrack(nt);
+          var s = sender('video');
+          showLocal();
+          if (s) return s.replaceTrack(nt);
+        });
+      });
+    },
+    sendDC: function (ev) { sendDC(ev); },
+    setRemoteVisible: function (on) { S.remoteLive = !!on; $('remote').classList.toggle('on', S.remoteLive); },
+    setLocalRect: function (r) { S.localRect = r && r.w > 0 ? r : null; showLocal(); },
+    setPaused: function (paused) {
+      if (!S.pc) return;
+      S.pc.getSenders().forEach(function (s) {
+        try {
+          var p = s.getParameters();
+          if (!p.encodings || !p.encodings.length) return;
+          p.encodings.forEach(function (e) { e.active = !paused; });
+          s.setParameters(p).catch(function () {});
+        } catch (e) {}
+      });
+      diag({ type: 'uitest-media', paused: !!paused });
+    },
+    muteAll: function () {
+      if (S.stream) S.stream.getTracks().forEach(function (t) { t.enabled = false; });
+      try { $('raudio').muted = true; } catch (e) {}
+    },
+    close: function () {
+      S.closed = true;
+      if (S.statsTimer) { clearInterval(S.statsTimer); S.statsTimer = null; }
+      try { if (S.dc) S.dc.close(); } catch (e) {}
+      try { if (S.pc) S.pc.close(); } catch (e) {}
+      if (S.stream) S.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+      ['remote', 'local', 'raudio'].forEach(function (id) { try { $(id).srcObject = null; } catch (e) {} });
+      S.pc = null; S.dc = null; S.stream = null; S.cache = [];
+      S.established = false; S.initialOfferSent = false;
+      S.q = Promise.resolve();
+    },
+    // Для тестов: уровень/байты звука.
+    state: function () {
+      return { pc: !!S.pc, ice: S.pc ? S.pc.iceConnectionState : 'none', signaling: S.pc ? S.pc.signalingState : 'none',
+               audio: !!liveTrack('audio'), video: !!liveTrack('video'), bytesIn: S.lastBytes };
+    }
+  };
+
+  var last = null;
+  function stats() {
+    var pc = S.pc; if (!pc) return;
+    pc.getStats().then(function (r) {
+      var o = { aIn: 0, aOut: 0, vIn: 0, vOut: 0, lost: 0, recv: 0, rtt: 0, level: 0, pair: '' };
+      r.forEach(function (s) {
+        if (s.type === 'inbound-rtp' && s.kind === 'audio') { o.aIn += s.bytesReceived || 0; o.lost += s.packetsLost || 0; o.recv += s.packetsReceived || 0; if (s.audioLevel != null) o.level = s.audioLevel; }
+        if (s.type === 'inbound-rtp' && s.kind === 'video') o.vIn += s.bytesReceived || 0;
+        if (s.type === 'outbound-rtp' && s.kind === 'audio') o.aOut += s.bytesSent || 0;
+        if (s.type === 'outbound-rtp' && s.kind === 'video') o.vOut += s.bytesSent || 0;
+        if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') {
+          o.rtt = s.currentRoundTripTime || 0;
+          var lc = r.get ? r.get(s.localCandidateId) : null;
+          o.pair = lc ? (lc.candidateType || '') : '';
+        }
+        if (s.type === 'media-source' && s.kind === 'audio' && s.audioLevel != null) o.micLevel = s.audioLevel;
+      });
+      S.lastBytes = o.aIn;
+      post({ t: 'stats', s: o });
+      last = o;
+    }).catch(function () {});
+  }
+
+  window.L2Call = api;
+  // Вызов от нативного кода: L2Call.cmd('name', {json}) — ошибки не роняют страницу.
+  api.cmd = function (name, arg) {
+    try { var f = api[name]; if (f) f(arg); } catch (e) { err('cmd:' + name, e); }
+    return true;
+  };
+  post({ t: 'ready' });
+})();
+</script>
+</body></html>

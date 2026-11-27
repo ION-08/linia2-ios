@@ -183,6 +183,20 @@ final class Linia2CallDiag {
         let rtcState: [String: Any] = ["rtcAudio": rtc.isAudioEnabled ? 1 : 0, "rtcActive": rtc.isActive ? 1 : 0,
                                        "atrack": client.hasLocalAudioTrack, "aon": client.isAudioEnabled,
                                        "route": AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none"]
+        // Движок WKWebView: статистика собрана страницей (getStats) — те же поля arx/atx/vrx/vtx/alevel.
+        if let w = client.web {
+            let s = w.lastStats
+            func n(_ k: String) -> Double { (s[k] as? NSNumber)?.doubleValue ?? 0 }
+            var ev: [String: Any] = ["type": "stats", "engine": "web", "arx": Int(n("aIn")), "atx": Int(n("aOut")),
+                                     "vrx": Int(n("vIn")), "vtx": Int(n("vOut")), "alevel": n("level"), "llevel": n("micLevel"),
+                                     "lost": Int(n("lost")), "rtt": Int(n("rtt") * 1000), "lt": (s["pair"] as? String) ?? "?"]
+            for (k, v) in rtcState { ev[k] = v }
+            ev["ice"] = client.iceStateName
+            for (k, v) in stateProvider?() ?? [:] { ev[k] = v }
+            add(ev)
+            flush()
+            return
+        }
         client.statistics { report in
             var ev: [String: Any] = ["type": "stats", "arx": 0, "atx": 0, "vrx": 0, "vtx": 0, "alevel": 0.0]
             var arx = 0.0, atx = 0.0, vrx = 0.0, vtx = 0.0

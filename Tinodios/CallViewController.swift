@@ -28,8 +28,11 @@ class CameraManager: NSObject {
     weak var delegate: CameraCaptureDelegate?
 
     var isCapturing = false
+    /// LINIA2: движок WKWebView — камерой владеет страница (getUserMedia), здесь только желаемое состояние.
+    weak var web: Linia2WebCallEngine?
 
     func setupCamera() {
+        if web != nil { return }
         guard let videoCaptureDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
             let videoInput = try? AVCaptureDeviceInput(device: videoCaptureDevice) else { return }
 
@@ -70,6 +73,11 @@ class CameraManager: NSObject {
     private(set) var position: AVCaptureDevice.Position = .front
     func switchCamera() {
         let newPos: AVCaptureDevice.Position = position == .front ? .back : .front
+        if let w = web {
+            position = newPos
+            w.call("switchCamera", nil)
+            return
+        }
         guard let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPos),
               let input = try? AVCaptureDeviceInput(device: dev) else { return }
         dataOutputQueue.async {
@@ -103,6 +111,11 @@ class CameraManager: NSObject {
 
         guard !isCapturing else { return }
         isCapturing = true
+        if let w = web {
+            w.setCamera(true)
+            DispatchQueue.main.async { completion?() }
+            return
+        }
 
         #if arch(arm64)
         sessionQueue.async {
@@ -117,6 +130,11 @@ class CameraManager: NSObject {
         Cache.log.info("CallVC - CameraManager: end capture")
         guard isCapturing else { return }
         isCapturing = false
+        if let w = web {
+            w.setCamera(false)
+            DispatchQueue.main.async { completion?() }
+            return
+        }
 
         #if arch(arm64)
         sessionQueue.async {
@@ -277,26 +295,55 @@ class WebRTCClient: NSObject {
 
     weak var delegate: WebRTCClientDelegate?
 
+    /// LINIA2 (вариант Б): звонковый движок в WKWebView (features.webCallEngine) — см. Linia2WebCallEngine.
+    /// Если задан, медиа и RTCPeerConnection — в JS; методы ниже передают ему команды, события приходят обратно
+    /// через linia2Web* и становятся теми же вызовами делегата, что и у нативного движка.
+    private(set) var web: Linia2WebCallEngine?
+    /// Соединение в JS создано (аналог localPeer != nil).
+    private var webPC = false
+    var isWebEngine: Bool { web != nil }
+
+    /// Включить движок WKWebView для этого звонка (до setup()).
+    func linia2EnableWebEngine(audioOnly: Bool, caller: Bool, video: Bool) {
+        guard web == nil else { return }
+        let w = Linia2WebCallEngine(client: self)
+        web = w
+        onDiagEvent?(["type": "engine", "name": "web"])
+        w.start(audioOnly: audioOnly, caller: caller, video: video)
+    }
+
     func setup() {
+        if web != nil { return }   // медиа берёт страница (getUserMedia)
         createMediaSenders()
     }
 
     func toggleAudio() -> Bool {
+        if let w = web { w.setAudio(!w.audioEnabled); return w.audioEnabled }
         guard let track = self.localAudioTrack else { return false }
         track.isEnabled = !track.isEnabled
         return track.isEnabled
     }
 
     // LINIA2: явные состояния (для CallKit «Выключить звук» и удержания).
-    var isAudioEnabled: Bool { localAudioTrack?.isEnabled ?? false }
-    var hasLocalAudioTrack: Bool { localAudioTrack != nil }
-    var iceStateName: String { localPeer.map { WebRTCClient.iceName($0.iceConnectionState) } ?? "none" }
-    func setAudioEnabled(_ on: Bool) { localAudioTrack?.isEnabled = on }
-    func setVideoEnabled(_ on: Bool) { localVideoTrack?.isEnabled = on }
-    var isVideoTrackEnabled: Bool { localVideoTrack?.isEnabled ?? false }
+    var isAudioEnabled: Bool { web.map { $0.hasAudio && $0.audioEnabled } ?? (localAudioTrack?.isEnabled ?? false) }
+    var hasLocalAudioTrack: Bool { web?.hasAudio ?? (localAudioTrack != nil) }
+    var iceStateName: String {
+        if let w = web { return w.iceState }
+        return localPeer.map { WebRTCClient.iceName($0.iceConnectionState) } ?? "none"
+    }
+    func setAudioEnabled(_ on: Bool) {
+        if let w = web { w.setAudio(on); return }
+        localAudioTrack?.isEnabled = on
+    }
+    func setVideoEnabled(_ on: Bool) {
+        if let w = web { w.setVideoEnabled(on); return }
+        localVideoTrack?.isEnabled = on
+    }
+    var isVideoTrackEnabled: Bool { web?.videoEnabled ?? (localVideoTrack?.isEnabled ?? false) }
 
     /// Статистика WebRTC (потери, RTT) — для «Плохая связь».
     func statistics(_ completion: @escaping (RTCStatisticsReport) -> Void) {
+        guard web == nil else { return }   // движок WKWebView: статистика — web.lastStats
         guard let peer = localPeer else { return }
         peer.statistics(completionHandler: completion)
     }
@@ -314,6 +361,13 @@ class WebRTCClient: NSObject {
     // Adds remote ICE candidate to either the peer connection when it exists
     // or the cache when the hasn't been created yet.
     func handleRemoteIceCandidate(_ candidate: RTCIceCandidate, saveInCache: Bool) {
+        if let w = web {
+            // Буфер до удалённого описания — в JS (как веб-CallPanel).
+            var c: [String: Any] = ["candidate": candidate.sdp, "sdpMLineIndex": Int(candidate.sdpMLineIndex)]
+            if let mid = candidate.sdpMid { c["sdpMid"] = mid }
+            w.call("remoteIce", c)
+            return
+        }
         if !saveInCache {
             self.localPeer?.add(candidate) { err in
                 if let err = err {
@@ -343,6 +397,7 @@ class WebRTCClient: NSObject {
 
     // Adds all locally cached remote ICE candidates to the peer connection.
     func drainIceCandidatesCache() {
+        if web != nil { return }   // JS разгружает свой буфер сам после setRemoteDescription
         Cache.log.info("Draining iceCandidateCache: %d items", self.remoteIceCandidatesCache.count)
         var success = true
         var pending: [RTCIceCandidate] = []
@@ -365,7 +420,7 @@ class WebRTCClient: NSObject {
         }
     }
 
-    var hasPeerConnection: Bool { localPeer != nil }
+    var hasPeerConnection: Bool { web != nil ? webPC : localPeer != nil }
 
     /// Вызывается из signaling-потока (завершение setRemoteDescription). Внутри очереди — без вызовов WebRTC.
     private func markRemoteDescriptionApplied() {
@@ -373,6 +428,13 @@ class WebRTCClient: NSObject {
     }
 
     func createPeerConnection(withDataChannel dataChannel: Bool) -> Bool {
+        if let w = web {
+            if webPC { return true }
+            guard let config = generateRTCConfig() else { return false }
+            webPC = true
+            w.createPeerConnection(iceServers: config.iceServers, relayOnly: false, dataChannel: dataChannel)
+            return true
+        }
         // LINIA2: повторный вызов (соединение создано заранее, при «Принять») — используем готовое.
         if localPeer != nil { return true }
         // LINIA2: действительно новое соединение — буфер удалённых кандидатов снова копится до применения удалённого описания.
@@ -419,6 +481,12 @@ class WebRTCClient: NSObject {
 
     /// LINIA2: первый offer звонящего — сразу после создания соединения (не ждём negotiationneeded).
     func makeInitialOffer() {
+        if let w = web {
+            guard !initialOfferSent, webPC else { return }
+            initialOfferSent = true
+            w.call("makeOffer", nil)
+            return
+        }
         guard !initialOfferSent, let pc = localPeer else { return }
         initialOfferSent = true
         offer(pc)
@@ -486,16 +554,28 @@ class WebRTCClient: NSObject {
     }
 
     var iceIsConnected: Bool {
+        if let w = web { return w.iceState == "connected" || w.iceState == "completed" }
         guard let pc = localPeer else { return false }
         return pc.iceConnectionState == .connected || pc.iceConnectionState == .completed
     }
-    var signalingIsStable: Bool { localPeer?.signalingState == .stable }
+    var signalingIsStable: Bool { web.map { $0.signalingState == "stable" } ?? (localPeer?.signalingState == .stable) }
 
     /// LINIA2: ICE restart — новый offer с новыми ufrag/pwd (IceRestart), собеседнику через Tinode «offer» с тем же seq.
     /// `relayOnly` — только через TURN (в т.ч. TCP): после неудачных попыток напрямую.
     /// Возвращает false, если сейчас нельзя (нет соединения, ждём ответ собеседника на его offer).
     @discardableResult
     func linia2RestartIce(relayOnly: Bool) -> Bool {
+        if let w = web {
+            guard webPC, w.signalingState != "have-remote-offer" else { return false }
+            var servers = generateRTCConfig()?.iceServers ?? []
+            let fresh = Linia2Turn.shared.iceServers(timeout: 0.3)
+            if !fresh.isEmpty {
+                let freshUrls = Set(fresh.flatMap { $0.urlStrings })
+                servers = servers.filter { Set($0.urlStrings).isDisjoint(with: freshUrls) } + fresh
+            }
+            w.restartIce(iceServers: servers, relayOnly: relayOnly)
+            return true
+        }
         guard let pc = localPeer else { return false }
         if pc.signalingState == .haveRemoteOffer { return false }
         // Свежие TURN-данные и (при необходимости) только relay.
@@ -546,6 +626,7 @@ class WebRTCClient: NSObject {
 
     /// LINIA2 (автотесты): приостановить/возобновить отправку RTP (encodings.isActive) — эмуляция пропажи медиапути.
     func linia2SetSendingPaused(_ paused: Bool) {
+        if let w = web { w.call("setPaused", paused); return }
         guard let pc = localPeer else { return }
         for sender in pc.senders {
             let p = sender.parameters
@@ -558,12 +639,14 @@ class WebRTCClient: NSObject {
 
     /// LINIA2: при завершении — сразу перестать передавать звук и видео (до закрытия соединения).
     func linia2MuteAllForClose() {
+        web?.call("muteAll", nil)
         localAudioTrack?.isEnabled = false
         localVideoTrack?.isEnabled = false
         localPeer?.senders.forEach { $0.track?.isEnabled = false }
     }
 
     func sendOverDataChannel(event: String) {
+        if let w = web { w.call("sendDC", event); return }
         self.localDataChannel?.sendData(RTCDataBuffer(data: Data(event.utf8), isBinary: false))
     }
 
@@ -571,6 +654,11 @@ class WebRTCClient: NSObject {
         initialOfferSent = false
         remoteAnswerApplied = false
         linia2Established = false
+        if let w = web {
+            w.close()
+            web = nil
+            webPC = false
+        }
         // LINIA2 (баг «Завершить» срабатывает через ~5 с): RTCPeerConnection.close() синхронный и на iPhone
         // занимает секунды (освобождение TURN-выделений, остановка аудиоблока VPIO, потоки WebRTC) — раньше он
         // шёл на главном потоке ДО закрытия экрана. Теперь: треки выключаются сразу (микрофон/камера не
@@ -624,7 +712,7 @@ extension WebRTCClient: RTCDataChannelDelegate {
 // MARK: Preparation/setup.
 extension WebRTCClient {
     // TODO: ICE/WebRTC config should be obtained from the server.
-    private func generateRTCConfig() -> RTCConfiguration? {
+    func generateRTCConfig() -> RTCConfiguration? {
         let tinode = Cache.tinode
         // LINIA2: без параметра iceServers от сервера (ещё не пришёл {ctrl} после входа) звонок не обрываем —
         // соединяемся через наш TURN (Linia2Turn) и публичный STUN.
@@ -710,6 +798,7 @@ extension WebRTCClient {
 extension WebRTCClient {
     // Processes remote offer SDP.
     func handleRemoteOfferDescription(_ desc: RTCSessionDescription) {
+        if let w = web { w.call("remoteOffer", ["type": "offer", "sdp": desc.sdp]); return }
         guard let peerConnection = localPeer else { return }
         // LINIA2: встречные offer (оба переподключаются одновременно, ICE restart) — «вежливый» (принимающий звонок)
         // откатывает свой offer и отвечает; «невежливый» (звонящий) offer собеседника игнорирует — тот откатит свой.
@@ -750,6 +839,7 @@ extension WebRTCClient {
 
     // Processes remote answer SDP.
     func handleRemoteAnswerDescription(_ desc: RTCSessionDescription) {
+        if let w = web { w.call("remoteAnswer", ["type": "answer", "sdp": desc.sdp]); return }
         // LINIA2: запоздалый/повторный answer (мы уже откатили свой offer) — не ошибка звонка.
         if let pc = localPeer, pc.signalingState != .haveLocalOffer, linia2Established {
             onDiagEvent?(["type": "answer-ignored", "signaling": pc.signalingState.rawValue])
@@ -837,6 +927,11 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
             guard let self = self, self.localPeer === peerConnection else { return }
             self.delegate?.linia2IceStateChanged(newState)
         }
+        linia2HandleIceState(newState)
+    }
+
+    /// Общая реакция на состояние ICE (нативный движок и движок WKWebView).
+    func linia2HandleIceState(_ newState: RTCIceConnectionState) {
         switch newState {
         case .closed:
             self.delegate?.closeCall()
@@ -853,6 +948,27 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
         default:
             break
         }
+    }
+
+    // MARK: События движка WKWebView (главный поток)
+
+    func linia2WebIceState(_ name: String) {
+        let map: [String: RTCIceConnectionState] = ["new": .new, "checking": .checking, "connected": .connected,
+                                                    "completed": .completed, "failed": .failed,
+                                                    "disconnected": .disconnected, "closed": .closed]
+        guard web != nil, let st = map[name] else { return }
+        onDiagEvent?(["type": "ice", "state": name, "engine": "web"])
+        if st == .connected || st == .completed { linia2Established = true }
+        delegate?.linia2IceStateChanged(st)
+        linia2HandleIceState(st)
+    }
+
+    /// Ответ применён (звонящий) или наш answer отправлен (принимающий).
+    func linia2WebSetupComplete(remoteOffer: Bool) {
+        guard web != nil else { return }
+        if !remoteOffer { remoteAnswerApplied = true }
+        delegate?.markConnectionSetupComplete()
+        DispatchQueue.main.async { self.delegate?.linia2NegotiationDone(remoteOffer: remoteOffer) }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
@@ -1115,13 +1231,30 @@ class CallViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         linia2StartIfNeeded()
+        if let w = webRTCClient.web, !closed {
+            w.attach(to: view, below: remoteView)
+            linia2UpdateWebLayout()
+        }
         linia2UpdateRoute()
         linia2UpdateProximity()
         Linia2CallCenter.shared.refreshBanner()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        linia2UpdateWebLayout()
+    }
+
+    /// Движок WKWebView: положение своего видео — по окну localView.
+    func linia2UpdateWebLayout() {
+        guard let w = webRTCClient.web, !closed, let wv = w.webView, wv.superview === view else { return }
+        w.setLocalRect(localView.isHidden ? nil : localView.convert(localView.bounds, to: wv))
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        // Свёрнут — страница движка WKWebView уходит в окно приложения (вне окна WebKit останавливает медиа).
+        if !closed { webRTCClient.web?.park() }
         linia2UpdateProximity()   // свёрнут — экран не гасить
         // Свёрнут — показать плашку «Идёт звонок».
         Linia2CallCenter.shared.refreshBanner()
@@ -1251,6 +1384,7 @@ class CallViewController: UIViewController {
         }
         linia2UpdateButtons()
         linia2UpdateProximity()
+        linia2UpdateWebLayout()
     }
 
     @objc func didTapFlip() {
@@ -1270,6 +1404,12 @@ class CallViewController: UIViewController {
     // MARK: Запуск
 
     private func setupCaptureSessionAndStartCall() {
+        // LINIA2 (вариант Б): звонковый движок WKWebView — по флагу удалённого конфига features.webCallEngine.
+        if Linia2WebCallEngine.enabled {
+            webRTCClient.linia2EnableWebEngine(audioOnly: isAudioOnlyCall, caller: callDirection == .outgoing,
+                                               video: !isAudioOnlyCall && !cameraDenied)
+            cameraManager.web = webRTCClient.web
+        }
         cameraManager.setupCamera()
         if !self.isAudioOnlyCall && !cameraDenied {
             cameraManager.startCapture()
@@ -1534,6 +1674,12 @@ class CallViewController: UIViewController {
 
         webRTCClient.setup()
         webRTCClient.setupLocalRenderer(localRenderer)
+        if let w = webRTCClient.web {
+            // Видео собеседника и своё окошко рисует страница (под затемнением и кнопками); нативные окна — пустые.
+            localView.backgroundColor = .clear
+            w.attach(to: view, below: remoteView)
+            linia2UpdateWebLayout()
+        }
 
         self.embedView(localRenderer, into: localView)
         self.embedView(remoteRenderer, into: remoteView)
@@ -1795,6 +1941,12 @@ extension CallViewController: WebRTCClientDelegate {
     func toggleRemoteVideo(remoteLive: Bool) {
         DispatchQueue.main.async {
             self.remoteVideoLive = remoteLive
+            if let w = self.webRTCClient.web {
+                w.call("setRemoteVisible", remoteLive)
+                self.remoteView.isHidden = true
+                self.linia2SetAvatarVisible(!remoteLive)
+                return
+            }
             self.remoteView.isHidden = !remoteLive
             self.linia2SetAvatarVisible(!remoteLive)
         }
