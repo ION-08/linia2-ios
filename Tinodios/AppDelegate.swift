@@ -336,11 +336,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             if attempt == 0 { connectGeneration += 1 }
             let gen = connectGeneration
             connectQueue.async {
+                // LINIA2 (сборка 1007, первый запуск): не вошли (нет сохранённого токена) — подключаться и тем
+                // более «выходить» нечего. Раньше «missing user name» → false → logoutAndRouteToLoginVC() с
+                // фонового потока: Cache.invalidate() уничтожал Tinode, через который пользователь как раз входил
+                // на экране «Добро пожаловать» («нет соединения с сервером»), экран входа сбрасывался, вылет.
+                guard let token = SharedUtils.getAuthToken(), !token.isEmpty,
+                      let user = SharedUtils.getSavedLoginUserName(), !user.isEmpty else { return }
                 let tinode = Cache.tinode
                 if tinode.isConnectionAuthenticated { return }
                 let ok = SharedUtils.connectAndLoginSync(using: tinode, inBackground: false)
                 if !ok {
-                    UiUtils.logoutAndRouteToLoginVC()
+                    // Выход — только если это всё ещё тот же вход (пользователь не вошёл заново за это время).
+                    DispatchQueue.main.async {
+                        guard SharedUtils.getAuthToken() == token, !Cache.tinode.isConnectionAuthenticated else { return }
+                        UiUtils.logoutAndRouteToLoginVC()
+                    }
                     return
                 }
                 guard !tinode.isConnectionAuthenticated, attempt < 8 else { return }

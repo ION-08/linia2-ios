@@ -591,6 +591,7 @@ final class Linia2Failover: TinodeEventListener {
     func onConnect(code: Int, reason: String, params: [String: JSONValue]?) {
         DispatchQueue.main.async {
             self.connected = true
+            self.connectedAt = Date()
             self.failures.removeAll()
             self.attemptStarted = nil
             self.updateBanner()
@@ -610,8 +611,31 @@ final class Linia2Failover: TinodeEventListener {
     }
 
     private var lastProbe = Date.distantPast
+    /// LINIA2: момент ответа сервера на {hi} — сокет жив; вход ({login}) должен последовать за ним.
+    private var connectedAt: Date?
+    private var lastLoginHeal = Date.distantPast
+
+    /// Сокет открыт, но вход не выполнен дольше 6 с (сборка 1007: «Подключение…» навсегда при живом сокете).
+    private var connectedButNotLoggedIn: Bool {
+        let t = Cache.tinode
+        guard connected, t.myUid != nil, !t.isConnectionAuthenticated, let c = connectedAt else { return false }
+        return Date().timeIntervalSince(c) > 6
+    }
+
+    func onLogin(code: Int, text: String) {
+        DispatchQueue.main.async { self.updateBanner() }
+    }
+
     private func tick() {
         updateBanner()
+        // Соединение есть, а входа нет — войти заново (не чаще раза в 20 с, пока приложение на экране).
+        if connectedButNotLoggedIn, UIApplication.shared.applicationState == .active,
+           Date().timeIntervalSince(lastLoginHeal) > 20, SharedUtils.getAuthToken() != nil {
+            lastLoginHeal = Date()
+            Cache.log.info("Linia2Failover: connected but not logged in — retrying login")
+            L2Log.event("l2_login_heal")
+            AppDelegate.connectInBackground(attempt: 0)
+        }
         // Нет ответа дольше 8 с при живой сети — следующий адрес.
         if !connected, networkOK, let t = attemptStarted, Date().timeIntervalSince(t) > 8, Cache.tinode.myUid != nil {
             switchToNext("таймаут подключения")
@@ -651,7 +675,8 @@ final class Linia2Failover: TinodeEventListener {
 
     /// Плашка сверху: «Нет соединения» (нет сети) или «Подключение…» (сеть есть, сервер ещё не ответил).
     private func updateBanner() {
-        let show = Cache.tinode.myUid != nil && !connected && (attemptStarted.map { Date().timeIntervalSince($0) > 2 } ?? true)
+        let show = Cache.tinode.myUid != nil && ((!connected && (attemptStarted.map { Date().timeIntervalSince($0) > 2 } ?? true))
+                                                 || connectedButNotLoggedIn)
         guard let window = Linia2Root.window else { return }
         if !show { banner?.removeFromSuperview(); banner = nil; return }
         let l = banner ?? {

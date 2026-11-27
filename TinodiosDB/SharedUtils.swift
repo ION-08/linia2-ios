@@ -291,6 +291,24 @@ public class SharedUtils {
                 }
                 success = true
             }
+            // LINIA2 (сборка 1007: «Подключение…» при живом сокете): сокет открыл кто-то другой (переподключение
+            // по сети / push / смена адреса) раньше, чем было включено автовход, или вход «потерялся» —
+            // соединение есть, а входа нет и никто его не отправит. Входим явно.
+            if tinode.isConnected && !tinode.isConnectionAuthenticated {
+                BaseDb.log.info("Connect&Login Sync - connected but not authenticated: explicit login")
+                do {
+                    let reply = try tinode.loginToken(token: SharedUtils.getAuthToken() ?? token, creds: nil).getResult(timeout: connectTimeout)
+                    if let code = reply?.ctrl?.code, code < 300, let t = tinode.authToken, t != token {
+                        SharedUtils.saveAuthToken(for: userName, token: t, expires: tinode.authTokenExpires)
+                    }
+                } catch TinodeError.serverResponseError(let code, let text, _) {
+                    BaseDb.log.error("Connect&Login Sync - explicit login rejected: %d %@", code, text)
+                    if code == 401 || code == 403 { success = false }
+                } catch {
+                    // «Login in progress», таймаут, обрыв — повторит следующий шаг connectInBackground.
+                    BaseDb.log.info("Connect&Login Sync - explicit login: %@", error.localizedDescription)
+                }
+            }
         } catch WebSocketError.network(let err) {
             // No network connection.
             BaseDb.log.debug("Connect&Login Sync [network] - could not connect to Tinode: %@", err)

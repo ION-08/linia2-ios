@@ -86,7 +86,8 @@ final class Linia2Push: TinodeEventListener {
         DispatchQueue.main.async {
             guard let token = self.fcmToken, !token.isEmpty else { return }
             let tinode = Cache.tinode
-            guard tinode.isConnected else {
+            // LINIA2: {hi dev} до входа сервер отвергает («device ID update requires authentication») — только после входа.
+            guard tinode.isConnected, tinode.isConnectionAuthenticated else {
                 Cache.log.info("Linia2Push: нет соединения, FCM-токен уйдёт после входа")
                 return
             }
