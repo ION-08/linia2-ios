@@ -26,6 +26,8 @@ final class Linia2CallCenter {
     private var bannerShown = false
     /// Звонок принят, когда приложение было неактивно — показать экран при открытии.
     private var presentWhenActive = false
+    /// LINIA2: экран звонка свёрнут пользователем («Чат») — PIN-блокировка больше не откладывается.
+    private(set) var minimizedByUser = false
 
     private init() {
         banner.addTarget(self, action: #selector(bannerTapped), for: .touchUpInside)
@@ -52,6 +54,8 @@ final class Linia2CallCenter {
         guard active === vc else { return }
         active = nil
         presentWhenActive = false
+        minimizedByUser = false
+        DispatchQueue.main.async { Linia2AppLock.shared.callDidEnd() }
         refreshBanner()
         tick?.invalidate()
         tick = nil
@@ -127,6 +131,8 @@ final class Linia2CallCenter {
             return
         }
         vc.modalPresentationStyle = .fullScreen
+        minimizedByUser = false
+        Linia2AppLock.shared.suspendForCall()
         top.present(vc, animated: true)
         refreshBanner()
     }
@@ -134,12 +140,14 @@ final class Linia2CallCenter {
     /// «Чат» на экране звонка: экран прячется, звонок продолжается, сверху — плашка.
     func minimize() {
         guard let vc = active else { return }
+        minimizedByUser = true
         if vc.presentingViewController != nil {
             vc.dismiss(animated: true) { self.refreshBanner() }
         } else {
             vc.navigationController?.popViewController(animated: true)
         }
         refreshBanner()
+        Linia2AppLock.shared.callScreenMinimized()
     }
 
     /// Нажатие на плашку — вернуться к звонку (с любого экрана).

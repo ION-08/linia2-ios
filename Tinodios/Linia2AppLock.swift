@@ -75,6 +75,9 @@ final class Linia2AppLock {
     private var coverWindow: UIWindow?
     private var backgroundedAt: Date?
     private var locked = false
+    /// LINIA2: блокировка отложена из-за идущего звонка (как в Telegram/WhatsApp: звонок — без PIN,
+    /// PIN — для остального интерфейса). Применяется при сворачивании экрана звонка и после завершения звонка.
+    private var deferredForCall = false
 
     var isEnabled: Bool { UserDefaults.standard.bool(forKey: kEnabled) && Linia2PinStore.exists }
     /// Экран PIN сейчас показан.
@@ -195,8 +198,24 @@ final class Linia2AppLock {
         coverWindow = nil
     }
 
+    /// Идёт разговор и экран звонка не свёрнут пользователем — PIN не показываем (отложим).
+    private var callScreenHasPriority: Bool {
+        CallManager.state.inConversation && !Linia2CallCenter.shared.minimizedByUser
+    }
+
     func lock() {
         guard isEnabled, !locked else { return }
+        if callScreenHasPriority {
+            Cache.log.info("Linia2AppLock: call in progress — lock deferred until the call screen is left")
+            deferredForCall = true
+            return
+        }
+        lockNow()
+    }
+
+    private func lockNow() {
+        guard isEnabled, !locked else { return }
+        deferredForCall = false
         locked = true
         let vc = Linia2PinViewController(mode: .unlock)
         vc.onFinish = { [weak self] ok in
@@ -206,6 +225,34 @@ final class Linia2AppLock {
         let w = makeWindow(level: .alert + 1, root: vc)
         w.makeKeyAndVisible()
         lockWindow = w
+    }
+
+    // MARK: звонок поверх блокировки
+
+    /// Звонок принят (CallKit «Принять») или экран звонка возвращён (плашка, PiP): экран PIN не должен
+    /// закрывать экран звонка — убрать его, блокировку отложить до конца звонка / сворачивания.
+    func suspendForCall() {
+        guard locked else { return }
+        Cache.log.info("Linia2AppLock: call accepted — PIN screen suspended for the call")
+        unlock()
+        deferredForCall = true
+    }
+
+    /// Пользователь свернул экран звонка («Чат») — дальше остальной интерфейс, нужен PIN.
+    func callScreenMinimized() {
+        guard deferredForCall else { return }
+        lockNow()
+    }
+
+    /// Звонок завершён — отложенная блокировка: сразу (приложение на экране) или при следующем открытии.
+    func callDidEnd() {
+        guard deferredForCall, !CallManager.state.inConversation else { return }
+        if UIApplication.shared.applicationState == .active {
+            lockNow()
+        } else {
+            deferredForCall = false
+            backgroundedAt = .distantPast
+        }
     }
 
     private func unlock() {

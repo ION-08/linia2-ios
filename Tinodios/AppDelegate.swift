@@ -36,6 +36,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 // We have just accepted this call in another client.
                 if !Cache.callManager.currentCallIsOutgoing {
                     Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq, reason: .answeredElsewhere)
+                } else if let cur = Cache.callManager.callInProgress, cur.topic == topic, cur.seq == seq {
+                    // LINIA2: собеседник ответил на наш звонок — с этого момента 30 с на соединение.
+                    Cache.callManager.startConnectWatchdog()
                 }
             case "hang-up":
                 // LINIA2: и идущий (принятый / исходящий) звонок — сразу, даже если экран звонка не получил «hang-up».
@@ -54,10 +57,31 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         func onDataMessage(data: MsgServerData?) {
             let tinode = Cache.tinode
             // The message is from a peer.
-            guard let data = data, !tinode.isMe(uid: data.from), let seqId = data.replacesSeq ?? data.seq, let originator = data.from,
+            guard let data = data, let seqId = data.replacesSeq ?? data.seq, let originator = data.from,
                 // It is a video call message.
                 let callState = data.webrtcCallState,
-                let topicName = data.topic, let topic = tinode.getTopic(topicName: topicName) else { return }
+                let topicName = data.topic else { return }
+            // LINIA2: финальное состояние звонка (finished / disconnected / missed / declined / busy) завершает его
+            // всегда — даже если топик не загружен (чат не открыт, приложение в фоне) или сообщение ещё не в базе,
+            // и от кого бы ни было сообщение (замену пишет сервер от имени звонившего — для исходящего это «я»).
+            let isFinal = callState == .kBusy || callState == .kDeclined || callState == .kMissed
+                || callState == .kDisconnected || callState == .kFinished
+            if isFinal {
+                Linia2EndedCalls.mark(topicName, seqId)
+                DispatchQueue.main.async {
+                    let cm = Cache.callManager
+                    guard let cur = cm.callInProgress, cur.topic == topicName, cur.seq == seqId else { return }
+                    Cache.log.info("Call (topic: %@, seq: %d): final state %@", topicName, seqId, callState.rawValue)
+                    if cur.accepted || cm.currentCallIsOutgoing {
+                        cm.endCallInProgressRemotely(topic: topicName, seq: seqId, why: "msg-" + callState.rawValue)
+                    } else {
+                        cm.dismissIncomingCall(onTopic: topicName, withSeqId: seqId)
+                    }
+                }
+                return
+            }
+            // Остальное (started / accepted) — только от собеседника.
+            guard !tinode.isMe(uid: originator), let topic = tinode.getTopic(topicName: topicName) else { return }
 
             // Check if we have a later version of the message (which means this call state is outdated).
             guard let msg = topic.getMessage(byEffectiveSeq: seqId) as? StoredMessage,
@@ -80,7 +104,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 }
                 // It is a legit incoming call. Start it.
                 let backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
-                DispatchQueue.main.async {
+                let show = {
                     let guest = data.head?["linia2-guest"] != nil ? Linia2GuestLinks.info(fromHead: data.head, seq: seqId) : nil
                     Cache.callManager.displayIncomingCall(uuid: UUID(), onTopic: topic.name, originatingFrom: originator, withSeqId: seqId, audioOnly: isAudioOnly, guest: guest) { err in
                         if let err = err {
@@ -89,16 +113,24 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                         UIApplication.shared.endBackgroundTask(backgroundTaskIdentifier)
                     }
                 }
-            case .kAccepted, .kBusy, .kDeclined, .kMissed, .kDisconnected, .kFinished:
-                if callState != .kAccepted { Linia2EndedCalls.mark(topicName, seqId) }
-                // LINIA2: идущий (принятый или исходящий) звонок завершён — закрыть сразу, не ждать «hang-up»/ICE.
-                if callState != .kAccepted, let cur = Cache.callManager.callInProgress, cur.topic == topic.name,
-                   cur.seq == seqId, cur.accepted || Cache.callManager.currentCallIsOutgoing {
+                // LINIA2 (фантомный повторный входящий): «started» не «живой» (старше нескольких секунд — пришёл
+                // историей при подписке, а финальное сообщение звонка ещё не загружено) — сначала спросить сервер.
+                if let ts = data.ts, CallManager.isOlderThan(sentAt: ts, seconds: 6), topicName.hasPrefix("usr") {
                     DispatchQueue.main.async {
-                        Cache.callManager.endCallInProgressRemotely(topic: topic.name, seq: seqId, why: "msg-" + callState.rawValue)
+                        Linia2Voip.shared.checkCall(topic: topicName, seq: seqId) { state in
+                            if state == "ended" || state == "accepted" || Linia2EndedCalls.contains(topicName, seqId) {
+                                Cache.log.info("Call (topic: %@, seq: %d): late 'started', server says %@ — ignoring", topicName, seqId, state ?? "")
+                                Linia2EndedCalls.mark(topicName, seqId)
+                                UIApplication.shared.endBackgroundTask(backgroundTaskIdentifier)
+                                return
+                            }
+                            show()
+                        }
                     }
                     return
                 }
+                DispatchQueue.main.async(execute: show)
+            case .kAccepted:
                 if !Cache.callManager.currentCallIsOutgoing {
                     Cache.log.info("Dismissing incoming call: topic=%@, seq=%d", topic.name, seqId)
                     Cache.callManager.dismissIncomingCall(onTopic: topic.name, withSeqId: seqId)
@@ -225,6 +257,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
+        // LINIA2: приложение закрыли (смахнули) во время звонка — завершить звонок в CallKit и у собеседника,
+        // иначе на iPhone оставался «идущий звонок» с бегущими секундами.
+        Cache.callManager.endForTermination()
         application.applicationIconBadgeNumber = Cache.totalUnreadCount()
     }
 

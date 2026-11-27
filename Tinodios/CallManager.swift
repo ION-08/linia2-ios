@@ -41,9 +41,53 @@ class CallManager {
 
     var callDelegate: CallProviderDelegate!
     var callController: CXCallController!
-    var callInProgress: Call?
+    var callInProgress: Call? {
+        didSet {
+            // LINIA2: сторож главного потока и PIN-блокировка следят за наличием звонка.
+            let now = callInProgress
+            CallManager.state.set(uuid: CallManager.useCallKit ? now?.uuid : nil,
+                                  inConversation: now.map { $0.accepted || Cache.tinode.isMe(uid: $0.from) } ?? false)
+            if now != nil { Linia2MainHangWatchdog.shared.start() }
+            if oldValue != nil && now == nil {
+                connectTimer?.invalidate()
+                connectTimer = nil
+                DispatchQueue.main.async { Linia2AppLock.shared.callDidEnd() }
+            }
+        }
+    }
     // Dismisses call UI after timeout.
     var timer: Timer?
+    /// LINIA2: принятый звонок не соединился за kConnectTimeout с — завершить (CallKit .failed), не висеть на «Соединение…».
+    private var connectTimer: Timer?
+    /// В автотестах (симулятор, медленный CI) — 90 с, как ожидание соединения в самих тестах.
+    private static let kConnectTimeout: TimeInterval = ProcessInfo.processInfo.arguments.contains("-l2-uitest") ? 90 : 30
+    /// Потокобезопасный снимок текущего звонка (читается сторожем главного потока и при выгрузке приложения).
+    static let state = CallState()
+
+    final class CallState {
+        private let lock = NSLock()
+        private var _uuid: UUID?
+        private var _inConversation = false
+        /// Сторож главного потока уже завершил звонок в CallKit (главный поток завис).
+        private var _endedByWatchdog: UUID?
+
+        func set(uuid: UUID?, inConversation: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            _uuid = uuid
+            _inConversation = inConversation
+        }
+        var uuid: UUID? { lock.lock(); defer { lock.unlock() }; return _uuid }
+        /// Идёт разговор (входящий принят или исходящий) — экран звонка важнее PIN.
+        var inConversation: Bool { lock.lock(); defer { lock.unlock() }; return _inConversation }
+        /// Забрать UUID для аварийного завершения (один раз).
+        func takeForWatchdog() -> UUID? {
+            lock.lock(); defer { lock.unlock() }
+            guard let u = _uuid, _endedByWatchdog != u else { return nil }
+            _endedByWatchdog = u
+            return u
+        }
+        func endedByWatchdog(_ u: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return _endedByWatchdog == u }
+    }
     /// Входящий в автотестах (без CallKit) — алертом; закрывается при завершении звонка.
     private weak var testIncomingAlert: UIAlertController?
 
@@ -57,6 +101,11 @@ class CallManager {
     init() {
         callDelegate = CallProviderDelegate(callManager: self)
         callController = CXCallController()
+        // LINIA2: соединение установлено — сторож соединения больше не нужен.
+        NotificationCenter.default.addObserver(forName: .linia2CallConnected, object: nil, queue: .main) { [weak self] _ in
+            self?.connectTimer?.invalidate()
+            self?.connectTimer = nil
+        }
         if CallManager.useCallKit {
             // Звук включает CallKit (provider didActivate) — иначе на заблокированном экране нет звука.
             let rtc = RTCAudioSession.sharedInstance()
@@ -184,6 +233,7 @@ class CallManager {
             Cache.log.info("Hanging up: another call in progress")
             let tinode = Cache.tinode
             tinode.videoCall(topic: topicName, seq: seq, event: "hang-up")
+            Linia2EndedCalls.mark(topicName, seq)
             completion?(CallError.busy("Busy. Another call in progress"))
             return
         }
@@ -278,6 +328,7 @@ class CallManager {
                 } else {
                     // Заняты другим звонком: показать и сразу снять, собеседнику — «занято».
                     Cache.tinode.videoCall(topic: topic, seq: seq, event: "hang-up")
+                    Linia2EndedCalls.mark(topic, seq)
                     endImmediately(topic: topic, handle: name, why: "busy", completion: completion)
                 }
                 return
@@ -326,6 +377,12 @@ class CallManager {
         let timeout = TimeInterval(tinode.getServerParam(for: "callTimeout")?.asInt() ?? kCallTimeout)
         let serverNow = Date().addingTimeInterval(-tinode.timeAdjustment)
         return serverNow.timeIntervalSince(t) > timeout + 20
+    }
+
+    /// Сообщение отправлено сервером больше `seconds` с назад (по часам сервера).
+    static func isOlderThan(sentAt: Date?, seconds: TimeInterval) -> Bool {
+        guard let t = sentAt else { return false }
+        return Date().addingTimeInterval(-Cache.tinode.timeAdjustment).timeIntervalSince(t) > seconds
     }
 
     /// Обязательный отчёт CallKit и немедленное завершение (без экрана звонка). Без CallKit (автотесты) — только счётчик.
@@ -410,6 +467,72 @@ class CallManager {
         }
     }
 
+    /// Сторож соединения: с момента «Принять» (входящий) или ответа собеседника (исходящий) — kConnectTimeout с
+    /// до соединения WebRTC (.linia2CallConnected). Не соединилось — звонок завершается (CallKit .failed), экран закрывается.
+    func startConnectWatchdog() {
+        let run = {
+            guard let call = self.callInProgress else { return }
+            self.connectTimer?.invalidate()
+            let uuid = call.uuid
+            self.connectTimer = Timer.scheduledTimer(withTimeInterval: CallManager.kConnectTimeout, repeats: false) { [weak self] _ in
+                guard let self = self else { return }
+                self.connectTimer = nil
+                guard let cur = self.callInProgress, cur.uuid == uuid else { return }
+                if let vc = Linia2CallCenter.shared.active, !vc.closed, vc.connectedAt != nil { return }
+                self.failConnecting(cur)
+            }
+        }
+        if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
+    }
+
+    /// Соединение не установилось: собеседнику — «hang-up», CallKit — reportCall(.failed), экран звонка закрывается.
+    private func failConnecting(_ call: Call) {
+        Cache.log.info("CallManager: call %@:%d did not connect in %d s — ending", call.topic, call.seq, Int(CallManager.kConnectTimeout))
+        L2Log.event("l2_call_connect_timeout", ["kind": call.audioOnly ? "audio" : "video",
+                                                "dir": Cache.tinode.isMe(uid: call.from) ? "out" : "in"])
+        if call.seq > 0 { Cache.tinode.videoCall(topic: call.topic, seq: call.seq, event: "hang-up") }
+        failCallInProgress()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .linia2CallEnded, object: nil, userInfo: ["topic": call.topic, "seq": call.seq])
+            UiUtils.showToast(message: "Не удалось соединиться — звонок завершён")
+        }
+    }
+
+    /// Приложение выгружается (applicationWillTerminate): звонок не должен остаться «идущим» в CallKit.
+    /// Синхронно и быстро: собеседнику — «hang-up» (без ожидания), CallKit — reportCall(ended).
+    func endForTermination() {
+        guard let call = callInProgress else { return }
+        Cache.log.info("CallManager: app terminating — ending call %@:%d", call.topic, call.seq)
+        L2Log.event("l2_call_end_terminate", ["accepted": call.accepted ? 1 : 0])
+        if call.seq > 0 {
+            Cache.tinode.videoCall(topic: call.topic, seq: call.seq, event: "hang-up")
+            Linia2EndedCalls.mark(call.topic, call.seq)
+        }
+        timer?.invalidate()
+        timer = nil
+        callInProgress = nil
+        if CallManager.useCallKit {
+            callDelegate.reportEnded(uuid: call.uuid, reason: .failed)
+        }
+    }
+
+    /// Главный поток завис дольше порога (см. Linia2MainHangWatchdog) — вызывается НЕ на главном потоке.
+    /// CXProvider потокобезопасен: системный экран звонка закрывается даже при зависшем интерфейсе.
+    func endFromHangWatchdog() {
+        guard let uuid = CallManager.state.takeForWatchdog() else { return }
+        Cache.log.error("CallManager: main thread is hung — ending call %@ in CallKit", uuid.uuidString)
+        L2Log.event("l2_call_main_hang_end")
+        callDelegate.reportEnded(uuid: uuid, reason: .failed)
+    }
+
+    /// Главный поток ожил после аварийного завершения сторожем — довести завершение до конца (экран, собеседник).
+    func finishAfterHang() {
+        guard let call = callInProgress, CallManager.state.endedByWatchdog(call.uuid) else { return }
+        if call.seq > 0 { Cache.tinode.videoCall(topic: call.topic, seq: call.seq, event: "hang-up") }
+        failCallInProgress()   // CallKit уже закрыт — повторный reportCall безвреден
+        NotificationCenter.default.post(name: .linia2CallEnded, object: nil, userInfo: ["topic": call.topic, "seq": call.seq])
+    }
+
     private func remember(_ topic: String, _ seq: Int) {
         Linia2EndedCalls.mark(topic, seq)
     }
@@ -432,6 +555,63 @@ class CallManager {
             return
         }
         self.completeCallInProgress(reportToSystem: true, reportToPeer: false)
+    }
+}
+
+/// LINIA2: сторож главного потока на время звонка. Раз в 2 с с фонового потока «пингует» главный;
+/// нет ответа 6 тактов подряд (~12 с работы процесса; приостановка приложения тактов не добавляет) —
+/// звонок завершается в CallKit с фонового потока (иначе после зависания на iPhone оставался «идущий звонок»
+/// с бегущими секундами), событие — в аналитику. Главный поток ожил — завершение доводится до конца.
+final class Linia2MainHangWatchdog {
+    static let shared = Linia2MainHangWatchdog()
+    private let queue = DispatchQueue(label: "info.codix.liniya2.hang-watchdog", qos: .userInitiated)
+    private var timer: DispatchSourceTimer?
+    private var pending = false
+    private var misses = 0
+    private var reported = false
+    private static let kMaxMisses = 6
+
+    func start() {
+        queue.async {
+            guard self.timer == nil else { return }
+            self.pending = false
+            self.misses = 0
+            self.reported = false
+            let t = DispatchSource.makeTimerSource(queue: self.queue)
+            t.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(300))
+            t.setEventHandler { [weak self] in self?.tick() }
+            self.timer = t
+            t.resume()
+        }
+    }
+
+    private func stop() {
+        timer?.cancel()
+        timer = nil
+    }
+
+    private func tick() {
+        guard CallManager.state.uuid != nil else { stop(); return }
+        if pending {
+            misses += 1
+            if misses >= Self.kMaxMisses && !reported {
+                reported = true
+                L2Log.event("l2_main_hang", ["s": misses * 2, "call": 1])
+                Cache.callManager.endFromHangWatchdog()
+            }
+            return
+        }
+        pending = true
+        DispatchQueue.main.async {
+            let wasHung = self.queue.sync { () -> Bool in
+                let r = self.reported
+                self.pending = false
+                self.misses = 0
+                self.reported = false
+                return r
+            }
+            if wasHung { Cache.callManager.finishAfterHang() }
+        }
     }
 }
 
@@ -488,6 +668,10 @@ extension CallManager: CallManagerImpl {
         self.timer?.invalidate()
         self.timer = nil
         self.callInProgress?.accepted = true
+        startConnectWatchdog()
+        // LINIA2: звонок, принятый через CallKit, не ждёт PIN-кода: экран звонка — поверх блокировки приложения
+        // (PIN — для остального интерфейса: при сворачивании экрана звонка и после завершения).
+        DispatchQueue.main.async { Linia2AppLock.shared.suspendForCall() }
         // LINIA2: экран звонка создаётся сразу (даже на заблокированном экране / в фоне) — звонок
         // соединяется без открытия приложения; экран виден, когда пользователь его откроет.
         Linia2CallCenter.shared.openIncoming(call)
@@ -521,6 +705,8 @@ extension CallManager: CallManagerImpl {
             self.callController.request(transaction) { error in
                 if let error = error {
                     Cache.log.error("CallManager - EndCallAction transaction request failed: %@", error.localizedDescription)
+                    // LINIA2: запасной путь — системный экран звонка не должен остаться «идущим».
+                    self.callDelegate.reportEnded(uuid: call.uuid, reason: .failed)
                     return
                 }
             }
