@@ -525,7 +525,7 @@ class CallManager {
     /// LINIA2: звонок (в т.ч. уже принятый / исходящий) завершён другой стороной — «hang-up» или сообщение
     /// звонка в топике (finished / disconnected / missed / declined / busy). Сразу: CallKit reportCall(.remoteEnded),
     /// звук выключен, экран звонка закрывается (.linia2CallEnded с remote=true). Повторный вызов — без действий.
-    func endCallInProgressRemotely(topic: String, seq: Int = 0, why: String) {
+    func endCallInProgressRemotely(topic: String, seq: Int = 0, why: String, reason: CXCallEndedReason = .remoteEnded) {
         guard let call = callInProgress, call.topic == topic, seq <= 0 || call.seq <= 0 || call.seq == seq else { return }
         Cache.log.info("CallManager: call %@:%d ended by peer (%@)", topic, call.seq, why)
         L2Log.event("l2_call_remote_end", ["why": why, "accepted": call.accepted ? 1 : 0])
@@ -537,7 +537,7 @@ class CallManager {
         CallManager.deactivateAudioSession()
         dismissTestAlert()
         if CallManager.useCallKit {
-            callDelegate.reportEnded(uuid: call.uuid, reason: .remoteEnded)
+            callDelegate.reportEnded(uuid: call.uuid, reason: reason)
         }
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .linia2CallEnded, object: nil,

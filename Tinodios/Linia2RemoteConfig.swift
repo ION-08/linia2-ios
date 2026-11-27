@@ -582,6 +582,38 @@ final class Linia2Failover: TinodeEventListener {
         get { stateLock.lock(); defer { stateLock.unlock() }; return appActiveValue }
         set { stateLock.lock(); appActiveValue = newValue; stateLock.unlock() }
     }
+    // Журнал пути сети (net-path) — не чаще раза в 2 с; одинаковые подряд не пишутся.
+    // Интерфейсы/адреса НЕ считаются признаком смены сети (IPv6 / NAT64 / VPN меняют их без обрыва).
+    private static let pathQueue = DispatchQueue(label: "linia2.net.path")
+    private static var lastPathLine = "", lastPathLog = Date.distantPast
+    private static var checkScheduled = false
+    static func logPath(_ p: NWPath) {
+        let ifs = p.availableInterfaces.map { i -> String in
+            switch i.type { case .wifi: return "wifi"; case .cellular: return "cell"; case .wiredEthernet: return "eth"
+            case .loopback: return "lo"; case .other: return "other"; @unknown default: return "?" }
+        }.joined(separator: ",")
+        let st: String = p.status == .satisfied ? "ok" : (p.status == .unsatisfied ? "none" : "req")
+        let line = "\(st)|\(ifs)|\(p.isExpensive)|\(p.isConstrained)|\(p.supportsIPv4)|\(p.supportsIPv6)"
+        Linia2Failover.pathQueue.async {
+            let now = Date()
+            guard line != Linia2Failover.lastPathLine, now.timeIntervalSince(Linia2Failover.lastPathLog) >= 2 else { return }
+            Linia2Failover.lastPathLine = line; Linia2Failover.lastPathLog = now
+            Linia2LaunchLog.shared.step("net-path", ["status": st, "ifs": ifs, "expensive": p.isExpensive ? 1 : 0,
+                                                     "constrained": p.isConstrained ? 1 : 0,
+                                                     "ipv4": p.supportsIPv4 ? 1 : 0, "ipv6": p.supportsIPv6 ? 1 : 0])
+        }
+    }
+    static func coalescedNetworkCheck() {
+        Linia2Failover.pathQueue.async {
+            guard !Linia2Failover.checkScheduled else { return }
+            Linia2Failover.checkScheduled = true
+            Linia2Failover.pathQueue.asyncAfter(deadline: .now() + 2) {
+                Linia2Failover.checkScheduled = false
+                DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2NetworkChanged() }
+            }
+        }
+    }
+
     /// Переподключаться можно: приложение на экране или идёт звонок (CallKit / VoIP).
     static var reconnectAllowed: Bool {
         appActive || CallManager.state.uuid != nil || CallManager.state.inConversation
@@ -608,9 +640,13 @@ final class Linia2Failover: TinodeEventListener {
         }
         monitor.pathUpdateHandler = { [weak self] path in
             let ok = path.status == .satisfied
-            // Сеть появилась / сменилась — мгновенная попытка (если можно переподключаться).
+            Linia2Failover.logPath(path)
+            // Сеть появилась / сменилась. Живое соединение не рвём никогда: открытый сокет проверяется ws ping
+            // (5 с), переподключение — только без ответа; нет сокета — мгновенная попытка. События пути пачкой
+            // (5G, Wi-Fi Assist, IPv6/NAT64, VPN шлют их по несколько подряд) — одна проверка за 2 с.
             if ok, Linia2Failover.reconnectAllowed, Cache.tinode.myUid != nil {
-                Cache.tinode.linia2ResumeNow(reason: "network")
+                if Cache.tinode.isConnected { Linia2Failover.coalescedNetworkCheck() }
+                else { Cache.tinode.linia2ResumeNow(reason: "network") }
             }
             DispatchQueue.main.async {
                 guard let self = self else { return }

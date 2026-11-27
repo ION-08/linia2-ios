@@ -801,6 +801,7 @@ extension MessageViewController: UICollectionViewDataSource {
         cell.content.layer.cornerRadius = pureMedia ? max(0, Linia2Config.shared.radius("bubble", 18) - 3) : 0
         cell.content.layer.masksToBounds = pureMedia
         linia2LayoutVoicePlay(cell: cell, message: message)
+        linia2ScheduleTimeGapCheck(cell: cell, message: message)
 
         return cell
     }
@@ -1288,6 +1289,10 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // не переносятся, поэтому место считаем по последней строке: влезает — время на ней, иначе — своя строка.
         if message.isDeleted { return textSizeHelper.computeSize(for: attributedText, within: maxWidth) }
         let timeW = ("00:00" as NSString).size(withAttributes: [.font: Constants.kTimestampFont]).width
+        // LINIA2: проверка после раскладки нашла наложение и пересчёт не помог — время на своей строке.
+        if Linia2TimeGap.forcedBelow(topic: topicName, seq: message.seqId) {
+            return textSizeHelper.computeSize(for: attributedText, within: maxWidth, trailingReserve: .greatestFiniteMagnitude, extraLine: 8)
+        }
         var reserve = isFromCurrentSender(message: message) ? timeW + 30 : timeW + 8
         if message.isEdited {
             // Метка «изменено» стоит левее рамки времени (50 pt) — её место тоже в последней строке.

@@ -1272,6 +1272,27 @@ public class Tinode {
     //
     // |interactively| is true if user directly requested a reconnect.
     // If |reset| is true, drop connection and reconnect. Happens when cluster is reconfigured.
+    /// LINIA2: сеть «сменилась» (5G, Wi-Fi Assist, Wi-Fi↔сотовая, IPv6/NAT64, VPN). Живое соединение не рвём:
+    /// сокет открыт — ws ping с таймаутом; ответ есть — ничего не делаем; нет ответа — переподключение.
+    /// Сокета нет / не открыт — обычная мгновенная попытка.
+    public func linia2NetworkChanged(pingTimeout: TimeInterval = 5) {
+        let conn: Connection? = operationsQueue.sync { connection }
+        guard let c = conn, c.isConnected else {
+            linia2ResumeNow(reason: "network")
+            return
+        }
+        let started = Date()
+        c.linia2Ping(timeout: pingTimeout) { [weak self] ok in
+            guard let self = self else { return }
+            Tinode.linia2Event?("path-ping", ["ok": ok ? 1 : 0, "ms": Int(Date().timeIntervalSince(started) * 1000)])
+            guard !ok else { return }
+            // Тот же объект соединения и всё ещё «открыт» — сокет мёртв: переподключиться.
+            let same: Bool = self.operationsQueue.sync { self.connection === c }
+            guard same else { return }
+            _ = self.reconnectNow(interactively: true, reset: true)
+        }
+    }
+
     /// LINIA2: автопереподключение было отложено (фон) или соединения нет — подключиться сейчас.
     /// Вызывается при возврате в приложение и при смене сети.
     public func linia2ResumeNow(reason: String) {

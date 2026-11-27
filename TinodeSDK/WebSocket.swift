@@ -152,6 +152,18 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
         socket?.cancel(with: .goingAway, reason: nil)
     }
 
+    /// LINIA2: проверка живости сокета (ws ping). done(true) — pong пришёл за timeout; вызывается один раз.
+    func linia2Ping(timeout: TimeInterval, done: @escaping (Bool) -> Void) {
+        guard let task = socket, state == .open else { done(false); return }
+        let lock = NSLock(); var finished = false
+        let finish: (Bool) -> Void = { ok in
+            lock.lock(); let first = !finished; finished = true; lock.unlock()
+            if first { done(ok) }
+        }
+        task.sendPing { error in finish(error == nil) }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { finish(false) }
+    }
+
     func send(text: String) {
         guard let socket = socket else { return }
         socket.send(URLSessionWebSocketTask.Message.string(text)) { error in
