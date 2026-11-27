@@ -779,6 +779,10 @@ extension MessageViewController: UICollectionViewDataSource {
 
         cell.deliveryMarker.frame = attributes.deliveryMarkerFrame
 
+        // LINIA2 (сборка 1011, «время в пузыре всё ещё не так»): время всегда прижато вправо. У входящих
+        // было выравнивание влево в рамке 50 pt — при времени на одной строке с текстом оно наезжало на конец
+        // текста на ~12 pt, а в переиспользованной ячейке (после исходящего, где .right) стояло иначе.
+        cell.timestampLabel.textAlignment = .right
         cell.timestampLabel.sizeToFit()
         cell.timestampLabel.frame = attributes.timestampFrame
 
@@ -1284,7 +1288,11 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // не переносятся, поэтому место считаем по последней строке: влезает — время на ней, иначе — своя строка.
         if message.isDeleted { return textSizeHelper.computeSize(for: attributedText, within: maxWidth) }
         let timeW = ("00:00" as NSString).size(withAttributes: [.font: Constants.kTimestampFont]).width
-        let reserve = isFromCurrentSender(message: message) ? timeW + 30 : timeW + 8
+        var reserve = isFromCurrentSender(message: message) ? timeW + 30 : timeW + 8
+        if message.isEdited {
+            // Метка «изменено» стоит левее рамки времени (50 pt) — её место тоже в последней строке.
+            reserve += max(0, Constants.kTimestampWidth - timeW) + Constants.kEditedMarkerWidth + Constants.kEditedMarkerPadding
+        }
         return textSizeHelper.computeSize(for: attributedText, within: maxWidth, trailingReserve: reserve, extraLine: 8)
     }
 }
