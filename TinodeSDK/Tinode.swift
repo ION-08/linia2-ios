@@ -1276,8 +1276,9 @@ public class Tinode {
     /// сокет открыт — ws ping с таймаутом; ответ есть — ничего не делаем; нет ответа — переподключение.
     /// Сокета нет / не открыт — обычная мгновенная попытка.
     public func linia2NetworkChanged(pingTimeout: TimeInterval = 5) {
-        let conn: Connection? = operationsQueue.sync { connection }
-        guard let c = conn, c.isConnected else {
+        // LINIA2 (hotfix 1014): состояние соединения читается только на operationsQueue (гонка с connect → вылет).
+        let conn: Connection? = operationsQueue.sync { (connection?.isConnected ?? false) ? connection : nil }
+        guard let c = conn else {
             linia2ResumeNow(reason: "network")
             return
         }
@@ -1286,12 +1287,24 @@ public class Tinode {
             guard let self = self else { return }
             Tinode.linia2Event?("path-ping", ["ok": ok ? 1 : 0, "ms": Int(Date().timeIntervalSince(started) * 1000)])
             guard !ok else { return }
-            // Тот же объект соединения и всё ещё «открыт» — сокет мёртв: переподключиться.
-            let same: Bool = self.operationsQueue.sync { self.connection === c }
-            guard same else { return }
-            _ = self.reconnectNow(interactively: true, reset: true)
+            // Не синхронно из обработчика URLSession: на operationsQueue, переподключение — с глобальной очереди.
+            self.operationsQueue.async {
+                // Тот же объект соединения, всё ещё «открыт» и вход давно — сокет мёртв: переподключиться.
+                guard self.connection === c, c.isConnected,
+                      Date().timeIntervalSince(self.linia2LastPathReset) >= 10 else { return }
+                self.linia2LastPathReset = Date()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    _ = self.reconnectNow(interactively: true, reset: true)
+                }
+            }
         }
     }
+
+    /// LINIA2 (hotfix 1014): соединение открыто — проверка на operationsQueue (безопасно с любого потока).
+    public var linia2IsConnectedSafe: Bool {
+        operationsQueue.sync { connection?.isConnected ?? false }
+    }
+    private var linia2LastPathReset = Date()
 
     /// LINIA2: автопереподключение было отложено (фон) или соединения нет — подключиться сейчас.
     /// Вызывается при возврате в приложение и при смене сети.

@@ -587,6 +587,8 @@ final class Linia2Failover: TinodeEventListener {
     private static let pathQueue = DispatchQueue(label: "linia2.net.path")
     private static var lastPathLine = "", lastPathLog = Date.distantPast
     private static var checkScheduled = false
+    /// Только на очереди монитора (linia2.net).
+    private static var pathSeen = false
     static func logPath(_ p: NWPath) {
         let ifs = p.availableInterfaces.map { i -> String in
             switch i.type { case .wifi: return "wifi"; case .cellular: return "cell"; case .wiredEthernet: return "eth"
@@ -644,9 +646,16 @@ final class Linia2Failover: TinodeEventListener {
             // Сеть появилась / сменилась. Живое соединение не рвём никогда: открытый сокет проверяется ws ping
             // (5 с), переподключение — только без ответа; нет сокета — мгновенная попытка. События пути пачкой
             // (5G, Wi-Fi Assist, IPv6/NAT64, VPN шлют их по несколько подряд) — одна проверка за 2 с.
+            // LINIA2 (hotfix 1014, вылет 1013 при запуске на 5G): первое событие пути (сразу после start) — как в 1012,
+            // без ws ping; состояние соединения — только синхронно (linia2IsConnectedSafe); ping включается features.netPathPing=true (по умолчанию выкл — как 1012).
+            let first = !Linia2Failover.pathSeen
+            Linia2Failover.pathSeen = true
             if ok, Linia2Failover.reconnectAllowed, Cache.tinode.myUid != nil {
-                if Cache.tinode.isConnected { Linia2Failover.coalescedNetworkCheck() }
-                else { Cache.tinode.linia2ResumeNow(reason: "network") }
+                if !first, Linia2Config.shared.feature("netPathPing", default: false), Cache.tinode.linia2IsConnectedSafe {
+                    Linia2Failover.coalescedNetworkCheck()
+                } else {
+                    Cache.tinode.linia2ResumeNow(reason: "network")
+                }
             }
             DispatchQueue.main.async {
                 guard let self = self else { return }
