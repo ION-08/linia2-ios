@@ -217,6 +217,12 @@ class WebRTCClient: NSObject {
     private var remoteIceCandidatesCache: [RTCIceCandidate] = []
     /// LINIA2: буфер удалённых кандидатов уже разгружен (удалённое описание применено) — новые кандидаты сразу в соединение.
     private var remoteCandidatesDrained = false
+    /// LINIA2: удалённое описание (offer/answer собеседника) применено — флаг под remoteIceCandidatesCacheQueue.
+    /// Раньше вместо него внутри queue.sync на главном потоке читалось localPeer.remoteDescription — это
+    /// синхронный вызов в signaling-поток WebRTC, а signaling-поток в это же время (завершение setRemote/
+    /// setLocalDescription → drainIceCandidatesCache) ждал ту же очередь: взаимная блокировка, главный поток
+    /// зависал навсегда («Соединение…», входящий звонок 27.11 seq 30: после «start» — ни одного события).
+    private var remoteDescriptionApplied = false
 
     weak var delegate: WebRTCClientDelegate?
 
@@ -272,7 +278,7 @@ class WebRTCClient: NSObject {
             // звука нет — реальный звонок 27.11 11:07). Решение под той же очередью, что и разгрузка.
             var addNow = false
             self.remoteIceCandidatesCacheQueue.sync {
-                if self.remoteCandidatesDrained || self.localPeer?.remoteDescription != nil {
+                if self.remoteCandidatesDrained || self.remoteDescriptionApplied {
                     addNow = true
                 } else {
                     self.remoteIceCandidatesCache.append(candidate)
@@ -310,11 +316,20 @@ class WebRTCClient: NSObject {
 
     var hasPeerConnection: Bool { localPeer != nil }
 
+    /// Вызывается из signaling-потока (завершение setRemoteDescription). Внутри очереди — без вызовов WebRTC.
+    private func markRemoteDescriptionApplied() {
+        remoteIceCandidatesCacheQueue.sync { remoteDescriptionApplied = true }
+    }
+
     func createPeerConnection(withDataChannel dataChannel: Bool) -> Bool {
         // LINIA2: повторный вызов (соединение создано заранее, при «Принять») — используем готовое.
         if localPeer != nil { return true }
         // LINIA2: действительно новое соединение — буфер удалённых кандидатов снова копится до применения удалённого описания.
-        remoteIceCandidatesCacheQueue.sync { remoteCandidatesDrained = false; remoteIceCandidatesCache.removeAll() }
+        remoteIceCandidatesCacheQueue.sync {
+            remoteCandidatesDrained = false
+            remoteDescriptionApplied = false
+            remoteIceCandidatesCache.removeAll()
+        }
         // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
         guard let audioTrack = self.localAudioTrack, let videoTrack = self.localVideoTrack else {
             Cache.log.error("WebRTCClient - no local tracks (call already closed?)")
@@ -335,10 +350,9 @@ class WebRTCClient: NSObject {
         // LINIA2: сначала медиа, потом канал данных. Раньше канал создавался первым: negotiationneeded
         // приходил (в потоке signaling), пока поток ещё не добавлен, senders были пусты — и offer не
         // создавался вовсе (веб принимал звонок и ждал offer, звонок обрывался по таймауту).
-        let stream = WebRTCClient.factory.mediaStream(withStreamId: "ARDAMS")
-        stream.addAudioTrack(audioTrack)
-        stream.addVideoTrack(videoTrack)
-        localPeer!.add(stream)
+        // LINIA2: Unified Plan (как в браузерах) — треки через addTrack с общим streamId; addStream есть только в Plan B.
+        _ = localPeer!.add(audioTrack, streamIds: ["ARDAMS"])
+        _ = localPeer!.add(videoTrack, streamIds: ["ARDAMS"])
 
         if dataChannel {
             let chanConfig = RTCDataChannelConfiguration()
@@ -570,8 +584,9 @@ extension WebRTCClient {
         }
 
         let config = RTCConfiguration()
-        // TODO: planB for now. Need to migrate to unified in the future.
-        config.sdpSemantics = .planB
+        // LINIA2: Unified Plan — как у веб-клиента и гостевой страницы (Chrome/Safari поддерживают только его).
+        // Plan B (было) в WebRTC устарел; SDP Plan B с современным Chrome согласуется непредсказуемо.
+        config.sdpSemantics = .unifiedPlan
         // TCP candidates are only useful when connecting to a server that supports
         // ICE-TCP.
         config.tcpCandidatePolicy = .disabled
@@ -626,7 +641,8 @@ extension WebRTCClient {
     }
 
     func setupRemoteRenderer(_ renderer: RTCVideoRenderer, withTrack track: RTCVideoTrack?) {
-        guard let track = track else { return }
+        // LINIA2: в Unified Plan трек может прийти и через didAdd stream, и через didAdd rtpReceiver — один раз.
+        guard let track = track, track !== self.remoteVideoTrack else { return }
         self.remoteVideoTrack = track
         track.add(renderer)
     }
@@ -675,6 +691,7 @@ extension WebRTCClient {
                 }
                 return
             }
+            self.markRemoteDescriptionApplied()
             self.answer(peerConnection)
         })
     }
@@ -697,6 +714,7 @@ extension WebRTCClient {
                 return
             }
             self.remoteAnswerApplied = true
+            self.markRemoteDescriptionApplied()
             self.delegate?.markConnectionSetupComplete()
             DispatchQueue.main.async { self.delegate?.linia2NegotiationDone(remoteOffer: false) }
         })
@@ -720,6 +738,17 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
         onDiagEvent?(["type": "track", "kind": stream.videoTracks.isEmpty ? "audio" : "audio+video",
                       "audio": stream.audioTracks.count, "video": stream.videoTracks.count])
         self.delegate?.handleRemoteStream(self, receivedStream: stream)
+    }
+
+    /// LINIA2 (Unified Plan): удалённые треки приходят сюда (didAdd stream — только в Plan B).
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+        let kind = rtpReceiver.track?.kind ?? "?"
+        onDiagEvent?(["type": "track", "kind": kind, "streams": mediaStreams.count])
+        guard let stream = mediaStreams.first else { return }
+        // Видео подключаем к экрану, когда пришёл видеотрек; аудио играет само.
+        if rtpReceiver.track is RTCVideoTrack {
+            self.delegate?.handleRemoteStream(self, receivedStream: stream)
+        }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
@@ -1653,10 +1682,12 @@ extension CallViewController: CameraCaptureDelegate {
 
 extension CallViewController: WebRTCClientDelegate {
     func sendOffer(withDescription sdp: RTCSessionDescription) {
+        diag?.add(["type": "offer-sent", "seq": self.callSeqId])
         self.topic?.videoCall(event: "offer", seq: self.callSeqId, payload: sdp.serialize())
     }
 
     func sendAnswer(withDescription sdp: RTCSessionDescription) {
+        diag?.add(["type": "answer-sent", "seq": self.callSeqId])
         self.topic?.videoCall(event: "answer", seq: self.callSeqId, payload: sdp.serialize())
     }
 
@@ -1694,6 +1725,11 @@ extension CallViewController: WebRTCClientDelegate {
     }
 
     func markConnectionSetupComplete() {
+        // LINIA2: вызывается из signaling-потока WebRTC — флаг экрана меняем только на главном.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.markConnectionSetupComplete() }
+            return
+        }
         self.callInitialSetupComplete = true
         self.webRTCClient.drainIceCandidatesCache()
     }
@@ -1808,6 +1844,7 @@ extension CallViewController: TinodeVideoCallDelegate {
             self.handleCallClose()
             return
         }
+        diag?.add(["type": "answer"])
         self.webRTCClient.handleRemoteAnswerDescription(desc)
     }
 
