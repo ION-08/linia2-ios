@@ -55,6 +55,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             }
         }
         func onLogin(code: Int, text: String) {
+            Linia2LaunchLog.shared.step("login", ["code": code])
+            if code < 300 {
+                Linia2LaunchLog.shared.onLogin()
+                Linia2LaunchLog.shared.flushMX()
+            }
             if code < 300 { Cache.callManager.linia2SignalingLoggedIn() }
         }
         func onDataMessage(data: MsgServerData?) {
@@ -149,12 +154,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         _ = AppDelegate.launchedAt
+        Linia2LaunchLog.shared.start()   // LINIA2: «чёрный ящик» запуска (файл App Group → call-diag type=launch)
         Cache.log.info("App launched with options: %@", launchOptions ?? [:])
         Linia2ConnectionNotice.quietPeriod(10)   // LINIA2: при запуске — без «Связь потеряна» (только «Подключение…»)
         Linia2TestHook.applyLaunchOverrides()    // только под -l2-uitest: «сервер недоступен N с» и т.п.
         // LINIA2: Firebase (Crashlytics/Analytics/FCM) — первым делом, чтобы ловить и ранние вылеты.
         // Делегаты уведомлений — до конца didFinishLaunching (иначе теряется нажатие на push при холодном старте).
-        Linia2Firebase.configureIfNeeded()
+        Linia2LaunchLog.shared.measure("firebase") { Linia2Firebase.configureIfNeeded() }
         UNUserNotificationCenter.current().delegate = self
         if Linia2Firebase.configured { Messaging.messaging().delegate = self }
         Linia2MainStallMonitor.shared.start()   // LINIA2: замер зависаний главного потока (l2_main_stall)
@@ -168,19 +174,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         SharedUtils.registerUserDefaults()
         // LINIA2: защита файлов, зашифрованный кэш картинок, HTTP-кэш только в памяти (до первого обращения к базе).
-        Linia2Storage.start()
+        Linia2LaunchLog.shared.measure("storage-start") { Linia2Storage.start() }
         // LINIA2: удалённые настройки (цвета, тексты, функции) — до применения темы.
-        Linia2Config.shared.start()
+        Linia2LaunchLog.shared.measure("config-start") { Linia2Config.shared.start() }
         DispatchQueue.main.async { Linia2Failover.shared.start() }   // LINIA2_FAILOVER: резервные адреса + «Подключение…»
         // LINIA2: тема и акцент.
         Linia2Theme.apply(to: window)
         // LINIA2: блокировка приложения PIN-кодом (Face ID отключён).
-        Linia2AppLock.shared.start()
+        Linia2LaunchLog.shared.measure("applock-start") { Linia2AppLock.shared.start() }
         Linia2WipeExecutor.install()
         Linia2WipeSync.shared.start()
         Linia2TestHook.install()   // только под -l2-uitest
 
-        let baseDb = BaseDb.sharedInstance
+        let baseDb = Linia2LaunchLog.shared.measure("db-open") { BaseDb.sharedInstance }
+        Linia2LaunchLog.shared.step("db-ready", ["ready": baseDb.isReady ? 1 : 0])
         if baseDb.isReady {
             // When the app launch after user tap on notification (originally was not running / not in background), except incoming calls which are handled separately.
             if let opts = launchOptions, let userInfo = opts[.remoteNotification] as? [String: Any],
@@ -193,12 +200,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // LINIA2: не вошли — «Добро пожаловать».
             window?.rootViewController = Linia2WelcomeViewController.makeRoot()
         }
+        Linia2LaunchLog.shared.step("routed")
 
         // Try to connect and login in the background.
         // LINIA2 (баг 1006): подключение не держит интерфейс (список чатов — из базы, сразу); не удалось —
         // повторы с нарастающей паузой (2, 4, 8, 16, 30 с), пока приложение на экране или идёт звонок.
         AppDelegate.connectInBackground(attempt: 0)
-        Cache.tinode.addListener(self.callListener)
+        Linia2LaunchLog.shared.measure("tinode") { Cache.tinode.addListener(self.callListener) }
+        Linia2LaunchLog.shared.step("did-finish-end")
+        // Первый проход главного цикла после запуска (интерфейс может рисоваться).
+        DispatchQueue.main.async { Linia2LaunchLog.shared.step("first-runloop") }
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + .seconds(10)) {
             let reachability = NWPathMonitor()
             reachability.start(queue: DispatchQueue.global(qos: .background))
@@ -237,6 +248,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
+        Linia2LaunchLog.shared.step("background")
         self.appIsStarting = false
         Linia2Storage.didEnterBackground()   // LINIA2: отложенный VACUUM после миграции базы
         application.applicationIconBadgeNumber = Cache.totalUnreadCount()
@@ -250,6 +262,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        Linia2LaunchLog.shared.step("active")
         Linia2Storage.becameActive()   // LINIA2: ключи хранилища и шифрование старой базы
         Linia2WipeSync.shared.refresh()
         Linia2Turn.shared.prefetch()
@@ -262,6 +275,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
+        Linia2LaunchLog.shared.step("terminate")
         // LINIA2: приложение закрыли (смахнули) во время звонка — завершить звонок в CallKit и у собеседника,
         // иначе на iPhone оставался «идущий звонок» с бегущими секундами.
         Cache.callManager.endForTermination()

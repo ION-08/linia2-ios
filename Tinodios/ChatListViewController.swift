@@ -37,6 +37,7 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
     var linia2FilterIndex = 0
     var linia2Query = ""
     var linia2Header: L2TableHeader?
+    private var linia2ChatsLogged = false
     var linia2HeaderWidth: CGFloat = 0
 
     private func setup() {
@@ -151,6 +152,10 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
 
     func displayChats(_ topics: [DefaultComTopic], archivedTopics: [DefaultComTopic]?) {
         assert(Thread.isMainThread)
+        if !linia2ChatsLogged {
+            linia2ChatsLogged = true
+            Linia2LaunchLog.shared.step("chatlist", ["n": topics.count, "arch": archivedTopics?.count ?? 0])
+        }
         self.linia2All = topics
         self.topics = linia2Filtered(topics)
         self.archivedTopics = archivedTopics

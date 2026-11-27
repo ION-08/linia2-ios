@@ -9,6 +9,9 @@
 
 import AVFoundation
 import Foundation
+import MetricKit
+import UIKit
+import TinodiosDB
 import WebRTC
 import FirebaseCore
 import FirebaseCrashlytics
@@ -282,5 +285,195 @@ final class Linia2CallDiag {
                 }
             }
         }.resume()
+    }
+}
+
+
+// MARK: - LINIA2: «чёрный ящик» запуска (шаги старта с временем) + MetricKit → POST /invite/api/call-diag
+
+/// Шаги запуска пишутся сразу в файл App Group (переживают вылет и убийство сторожем iOS). При следующем запуске
+/// прошлый журнал отправляется на сервер (call-diag, topic = "launch", sid = "launch-<id>") после входа;
+/// текущий — через 90 с после запуска. Отчёты MetricKit (вылеты, зависания) — туда же (topic = "metrickit").
+final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
+    static let shared = Linia2LaunchLog()
+    private let queue = DispatchQueue(label: "info.codix.liniya2.launchlog", qos: .utility)
+    private let started = Date()
+    private let launchId = String(UUID().uuidString.prefix(8)).lowercased()
+    private var handle: FileHandle?
+    private var count = 0
+    private var uploadedPrev = false
+
+    private static var dir: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BaseDb.kAppGroupId)?
+            .appendingPathComponent("l2launch", isDirectory: true)
+    }
+    private var curURL: URL? { Self.dir?.appendingPathComponent("cur.jsonl") }
+    private var prevURL: URL? { Self.dir?.appendingPathComponent("prev.jsonl") }
+
+    /// Первым делом в didFinishLaunching.
+    func start() {
+        queue.sync {
+            guard let dir = Self.dir, let cur = curURL, let prev = prevURL else { return }
+            let fm = FileManager.default
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true,
+                                    attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            if fm.fileExists(atPath: cur.path) {
+                // Прошлый журнал ещё не отправлен — не затирать (дописать к нему).
+                if fm.fileExists(atPath: prev.path), let old = try? Data(contentsOf: cur), let h = try? FileHandle(forWritingTo: prev) {
+                    _ = try? h.seekToEnd(); try? h.write(contentsOf: old); try? h.close()
+                    try? fm.removeItem(at: cur)
+                } else {
+                    try? fm.moveItem(at: cur, to: prev)
+                }
+            }
+            fm.createFile(atPath: cur.path, contents: nil, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            handle = try? FileHandle(forWritingTo: cur)
+        }
+        let info = Bundle.main.infoDictionary
+        step("launch", ["build": info?["CFBundleVersion"] as? String ?? "", "ver": info?["CFBundleShortVersionString"] as? String ?? "",
+                        "os": UIDevice.current.systemVersion, "state": UIApplication.shared.applicationState.rawValue,
+                        "prot": UIApplication.shared.isProtectedDataAvailable ? 1 : 0])
+        MXMetricManager.shared.add(self)
+        let past = MXMetricManager.shared.pastDiagnosticPayloads
+        if !past.isEmpty { didReceive(past) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) { self.uploadCurrent() }
+    }
+
+    /// Шаг запуска (с любого потока). ms — от старта процесса.
+    func step(_ name: String, _ extra: [String: Any] = [:]) {
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        let main = Thread.isMainThread ? 1 : 0
+        queue.async {
+            guard self.count < 400 else { return }
+            self.count += 1
+            var e: [String: Any] = ["type": "launch", "step": name, "ms": ms, "main": main,
+                                    "t": Int(Date().timeIntervalSince1970 * 1000), "lid": self.launchId]
+            for (k, v) in extra { e[k] = v }
+            guard JSONSerialization.isValidJSONObject(e), var d = try? JSONSerialization.data(withJSONObject: e) else { return }
+            d.append(0x0A)
+            try? self.handle?.write(contentsOf: d)
+        }
+    }
+
+    /// Шаг с замером длительности блока.
+    @discardableResult
+    func measure<T>(_ name: String, _ block: () -> T) -> T {
+        let t0 = Date()
+        let r = block()
+        step(name, ["dur": Int(Date().timeIntervalSince(t0) * 1000)])
+        return r
+    }
+
+    /// Вход выполнен — отправить журнал прошлого запуска.
+    func onLogin() {
+        queue.async {
+            guard !self.uploadedPrev, let prev = self.prevURL, let data = try? Data(contentsOf: prev) else { return }
+            self.uploadedPrev = true
+            let events = Self.parse(data)
+            let lid = (events.last?["lid"] as? String) ?? "prev"
+            var summary: [String: Any] = ["type": "launch", "step": "prev-summary", "n": events.count,
+                                          "last": (events.last?["step"] as? String) ?? "", "last_ms": (events.last?["ms"] as? Int) ?? 0]
+            summary["clean_exit"] = events.contains { ($0["step"] as? String) == "terminate" || ($0["step"] as? String) == "background" } ? 1 : 0
+            self.upload(sid: "launch-" + lid, topic: "launch", events: events + [summary]) { ok in
+                if ok { self.queue.async { try? FileManager.default.removeItem(at: prev) } }
+            }
+        }
+    }
+
+    private func uploadCurrent() {
+        queue.async {
+            guard let cur = self.curURL, let data = try? Data(contentsOf: cur) else { return }
+            self.upload(sid: "launch-" + self.launchId, topic: "launch", events: Self.parse(data)) { _ in }
+        }
+    }
+
+    private static func parse(_ data: Data) -> [[String: Any]] {
+        data.split(separator: 0x0A).compactMap { try? JSONSerialization.jsonObject(with: Data($0)) as? [String: Any] }
+    }
+
+    /// Отправка пачками по 50 событий (сервер: ≤60 событий и ≤64 КБ на запрос, значения — только скаляры).
+    private func upload(sid: String, topic: String, events: [[String: Any]], done: @escaping (Bool) -> Void) {
+        guard !events.isEmpty, let token = Cache.tinode.authToken ?? SharedUtils.getAuthToken(), !token.isEmpty,
+              let url = URL(string: Linia2API.base + "call-diag") else { done(false); return }
+        var rest = events
+        func next() {
+            guard !rest.isEmpty else { done(true); return }
+            let batch = Array(rest.prefix(50))
+            rest.removeFirst(batch.count)
+            let body: [String: Any] = ["sid": sid, "topic": topic, "seq": 0, "client": "ios", "events": batch]
+            guard JSONSerialization.isValidJSONObject(body), let data = try? JSONSerialization.data(withJSONObject: body),
+                  data.count < 60_000 else { next(); return }
+            var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+            req.httpBody = data
+            URLSession.shared.dataTask(with: req) { _, resp, err in
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if err != nil || status >= 300 { done(false); return }
+                next()
+            }.resume()
+        }
+        next()
+    }
+
+    // MARK: MetricKit
+
+    func didReceive(_ payloads: [MXMetricPayload]) {}
+
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        var events: [[String: Any]] = []
+        for p in payloads {
+            let range = ["from": Int(p.timeStampBegin.timeIntervalSince1970), "to": Int(p.timeStampEnd.timeIntervalSince1970)]
+            func add(_ kind: String, _ d: MXDiagnostic, _ extra: [String: Any]) {
+                var e: [String: Any] = ["type": "mx-" + kind, "build": d.metaData.applicationBuildVersion,
+                                        "os": d.metaData.osVersion, "device": d.metaData.deviceType]
+                for (k, v) in range { e[k] = v }
+                for (k, v) in extra { e[k] = v }
+                // Стек вызовов — частями по 7 КБ (значения на сервере — строки).
+                if let json = String(data: d.jsonRepresentation(), encoding: .utf8) {
+                    let chars = Array(json)
+                    var i = 0, part = 0
+                    while i < chars.count && part < 7 {
+                        e["js\(part)"] = String(chars[i..<min(i + 7000, chars.count)])
+                        i += 7000; part += 1
+                    }
+                    e["js_len"] = chars.count
+                }
+                events.append(e)
+            }
+            for c in p.crashDiagnostics ?? [] {
+                add("crash", c, ["exc": c.exceptionType?.intValue ?? -1, "code": c.exceptionCode?.intValue ?? -1,
+                                 "signal": c.signal?.intValue ?? -1, "reason": c.terminationReason ?? "",
+                                 "vm": c.virtualMemoryRegionInfo ?? ""])
+            }
+            for h in p.hangDiagnostics ?? [] {
+                add("hang", h, ["dur_ms": Int(h.hangDuration.converted(to: .milliseconds).value)])
+            }
+            for c in p.cpuExceptionDiagnostics ?? [] {
+                add("cpu", c, ["cpu_s": Int(c.totalCPUTime.converted(to: .seconds).value)])
+            }
+            for w in p.diskWriteExceptionDiagnostics ?? [] {
+                add("disk", w, ["mb": Int(w.totalWritesCaused.converted(to: .megabytes).value)])
+            }
+        }
+        guard !events.isEmpty else { return }
+        step("metrickit", ["n": events.count])
+        // По одному отчёту в запросе (большие стеки). До входа токена может не быть — повтор при входе.
+        queue.async {
+            self.pendingMX.append(contentsOf: events)
+            self.flushMX()
+        }
+    }
+
+    private var pendingMX: [[String: Any]] = []
+    func flushMX() {
+        queue.async {
+            guard !self.pendingMX.isEmpty else { return }
+            let e = self.pendingMX.removeFirst()
+            self.upload(sid: "mx-" + self.launchId + "-\(self.pendingMX.count)", topic: "metrickit", events: [e]) { ok in
+                if ok { self.flushMX() } else { self.queue.async { self.pendingMX.insert(e, at: 0) } }
+            }
+        }
     }
 }

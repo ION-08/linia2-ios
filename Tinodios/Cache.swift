@@ -73,7 +73,7 @@ class Cache {
         if let t = tinodeInstance { return t }
         return queue.sync {
             if let t = tinodeInstance { return t }
-            let t = SharedUtils.createTinode()
+            let t = Linia2LaunchLog.shared.measure("tinode-create") { SharedUtils.createTinode() }
             tinodeInstance = t
             // Слушатели, которые должны жить на каждом экземпляре Tinode (после выхода/входа — новый экземпляр,
             // а invalidate() снимает всех слушателей). Добавляем сразу — вход может завершиться раньше main.async.

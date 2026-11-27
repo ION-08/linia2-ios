@@ -65,8 +65,8 @@ enum Linia2Storage {
 
     /// При каждом выходе на экран: ключи (создать, если их ещё нет — телефон разблокирован), миграция.
     static func becameActive() {
-        L2Vault.bootstrap()
-        L2Vault.prewarm()
+        Linia2LaunchLog.shared.measure("vault-bootstrap") { _ = L2Vault.bootstrap() }
+        Linia2LaunchLog.shared.measure("vault-prewarm") { L2Vault.prewarm() }
         migrateIfNeeded()
     }
 
@@ -82,7 +82,11 @@ enum Linia2Storage {
         Linia2TestProbe.migrated = 0
         migrationQueue.asyncAfter(deadline: .now() + 6) {
             defer { DispatchQueue.main.async { migrating = false } }
-            guard BaseDb.sharedInstance.encryptLegacyRows() else { return }
+            Linia2LaunchLog.shared.step("migration-start")
+            let t0 = Date()
+            let ok = BaseDb.sharedInstance.encryptLegacyRows()
+            Linia2LaunchLog.shared.step("migration-end", ["ok": ok ? 1 : 0, "dur": Int(Date().timeIntervalSince(t0) * 1000)])
+            guard ok else { return }
             // Старый незашифрованный кэш файлов — удалить (перезагрузится с сервера).
             KingfisherManager.shared.cache.clearDiskCache()
             if let items = try? fm.contentsOfDirectory(at: roundDir, includingPropertiesForKeys: nil) {

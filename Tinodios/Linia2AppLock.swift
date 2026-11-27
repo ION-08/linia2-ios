@@ -215,6 +215,7 @@ final class Linia2AppLock {
 
     private func lockNow() {
         guard isEnabled, !locked else { return }
+        Linia2LaunchLog.shared.step("pin-shown")
         deferredForCall = false
         locked = true
         let vc = Linia2PinViewController(mode: .unlock)
@@ -256,6 +257,8 @@ final class Linia2AppLock {
     }
 
     private func unlock() {
+        Linia2LaunchLog.shared.step("unlock")
+        DispatchQueue.main.async { Linia2LaunchLog.shared.step("unlock-runloop") }
         locked = false
         lockWindow?.isHidden = true
         lockWindow = nil

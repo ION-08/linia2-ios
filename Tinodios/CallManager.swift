@@ -857,8 +857,20 @@ final class Linia2MainStallMonitor {
         }
     }
 
+    private var blockedMarks = 0
     private func tick() {
-        guard sentAt == nil else { return }   // главный ещё не ответил на прошлый пинг
+        if let s = sentAt {
+            // Главный поток всё ещё занят: отметка в «чёрный ящик» сразу (с фонового потока — переживёт
+            // убийство приложения сторожем iOS) на 3, 6, 12, 24, 48 с.
+            let waited = Date().timeIntervalSince(s)
+            let marks: [TimeInterval] = [3, 6, 12, 24, 48]
+            if blockedMarks < marks.count, waited >= marks[blockedMarks] {
+                blockedMarks += 1
+                Linia2LaunchLog.shared.step("main-blocked", ["s": Int(waited)])
+            }
+            return
+        }
+        blockedMarks = 0
         let sent = Date()
         sentAt = sent
         DispatchQueue.main.async {
@@ -871,6 +883,7 @@ final class Linia2MainStallMonitor {
                 self.sentAt = nil
                 guard lag >= 2, active, self.reports < 20 else { return }
                 self.reports += 1
+                Linia2LaunchLog.shared.step("main-stall", ["dur": Int(lag * 1000), "authed": authed ? 1 : 0, "backlog": backlog])
                 L2Log.event("l2_main_stall", ["ms": Int(lag * 1000), "since_launch": Int(Date().timeIntervalSince(AppDelegate.launchedAt)),
                                               "authed": authed ? 1 : 0, "backlog": backlog, "call": CallManager.state.uuid != nil ? 1 : 0])
             }
