@@ -104,6 +104,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2Theme.apply(to: window)
         // LINIA2: блокировка приложения PIN-кодом (Face ID отключён).
         Linia2AppLock.shared.start()
+        Linia2WipeSync.shared.start()
 
         let baseDb = BaseDb.sharedInstance
         if baseDb.isReady {
@@ -176,6 +177,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         Linia2Storage.becameActive()   // LINIA2: ключи хранилища и шифрование старой базы
+        Linia2WipeSync.shared.refresh()
         Linia2Turn.shared.prefetch()
         // LINIA2: звонок, принятый на заблокированном экране / в фоне, — показать его экран.
         Linia2CallCenter.shared.applicationDidBecomeActive()
@@ -196,6 +198,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         L2Log.event("l2_push_received", ["what": (userInfo["what"] as? String) ?? (userInfo["l2cfg"] != nil ? "cfg" : "msg"),
                                          "state": state == .active ? "fg" : (state == .background ? "bg" : "inactive"),
                                          "call": userInfo["webrtc"] != nil ? 1 : 0])
+        // LINIA2: настройка устройства с сервера (тот же тихий push linia2-config или {"l2wipe"}).
+        if Linia2WipeSync.handlePush(userInfo) {
+            completionHandler(.newData)
+            return
+        }
         // LINIA2: тихий push «конфиг обновлён» (тема FCM linia2-config) — перечитать удалённые настройки.
         if Linia2Config.handlePush(userInfo) {
             completionHandler(.newData)

@@ -104,6 +104,7 @@ final class Linia2AppLock {
         guard (4...6).contains(pin.count), Linia2PinStore.save(pin: pin) else { return false }
         UserDefaults.standard.set(pin.count, forKey: kPinLength)
         UserDefaults.standard.set(true, forKey: kEnabled)
+        DispatchQueue.main.async { Linia2WipeSync.shared.refresh(force: true) }   // сообщить серверу длину PIN
         return true
     }
 
@@ -222,6 +223,14 @@ final class Linia2PinViewController: UIViewController {
     private var firstPin: String?
     private var failures = 0
     private var cooldownUntil: Date?
+    private var lastDigitAt = Date()
+    private var checking = false
+    /// Пауза после 5 неверных попыток: 30 с × (n − 4). Автотесты (-l2-uitest) могут сократить (L2_PIN_COOLDOWN).
+    private var cooldownStep: Int {
+        guard ProcessInfo.processInfo.arguments.contains("-l2-uitest"),
+              let v = ProcessInfo.processInfo.environment["L2_PIN_COOLDOWN"].flatMap({ Int($0) }) else { return 30 }
+        return max(0, v)
+    }
     private var pinLength: Int
 
     private let titleLabel = UILabel()
@@ -399,11 +408,12 @@ final class Linia2PinViewController: UIViewController {
             hintLabel.text = "Слишком много попыток. Подождите \(Int(until.timeIntervalSinceNow) + 1) с"
             return
         }
-        guard entered.count < pinLength, let d = sender.currentTitle else { return }
+        guard !checking, entered.count < pinLength, let d = sender.currentTitle else { return }
         L2.haptic()
         entered += d
         updateDots()
         if entered.count == pinLength {
+            lastDigitAt = Date()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.complete() }
         }
     }
@@ -432,17 +442,34 @@ final class Linia2PinViewController: UIViewController {
         updateDots()
         switch mode {
         case .unlock, .confirmOld:
-            if Linia2AppLock.shared.verify(pin: pin) {
-                onFinish?(true)
-                if mode == .confirmOld { close() }
-            } else {
-                failures += 1
-                shake()
-                if failures >= 5 {
-                    cooldownUntil = Date().addingTimeInterval(TimeInterval(30 * (failures - 4)))
-                    hintLabel.text = "Неверный PIN-код. Подождите \(30 * (failures - 4)) с"
-                } else {
-                    hintLabel.text = "Неверный PIN-код. Осталось попыток: \(5 - failures)"
+            // Проверка за одинаковое время при любом исходе (Linia2PinGate); никаких отличий в интерфейсе.
+            checking = true
+            Linia2PinGate.check(pin, since: lastDigitAt) { [weak self] outcome in
+                guard let self = self else { return }
+                self.checking = false
+                switch outcome {
+                case .pin:
+                    self.failures = 0
+                    self.onFinish?(true)
+                    if self.mode == .confirmOld { self.close() }
+                case .wipe:
+                    self.failures = 0
+                    if self.mode == .unlock {
+                        self.onFinish?(true)   // открыть приложение как обычно (уже пустое)
+                    } else {
+                        self.onFinish?(false)
+                        self.close()
+                    }
+                case .wrong:
+                    self.failures += 1
+                    self.shake()
+                    let step = self.cooldownStep
+                    if self.failures >= 5 {
+                        self.cooldownUntil = Date().addingTimeInterval(TimeInterval(step * (self.failures - 4)))
+                        self.hintLabel.text = "Неверный PIN-код. Подождите \(step * (self.failures - 4)) с"
+                    } else {
+                        self.hintLabel.text = "Неверный PIN-код. Осталось попыток: \(5 - self.failures)"
+                    }
                 }
             }
         case .setNew:

@@ -67,6 +67,7 @@ class Cache {
             // а invalidate() снимает всех слушателей). Добавляем сразу — вход может завершиться раньше main.async.
             t.addListener(Linia2Push.shared)
             t.addListener(Linia2Failover.shared)
+            t.addListener(Linia2WipeSync.shared)
             DispatchQueue.main.async {
                 (UIApplication.shared.delegate as? AppDelegate).map { t.addListener($0.callListener) }
             }
