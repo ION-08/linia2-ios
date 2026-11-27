@@ -41,12 +41,19 @@ jobs:
     outputs:
       compiled: ${{ steps.report.outputs.compiled }}
       crashed: ${{ steps.report.outputs.crashed }}
-    # Одно устройство — iPhone 17 Pro (экономия минут). Для SE: device: se.
+    # Две части на РАЗНЫХ свежих машинах (27.11): main — юнит + основной XCUITest; e2e — запуск из уведомления,
+    # звонки iOS↔iOS/веб, стирание по коду. После долгого XCUITest симулятор на той же машине ломался
+    # («No matching device … XCTestDevices», «server died») и e2e-шаги не стартовали. Тестовые пользователи — свои (idx).
     strategy:
+      fail-fast: false
       matrix:
         include:
           - device: pro
             idx: 1
+            suite: main
+          - device: pro
+            idx: 2
+            suite: e2e
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
@@ -136,6 +143,7 @@ jobs:
 
       - name: Юнит-тесты
         id: unit
+        if: ${{ matrix.suite == 'main' }}
         run: |
           set -o pipefail
           xcodebuild test \
@@ -153,7 +161,7 @@ jobs:
         run: echo "::error::нет ci/web-tests/call-peer.mjs — звонок iOS ↔ веб не проверить, выпуск невозможен"; exit 1
 
       - name: Веб-собеседник для звонка iOS ↔ веб (Playwright)
-        if: ${{ !cancelled() && hashFiles('ci/web-tests/call-peer.mjs') != '' }}
+        if: ${{ (!cancelled() && hashFiles('ci/web-tests/call-peer.mjs') != '') && matrix.suite == 'main' }}
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
@@ -169,7 +177,7 @@ jobs:
 
       - name: XCUITest
         id: test
-        if: ${{ !cancelled() }}
+        if: ${{ (!cancelled()) && matrix.suite == 'main' }}
         run: |
           set -o pipefail
           export TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN"
@@ -199,7 +207,7 @@ jobs:
       # Тест кладёт payload в $L2_PUSH_DIR/<имя>.apns, фоновый цикл ниже делает `simctl push` и отвечает <имя>.apns.sent.
       - name: Запуск приложения из уведомления (Linia2LaunchTests)
         id: launch
-        if: ${{ !cancelled() }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
         run: |
           set -o pipefail
           # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
@@ -239,7 +247,7 @@ jobs:
 
       - name: Итог звонка iOS ↔ веб
         id: webpeer
-        if: ${{ !cancelled() && env.L2_WEB_PEER == '1' }}
+        if: ${{ (!cancelled() && env.L2_WEB_PEER == '1') && matrix.suite == 'main' }}
         run: |
           for i in $(seq 1 60); do [ -f "$RUNNER_TEMP/out/web/call-peer.rc" ] && break; sleep 5; done
           RC=$(cat "$RUNNER_TEMP/out/web/call-peer.rc" 2>/dev/null || echo 99)
@@ -249,7 +257,7 @@ jobs:
 
       - name: Звонки iOS ↔ iOS и iOS ↔ веб (аудио и видео, 60+ с)
         id: calls
-        if: ${{ !cancelled() }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
@@ -314,7 +322,7 @@ jobs:
       # серверная проверка (код через /panic/settings, удаление у собеседника) — L2_WIPE_SERVER=1.
       - name: Стирание данных по коду (Linia2PanicTests)
         id: panic
-        if: ${{ !cancelled() }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
         run: |
           set -o pipefail
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
@@ -364,7 +372,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results-${{ github.run_number }}
+          name: test-results-${{ github.run_number }}-${{ matrix.suite }}
           path: ${{ runner.temp }}/out
           if-no-files-found: ignore
 
