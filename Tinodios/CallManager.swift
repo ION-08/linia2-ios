@@ -125,6 +125,26 @@ class CallManager {
         }
     }
 
+    /// LINIA2 (вариант Б): звонок идёт на движке WKWebView — звуком (захват и вывод) управляет WebKit.
+    /// Нативная RTCAudioSession в это время не трогается совсем: ни isAudioEnabled, ни audioSessionDidActivate,
+    /// ни setActive/overrideOutputAudioPort через неё (она перехватывала AVAudioSession — у WebKit тишина в обе
+    /// стороны, звонок 27.11 16:20, id 601/602). useManualAudio=true и isAudioEnabled=false остаются: нативный
+    /// аудиомодуль WebRTC так и не запускается.
+    static var linia2WebAudio = false
+    /// CallKit активировал AVAudioSession (didActivate без didDeactivate) — для перехода на нативный движок.
+    static var linia2AudioActive = false
+
+    /// Выход звука (трубка/динамик): в режиме WKWebView — напрямую через AVAudioSession.
+    public static func setOutputPort(_ port: AVAudioSession.PortOverride) {
+        if linia2WebAudio {
+            do { try AVAudioSession.sharedInstance().overrideOutputAudioPort(port) } catch {
+                Cache.log.error("CallManager: overrideOutputAudioPort failed: %@", error.localizedDescription)
+            }
+            return
+        }
+        audioSessionChange { s in try s.overrideOutputAudioPort(port) }
+    }
+
     // Utility function to configure RTCAudioSession.
     public static func audioSessionChange(action: ((RTCAudioSession) throws -> Void)) {
         let audioSession = RTCAudioSession.sharedInstance()
@@ -138,6 +158,13 @@ class CallManager {
     }
 
     public static func activateAudioSession(withSpeaker speaker: Bool) {
+        if linia2WebAudio {
+            let s = AVAudioSession.sharedInstance()
+            try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+            if !CallManager.useCallKit { try? s.setActive(true) }
+            try? s.overrideOutputAudioPort(speaker ? .speaker : .none)
+            return
+        }
         self.audioSessionChange { audioSession in
             // Bluetooth (AirPods, гарнитуры, автомобиль) — разрешён; выбор выхода — AVRoutePickerView на экране звонка.
             try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
@@ -151,6 +178,7 @@ class CallManager {
     public static func deactivateAudioSession() {
         // С CallKit сессию выключает система (provider didDeactivate).
         guard !CallManager.useCallKit else { return }
+        if linia2WebAudio { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation); return }
         self.audioSessionChange { audioSession in
             try audioSession.setActive(false)
         }
@@ -158,6 +186,7 @@ class CallManager {
 
     /// Запасной путь: CallKit не активировал звук (сбой) — включаем сами.
     public static func ensureAudioEnabled() {
+        if linia2WebAudio { return }   // WebKit управляет звуком сам (CallKit активировал AVAudioSession)
         let rtc = RTCAudioSession.sharedInstance()
         guard rtc.useManualAudio, !rtc.isAudioEnabled else { return }
         Cache.log.info("CallManager: CallKit did not activate audio, enabling manually")
@@ -785,7 +814,7 @@ extension CallManager: CallManagerImpl {
         if call.seq > 0 { remember(call.topic, call.seq) }
         // LINIA2: микрофон выключается сразу (не дожидаясь, пока CallKit деактивирует аудиосессию).
         let rtc = RTCAudioSession.sharedInstance()
-        if rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
+        if !CallManager.linia2WebAudio && rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
         CallManager.deactivateAudioSession()
         dismissTestAlert()
         if reportToSystem && CallManager.useCallKit {

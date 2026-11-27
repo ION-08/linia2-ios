@@ -388,6 +388,10 @@ class WebRTCClient: NSObject {
         guard web == nil else { return }
         let w = Linia2WebCallEngine(client: self)
         web = w
+        CallManager.linia2WebAudio = true
+        // Если CallKit уже включил звук для нативного движка — выключить нативный аудиомодуль (сессию не трогаем).
+        let rtc = RTCAudioSession.sharedInstance()
+        if rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
         onDiagEvent?(["type": "engine", "name": "web"])
         w.start(audioOnly: audioOnly, caller: caller, video: video)
     }
@@ -398,6 +402,13 @@ class WebRTCClient: NSObject {
         web = nil
         webPC = false
         w.close()
+        CallManager.linia2WebAudio = false
+        // CallKit уже включил звук (пока ждали страницу) — передать сессию нативному WebRTC, как в didActivate.
+        if CallManager.linia2AudioActive {
+            let rtc = RTCAudioSession.sharedInstance()
+            rtc.audioSessionDidActivate(AVAudioSession.sharedInstance())
+            rtc.isAudioEnabled = true
+        }
         onDiagEvent?(["type": "engine", "name": "native-fallback", "reason": reason])
     }
 
@@ -1410,9 +1421,7 @@ class CallViewController: UIViewController {
         Cache.log.info("User requested overridde audio output port to %d", newOutput.rawValue)
         // Выбор запоминаем сразу: если сессия ещё не активна (дозвон, CallKit), он применится в didActivate.
         self.audioOutput = newOutput
-        CallManager.audioSessionChange { session in
-            try session.overrideOutputAudioPort(newOutput)
-        }
+        CallManager.setOutputPort(newOutput)
         linia2UpdateRoute()
         linia2UpdateProximity()
     }
@@ -1698,14 +1707,18 @@ class CallViewController: UIViewController {
         micDenied = false
         view.viewWithTag(Self.kMicCardTag)?.removeFromSuperview()
         view.viewWithTag(Self.kMicPillTag)?.removeFromSuperview()
-        CallManager.audioSessionChange { s in
+        if CallManager.linia2WebAudio {
+            try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+            CallManager.setOutputPort(self.audioOutput)
+            webRTCClient.web?.call("audioResume", ["reason": "mic-granted"])
+        } else { CallManager.audioSessionChange { s in
             try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
             if s.useManualAudio && s.isAudioEnabled {
                 s.isAudioEnabled = false   // перезапуск аудиомодуля WebRTC — теперь с микрофоном
                 s.isAudioEnabled = true
             }
             try? s.overrideOutputAudioPort(self.audioOutput)
-        }
+        } }
         if !isHeld { webRTCClient.setAudioEnabled(!isMuted) }
         linia2UpdateButtons()
     }
@@ -1720,9 +1733,7 @@ class CallViewController: UIViewController {
             // Наушники отключили / категория сменилась — вернуть выбранный выход (динамик или трубка).
             if !Linia2CallCenter.hasExternalOutput() {
                 Cache.log.info("Audio route change: restoring audio output to %d", self.audioOutput.rawValue)
-                CallManager.audioSessionChange { session in
-                    try session.overrideOutputAudioPort(self.audioOutput)
-                }
+                CallManager.setOutputPort(self.audioOutput)
             }
         case .newDeviceAvailable:
             // Подключили AirPods / гарнитуру — звук идёт в них (как на iPhone), динамик выключается.
@@ -1808,7 +1819,7 @@ class CallViewController: UIViewController {
         // 2. Микрофон/камера — выключить сейчас же.
         webRTCClient.linia2MuteAllForClose()
         let rtc = RTCAudioSession.sharedInstance()
-        if rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
+        if !CallManager.linia2WebAudio && rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
         // 3. Экран — закрыть немедленно (без анимации).
         Linia2CallCenter.shared.callDidEnd(self)
         if let presenter = self.presentingViewController {
@@ -2746,7 +2757,9 @@ extension CallViewController {
         })
         observers.append(nc.addObserver(forName: .linia2CallAudioActivated, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
-            CallManager.audioSessionChange { s in try s.overrideOutputAudioPort(self.audioOutput) }
+            CallManager.setOutputPort(self.audioOutput)
+            // Вариант Б: CallKit включил звук — странице: play() звука собеседника, проверить/перезапросить микрофон.
+            self.webRTCClient.web?.call("audioResume", ["reason": "activated"])
             self.linia2UpdateRoute()
         })
         // Свернули приложение: своё видео на паузе (камера в фоне недоступна), вернулись — продолжить.

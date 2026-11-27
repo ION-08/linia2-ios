@@ -19,7 +19,7 @@ audio{display:none}
 <body>
 <video id="remote" playsinline autoplay muted></video>
 <video id="local" playsinline autoplay muted></video>
-<audio id="raudio" autoplay playsinline></audio>
+<audio id="raudio" autoplay playsinline webkit-playsinline></audio>
 <script>
 (function () {
   'use strict';
@@ -104,6 +104,47 @@ audio{display:none}
     }
     v.classList.toggle('on', on);
   }
+  // LINIA2: события трека (muted/unmuted/ended) — в диагностику; свой микрофон завершился — перезапросить.
+  function watchTrack(t, side) {
+    if (!t || t.__l2w) return; t.__l2w = true;
+    ['mute', 'unmute', 'ended'].forEach(function (ev) {
+      t.addEventListener(ev, function () {
+        diag({ type: 'track-' + ev, side: side, kind: t.kind });
+        if (side === 'local' && t.kind === 'audio' && ev === 'ended') resumeAudio('local-ended');
+      });
+    });
+  }
+  // Звук собеседника: muted=false, play(); результат — в диагностику (один раз на причину).
+  function playRemoteAudio(why) {
+    var a = $('raudio'); if (!a || !a.srcObject) return Promise.resolve();
+    a.muted = false; a.volume = 1;
+    var p; try { p = a.play(); } catch (x) { p = null; }
+    if (!p || !p.then) return Promise.resolve();
+    return p.then(function () { diag({ type: 'audio-play', state: 'ok', why: why }); },
+                  function (x) { diag({ type: 'audio-play', state: 'err', why: why, name: String(x && (x.name || x.message) || x).slice(0, 60) }); });
+  }
+  // CallKit включил звук / закончилось прерывание: play() и проверка своего микрофона; muted/ended — новый getUserMedia и replaceTrack.
+  function resumeAudio(why) {
+    playRemoteAudio(why);
+    var t = liveTrack('audio');
+    diag({ type: 'audio-resume', why: why, mic: t ? (t.muted ? 'muted' : 'live') : 'none', enabled: t ? !!t.enabled : false });
+    if (t && !t.muted) return Promise.resolve();
+    return gum({ audio: audioConstraints() }).then(function (st) {
+      var nt = st.getAudioTracks()[0]; if (!nt) return;
+      nt.enabled = S.audioOn;
+      if (S.stream) {
+        S.stream.getAudioTracks().forEach(function (o) { try { S.stream.removeTrack(o); o.stop(); } catch (e) {} });
+        S.stream.addTrack(nt);
+      } else { S.stream = st; }
+      watchTrack(nt, 'local');
+      var s = sender('audio');
+      return (s ? s.replaceTrack(nt) : Promise.resolve()).then(function () {
+        diag({ type: 'audio-resume', state: 'mic-replaced', sender: !!s });
+        post({ t: 'media', audio: true, video: !!liveTrack('video') });
+      });
+    }).catch(function (e) { err('audio-resume', e); });
+  }
+
   function startMedia() {
     var wantV = !!S.cfg.video;
     S.wantVideo = wantV;
@@ -119,7 +160,7 @@ audio{display:none}
       .then(function (st) {
         S.stream = st;
         var a = st.getAudioTracks()[0];
-        if (a) a.enabled = S.audioOn;
+        if (a) { a.enabled = S.audioOn; watchTrack(a, 'local'); }
         post({ t: 'media', audio: !!a, video: st.getVideoTracks().length > 0 });
         showLocal();
       });
@@ -158,11 +199,10 @@ audio{display:none}
       if (at) {
         var cur = a.srcObject && a.srcObject.getAudioTracks()[0];
         if (!cur || cur.id !== at.id) a.srcObject = new MediaStream([at]);
-        a.muted = false;
-        var p; try { p = a.play(); } catch (x) { p = null; }
-        if (p && p.catch) p.catch(function (x) { err('audio-play', x); });
+        playRemoteAudio('track');
       }
-      diag({ type: 'track', kind: e.track.kind });
+      watchTrack(e.track, 'remote');
+      diag({ type: 'track', kind: e.track.kind, muted: !!e.track.muted, state: e.track.readyState });
     };
     pc.ondatachannel = function (e) { bindDC(e.channel); };
 
@@ -352,6 +392,8 @@ audio{display:none}
       S.established = false; S.initialOfferSent = false;
       S.q = Promise.resolve();
     },
+    // CallKit включил звук / прерывание закончилось / микрофон разрешили — см. resumeAudio.
+    audioResume: function (o) { return resumeAudio((o && o.reason) || 'native'); },
     // Для тестов: уровень/байты звука.
     state: function () {
       return { pc: !!S.pc, ice: S.pc ? S.pc.iceConnectionState : 'none', signaling: S.pc ? S.pc.signalingState : 'none',
@@ -363,18 +405,25 @@ audio{display:none}
   function stats() {
     var pc = S.pc; if (!pc) return;
     pc.getStats().then(function (r) {
-      var o = { aIn: 0, aOut: 0, vIn: 0, vOut: 0, lost: 0, recv: 0, rtt: 0, level: 0, pair: '' };
+      var o = { aIn: 0, aOut: 0, vIn: 0, vOut: 0, lost: 0, recv: 0, rtt: 0, level: 0, pair: '', aKind: '' };
+      // LINIA2: WebKit может не заполнять kind — берём kind || mediaType || тип кодека (audio/opus → audio).
+      function kindOf(s) {
+        var k = s.kind || s.mediaType;
+        if (!k && s.codecId && r.get) { var c = r.get(s.codecId); if (c && c.mimeType) k = String(c.mimeType).split('/')[0].toLowerCase(); }
+        return k || '';
+      }
       r.forEach(function (s) {
-        if (s.type === 'inbound-rtp' && s.kind === 'audio') { o.aIn += s.bytesReceived || 0; o.lost += s.packetsLost || 0; o.recv += s.packetsReceived || 0; if (s.audioLevel != null) o.level = s.audioLevel; }
-        if (s.type === 'inbound-rtp' && s.kind === 'video') o.vIn += s.bytesReceived || 0;
-        if (s.type === 'outbound-rtp' && s.kind === 'audio') o.aOut += s.bytesSent || 0;
-        if (s.type === 'outbound-rtp' && s.kind === 'video') o.vOut += s.bytesSent || 0;
+        var k = (s.type === 'inbound-rtp' || s.type === 'outbound-rtp' || s.type === 'media-source') ? kindOf(s) : '';
+        if (s.type === 'inbound-rtp' && k === 'audio') { o.aIn += s.bytesReceived || 0; o.lost += s.packetsLost || 0; o.recv += s.packetsReceived || 0; if (s.audioLevel != null) o.level = s.audioLevel; if (s.totalAudioEnergy != null) o.energyIn = s.totalAudioEnergy; o.aKind = s.kind ? 'kind' : (s.mediaType ? 'mediaType' : 'codec'); }
+        if (s.type === 'inbound-rtp' && k === 'video') o.vIn += s.bytesReceived || 0;
+        if (s.type === 'outbound-rtp' && k === 'audio') o.aOut += s.bytesSent || 0;
+        if (s.type === 'outbound-rtp' && k === 'video') o.vOut += s.bytesSent || 0;
+        if (s.type === 'media-source' && k === 'audio' && s.audioLevel != null) o.micLevel = s.audioLevel;
         if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') {
           o.rtt = s.currentRoundTripTime || 0;
           var lc = r.get ? r.get(s.localCandidateId) : null;
           o.pair = lc ? (lc.candidateType || '') : '';
         }
-        if (s.type === 'media-source' && s.kind === 'audio' && s.audioLevel != null) o.micLevel = s.audioLevel;
       });
       S.lastBytes = o.aIn;
       post({ t: 'stats', s: o });

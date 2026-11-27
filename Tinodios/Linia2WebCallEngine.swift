@@ -38,6 +38,7 @@ final class Linia2WebCallEngine: NSObject {
     /// Вызывается один раз при «ready» (выбор движка на экране звонка).
     var onReady: (() -> Void)?
     private let loadStarted = Date()
+    private var audioObservers: [NSObjectProtocol] = []
     private var pending: [String] = []
     private var closed = false
     /// Последняя статистика JS (для call-diag и «Плохая связь»).
@@ -80,6 +81,7 @@ final class Linia2WebCallEngine: NSObject {
             return
         }
         client.onDiagEvent?(["type": "web-load", "app": Self.appState()])
+        observeAudioSession()
         wv.loadHTMLString(html, baseURL: URL(string: "https://v2.chat-linia.site/linia2-call/"))
     }
 
@@ -184,8 +186,32 @@ final class Linia2WebCallEngine: NSObject {
     func setCamera(_ on: Bool) { videoEnabled = on; call("setCamera", on) }
     func setVideoEnabled(_ on: Bool) { videoEnabled = on; call("setVideoEnabled", on) }
 
+    /// AVAudioSession: прерывания (GSM-звонок, Siri, другой звук) и смена выхода — в диагностику; после прерывания —
+    /// странице «звук снова есть» (play звука собеседника, проверка/перезапрос микрофона).
+    private func observeAudioSession() {
+        let nc = NotificationCenter.default
+        let s = AVAudioSession.sharedInstance()
+        audioObservers.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: s, queue: .main) { [weak self] n in
+            guard let self = self else { return }
+            let t = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap { AVAudioSession.InterruptionType(rawValue: $0) }
+            let began = t == .began
+            self.client?.onDiagEvent?(["type": "audio-interruption", "state": began ? "began" : "ended", "engine": "web", "app": Self.appState()])
+            if !began { self.call("audioResume", ["reason": "interruption-ended"]) }
+        })
+        audioObservers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: s, queue: .main) { [weak self] n in
+            let r = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+            let out = AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none"
+            let inp = AVAudioSession.sharedInstance().currentRoute.inputs.first?.portType.rawValue ?? "none"
+            self?.client?.onDiagEvent?(["type": "audio-route", "reason": Int(r), "out": out, "in": inp,
+                                        "cat": AVAudioSession.sharedInstance().category.rawValue, "engine": "web"])
+        })
+    }
+
     func close() {
         guard !closed else { return }
+        audioObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        audioObservers.removeAll()
+        if !CallManager.linia2AudioActive { CallManager.linia2WebAudio = false }
         call("muteAll", nil)
         call("close", nil)
         closed = true
@@ -221,6 +247,8 @@ final class Linia2WebCallEngine: NSObject {
             let r = onReady
             onReady = nil
             r?()
+            // CallKit включил звук раньше, чем загрузилась страница, — сразу «звук есть».
+            if CallManager.linia2AudioActive { call("audioResume", ["reason": "ready-active"]) }
         case "offer":
             if let d = m["sdp"] as? [String: Any], let sdp = d["sdp"] as? String {
                 client.delegate?.sendOffer(withDescription: RTCSessionDescription(type: .offer, sdp: sdp))
