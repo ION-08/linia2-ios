@@ -20,33 +20,88 @@ jobs:
     outputs:
       release: ${{ steps.g.outputs.release }}
       dry_run: ${{ steps.g.outputs.dry_run }}
+      tested: ${{ steps.g.outputs.tested }}
+      unit_only: ${{ steps.g.outputs.unit_only }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: g
         env:
           MSG: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          R=false; D=false
+          R=false; D=false; T=false
           if [[ "$MSG" == *"[release]"* || -f RELEASE_READY ]]; then R=true; fi
           if [[ "$MSG" == *"[dry-run]"* ]]; then D=true; fi
-          echo "release=$R" >> "$GITHUB_OUTPUT"; echo "dry_run=$D" >> "$GITHUB_OUTPUT"
-          echo "Выпуск: $R, пробный (без загрузки): $D" | tee -a "$GITHUB_STEP_SUMMARY"
+          # [tested:<id прогона UI tests>] — этот код уже прошёл полный прогон (юнит + XCUITest + звонки iOS↔iOS и iOS↔веб):
+          # прогон успешный, его коммит — предок текущего, и отличается только файл этой цепочки → тесты не повторяем.
+          RID=$(printf '%s' "$MSG" | grep -oE '\[tested:[0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)
+          if [[ -n "$RID" ]]; then
+            INFO=$(gh api "repos/${{ github.repository }}/actions/runs/$RID" -q '"\(.conclusion) \(.head_sha) \(.name)"' || true)
+            C=$(echo "$INFO" | cut -d' ' -f1); SHA=$(echo "$INFO" | cut -d' ' -f2); NM=$(echo "$INFO" | cut -d' ' -f3-)
+            OTHER=$(git diff --name-only "$SHA" "$GITHUB_SHA" 2>/dev/null | grep -vE '^(.github/workflows/(release|web-tests).yml|ci/web-tests/.*)$' || true)
+            if [[ "$C" == "success" && "$NM" == "UI tests" ]] && git merge-base --is-ancestor "$SHA" "$GITHUB_SHA" && [[ -z "$OTHER" ]]; then T=true; fi
+            echo "Проверенный прогон $RID: $C, коммит $SHA, отличия кроме release.yml: ${OTHER:-нет} → без повторных тестов: $T" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [[ "$T" != "true" ]]; then echo "Прогон $RID не подходит — тесты будут запущены заново" | tee -a "$GITHUB_STEP_SUMMARY"; fi
+          fi
+          # [unit-only] — решение владельца 26.11 23:00: сборка нужна сегодня, UI-прогон не успевает → только юнит-тесты + сборка.
+          U=false; if [[ "$MSG" == *"[unit-only]"* ]]; then U=true; echo "Только юнит-тесты (решение владельца 26.11)" | tee -a "$GITHUB_STEP_SUMMARY"; fi
+          echo "unit_only=$U" >> "$GITHUB_OUTPUT"
+          echo "release=$R" >> "$GITHUB_OUTPUT"; echo "dry_run=$D" >> "$GITHUB_OUTPUT"; echo "tested=$T" >> "$GITHUB_OUTPUT"
+          echo "Выпуск: $R, пробный (без загрузки): $D, тесты уже пройдены: $T" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # Выпуск 26.11 (решение владельца): юнит + UI (включая звонок iOS ↔ веб) → браузерный тест гостевой ссылки → TestFlight.
   # Большой e2e (2 круга) вернётся в цепочку, когда будет готов.
   tests:
     needs: gate
-    if: ${{ needs.gate.outputs.release == 'true' }}
+    if: ${{ needs.gate.outputs.release == 'true' && needs.gate.outputs.tested != 'true' && needs.gate.outputs.unit_only != 'true' }}
     uses: ./.github/workflows/uitest.yml
     secrets: inherit
 
+  # [unit-only]: только юнит-тесты (TinodeSDKTests) на симуляторе, без UI-тестов и звонков.
+  unit:
+    needs: gate
+    if: ${{ needs.gate.outputs.release == 'true' && needs.gate.outputs.unit_only == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
+          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"; xcodebuild -version
+      - name: Подготовка
+        run: |
+          cp ci/GoogleService-Info.stub.plist GoogleService-Info.plist
+          which pod || sudo gem install cocoapods --no-document
+          pod install --repo-update
+      - name: Юнит-тесты
+        run: |
+          set -o pipefail
+          RT=$(xcrun simctl list runtimes available | grep -o "com.apple.CoreSimulator.SimRuntime.iOS-1[78]-[0-9-]*" | sort -V | tail -1)
+          UDID=""
+          for DT in iPhone-16-Pro iPhone-16 iPhone-15-Pro iPhone-15; do
+            UDID=$(xcrun simctl create "L2 $DT" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
+          done
+          [ -n "$UDID" ] || { echo "::error::нет симулятора"; exit 1; }
+          xcodebuild test -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Debug \
+            -destination "platform=iOS Simulator,id=$UDID" -only-testing:TinodeSDKTests \
+            -retry-tests-on-failure -test-iterations 3 \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=NO DEVELOPMENT_TEAM= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee unit.log | grep -E 'error:|Test Case .* (passed|failed)|\*\* TEST' || true
+          grep -q '\*\* TEST SUCCEEDED \*\*' unit.log
+
   web:
     needs: [gate, tests]
+    if: ${{ always() && needs.gate.outputs.release == 'true' && needs.gate.outputs.unit_only != 'true' && (needs.tests.result == 'success' || (needs.tests.result == 'skipped' && needs.gate.outputs.tested == 'true')) }}
     uses: ./.github/workflows/web-tests.yml
     secrets: inherit
 
   testflight:
-    needs: [gate, tests, web]
+    needs: [gate, tests, web, unit]
+    if: ${{ always() && needs.gate.outputs.release == 'true' && ((needs.gate.outputs.unit_only == 'true' && needs.unit.result == 'success') || (needs.web.result == 'success' && (needs.tests.result == 'success' || (needs.tests.result == 'skipped' && needs.gate.outputs.tested == 'true')))) }}
     uses: ./.github/workflows/testflight.yml
     with:
       dry_run: ${{ needs.gate.outputs.dry_run == 'true' }}

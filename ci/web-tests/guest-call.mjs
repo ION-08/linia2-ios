@@ -114,7 +114,8 @@ async function main() {
     step('вход владельца в Tinode', !!token);
 
     const args = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required',
-      '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'];
+      '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+      '--disable-features=IntensiveWakeUpThrottling,CalculateNativeWinOcclusion', '--force-webrtc-ip-handling-policy=default_public_interface_only'];
     browser = process.env.CDP_URL ? await chromium.connectOverCDP(process.env.CDP_URL) : await chromium.launch({ headless: true, args });
     const ownerCtx = await newContext(browser, { viewport: { width: 1280, height: 820 } });
     const guestCtx = await newContext(browser, { viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
