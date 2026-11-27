@@ -124,6 +124,25 @@ if (env.L2_D_LOGIN) {
   const reply = 'В 10:00, в переговорке';
   await pub('A', { txt: quote + reply, fmt: [{ tp: 'QQ', at: 0, len: quote.length }] }, { ...drafty, reply: String(orig ?? 0) });
 
+  // LINIA2: время в пузыре — короткие и длинные тексты, звонки, изменённое (отступ до времени ≥ 6 pt).
+  await pub('D', 'Метка: время');
+  await pub('D', 'Привет');
+  await pub('A', 'Привет');
+  await pub('D', 'Ок');
+  await pub('A', 'Да');
+  await pub('D', 'Текст почти до конца строки пузыря ааа');
+  await pub('A', 'Текст почти до конца строки пузыря ааа');
+  await pub('D', 'Длинный текст, у которого последняя строка заканчивается почти у правого края пузыря — проверка');
+  await pub('A', 'Длинный текст, у которого последняя строка заканчивается почти у правого края пузыря — проверка');
+  await pub('D', 'Метка: звонки');
+  const call = (incoming, state, ms) => ({ txt: ' ', fmt: [{ at: 0, len: 1, key: 0 }], ent: [{ tp: 'VC', data: { state, incoming, ...(ms ? { duration: ms } : {}) } }] });
+  await pub('D', call(false, 'finished', 34000), { ...drafty, webrtc: 'finished', 'webrtc-duration': 34000 });
+  await pub('A', call(false, 'finished', 754000), { ...drafty, webrtc: 'finished', 'webrtc-duration': 754000 });
+  await pub('D', call(false, 'missed'), { ...drafty, webrtc: 'missed' });
+  const ed = await pub('A', 'Изменённое');
+  if (ed) await pub('A', 'Изменённое сообщение', { replace: ':' + ed });
+  const ed2 = await pub('D', 'Ок');
+  if (ed2) await pub('D', 'Ок!', { replace: ':' + ed2 });
   await pub('D', 'Метка: реакции');
   const liked = await pub('A', 'Сообщение с реакциями — нажмите и удерживайте');
   for (const e of ['👍', '❤️', '🔥']) await pub('D', e, { reply: String(liked ?? 0), 'linia2-react': e });

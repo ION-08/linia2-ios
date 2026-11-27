@@ -290,3 +290,90 @@ extension MessageViewController {
         present(Linia2ReceiptViewController(topic: topic, seq: seq, sent: sent), animated: true)
     }
 }
+
+// MARK: - Время не налезает на содержимое пузыря
+
+/// LINIA2 (владелец, сборка 1012: «0:3422:00» в пузыре звонка, «Привет21:47»): после того как ячейка разложена,
+/// проверяем реальное расстояние между концом последней строки содержимого и временем (с галочками и «изменено»).
+/// Меньше kMinGap — сначала пересчитываем раскладку (размер мог устареть: длительность звонка, правка текста),
+/// не помогло — время этого сообщения ставится на отдельную строку справа.
+enum Linia2TimeGap {
+    static let kMinGap: CGFloat = 6
+    /// topic#seq → число пересчётов; ≥ 2 — время под текстом.
+    fileprivate static var attempts: [String: Int] = [:]
+    fileprivate static var pendingInvalidate = false
+
+    static func key(_ topic: String?, _ seq: Int) -> String { "\(topic ?? "")#\(seq)" }
+    static func forcedBelow(topic: String?, seq: Int) -> Bool { (attempts[key(topic, seq)] ?? 0) >= 2 }
+}
+
+extension MessageViewController {
+    func linia2ScheduleTimeGapCheck(cell: MessageCell, message: Message) {
+        guard !message.isDeleted, !linia2IsServiceMessage(message), !linia2IsPureMedia(message), !linia2IsRound(message),
+              message.seqId > 0 else { return }
+        let seq = message.seqId
+        DispatchQueue.main.async { [weak self, weak cell] in
+            guard let self = self, let cell = cell, cell.seqId == seq, cell.window != nil else { return }
+            self.linia2CheckTimeGap(cell: cell, seq: seq)
+        }
+    }
+
+    private func linia2CheckTimeGap(cell: MessageCell, seq: Int) {
+        let tl = cell.timestampLabel
+        guard tl.frame != .zero, !tl.isHidden, let text = tl.text, !text.isEmpty else { return }
+        let tv = cell.content
+        tv.layoutIfNeeded()
+        let lm = tv.layoutManager
+        lm.ensureLayout(for: tv.textContainer)
+        let n = lm.numberOfGlyphs
+        guard n > 0 else { return }
+        let str = tv.textStorage.string as NSString
+        var g = n - 1
+        while g > 0 {
+            let ci = lm.characterIndexForGlyph(at: g)
+            guard ci < str.length, let sc = UnicodeScalar(str.character(at: ci)), CharacterSet.whitespacesAndNewlines.contains(sc) else { break }
+            g -= 1
+        }
+        let line = lm.lineFragmentUsedRect(forGlyphAt: g, effectiveRange: nil)
+        let glyph = lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tv.textContainer)
+        // Координаты контейнера пузыря (content, время и галочки — его подвиды).
+        let origin = tv.convert(CGPoint.zero, to: cell.containerView)
+        let endX = origin.x + tv.textContainerInset.left + min(line.maxX, glyph.maxX)
+        let lineTop = origin.y + tv.textContainerInset.top + line.minY
+        let lineBottom = origin.y + tv.textContainerInset.top + line.maxY
+
+        // Левый край блока «время / галочки / изменено».
+        let tw = min(tl.frame.width, ceil(tl.sizeThatFits(CGSize(width: 200, height: 30)).width))
+        var metaMinX = tl.textAlignment == .right ? tl.frame.maxX - tw : tl.frame.minX
+        var metaTop = tl.frame.minY, metaBottom = tl.frame.maxY
+        if !cell.linia2MetaPill.isHidden, cell.linia2MetaPill.frame != .zero {
+            metaMinX = min(metaMinX, cell.linia2MetaPill.frame.minX)
+            metaTop = min(metaTop, cell.linia2MetaPill.frame.minY); metaBottom = max(metaBottom, cell.linia2MetaPill.frame.maxY)
+        }
+        let em = cell.editedMarker
+        if em.frame != .zero, !em.isHidden, let et = em.text, !et.isEmpty {
+            let ew = min(em.frame.width, ceil(em.sizeThatFits(CGSize(width: 200, height: 30)).width))
+            metaMinX = min(metaMinX, em.textAlignment == .right ? em.frame.maxX - ew : em.frame.minX)
+        }
+        // Последняя строка и время на одной высоте?
+        guard lineBottom > metaTop + 2, lineTop < metaBottom - 2 else { return }
+        let gap = metaMinX - endX
+        guard gap < Linia2TimeGap.kMinGap else { return }
+
+        let k = Linia2TimeGap.key(topicName, seq)
+        let n0 = Linia2TimeGap.attempts[k] ?? 0
+        guard n0 < 2 else { return }
+        Linia2TimeGap.attempts[k] = n0 + 1
+        L2Log.event("l2_bubble_time_gap", ["gap": Int(gap.rounded()), "try": n0 + 1])
+        // Пересчёт раскладки — один на все ячейки, замеченные в этом проходе.
+        guard !Linia2TimeGap.pendingInvalidate else { return }
+        Linia2TimeGap.pendingInvalidate = true
+        DispatchQueue.main.async { [weak self] in
+            Linia2TimeGap.pendingInvalidate = false
+            guard let cv = self?.collectionView else { return }
+            cv.collectionViewLayout.invalidateLayout()
+            cv.layoutIfNeeded()
+            cv.reloadData()
+        }
+    }
+}

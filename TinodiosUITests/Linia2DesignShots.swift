@@ -102,7 +102,8 @@ final class Linia2DesignShots: Linia2CallTestBase {
         if app.keyboards.firstMatch.exists { app.collectionViews.firstMatch.swipeDown(velocity: .fast); sleep(1) }
 
         let marks: [(String, String)] = [("Метка: реакции", "reactions"), ("Метка: ответ", "reply"), ("Метка: кружок", "round"),
-                                         ("Метка: голосовое", "voice"), ("Метка: фото", "photo")]
+                                         ("Метка: голосовое", "voice"), ("Метка: фото", "photo"),
+                                         ("Метка: время", "time"), ("Метка: звонки", "time-calls")]
         for (mark, state) in marks {
             if scrollTo(labelContains(mark)) {
                 // Метка — над содержимым: сдвинуть, чтобы содержимое было в кадре.
