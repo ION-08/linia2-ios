@@ -392,6 +392,15 @@ class WebRTCClient: NSObject {
         w.start(audioOnly: audioOnly, caller: caller, video: video)
     }
 
+    /// LINIA2: страница движка не готова (фон, не загрузилась) — этот звонок на нативном движке. Только до setup().
+    func linia2DisableWebEngine(reason: String) {
+        guard let w = web else { return }
+        web = nil
+        webPC = false
+        w.close()
+        onDiagEvent?(["type": "engine", "name": "native-fallback", "reason": reason])
+    }
+
     func setup() {
         if web != nil { return }   // медиа берёт страница (getUserMedia)
         createMediaSenders()
@@ -1472,11 +1481,12 @@ class CallViewController: UIViewController {
 
     private func setupCaptureSessionAndStartCall() {
         // LINIA2 (вариант Б): звонковый движок WKWebView — по флагу удалённого конфига features.webCallEngine.
-        if Linia2WebCallEngine.enabled {
-            webRTCClient.linia2EnableWebEngine(audioOnly: isAudioOnlyCall, caller: callDirection == .outgoing,
-                                               video: !isAudioOnlyCall && !cameraDenied)
-            cameraManager.web = webRTCClient.web
+        // Выбор движка — ДО accept/offer (сигнализация ещё не началась, переключать нечего).
+        if Linia2WebCallEngine.enabled && !linia2EngineChosen {
+            linia2ChooseEngine { [weak self] in self?.setupCaptureSessionAndStartCall() }
+            return
         }
+        cameraManager.web = webRTCClient.web
         cameraManager.setupCamera()
         if !self.isAudioOnlyCall && !cameraDenied {
             cameraManager.startCapture()
@@ -2844,4 +2854,71 @@ final class L2GradientView: UIView {
         (layer as? CAGradientLayer)?.colors = colors.map { $0.cgColor }
     }
     required init?(coder: NSCoder) { return nil }
+}
+
+
+// MARK: - LINIA2 (вариант Б): выбор движка звонка
+//
+// WKWebView в фоне (звонок принят из CallKit на заблокированном экране, приложение не активно) страницу не
+// исполняет: звонок 27.11 16:09 (id 596) — ни одного события JS, ответ не создан. Поэтому:
+//  • приложение не активно — JS не запускаем, ждём didBecomeActive до kWebWaitActive с (пользователь открыл
+//    приложение из экрана CallKit); не дождались — этот звонок на нативном движке (engine=native-fallback);
+//  • страница запущена — ждём от неё «ready» до kWebWaitReady с; нет — тоже нативный движок.
+// Всё это до отправки accept (входящий) / до первого offer (исходящий) — менять посреди переговоров нечего.
+private var linia2EngineChosenKey: UInt8 = 0
+
+extension CallViewController {
+    static let kWebWaitActive: TimeInterval = 20
+    static let kWebWaitReady: TimeInterval = 6
+
+    var linia2EngineChosen: Bool {
+        get { (objc_getAssociatedObject(self, &linia2EngineChosenKey) as? Bool) ?? false }
+        set { objc_setAssociatedObject(self, &linia2EngineChosenKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    static func appStateName() -> String {
+        switch UIApplication.shared.applicationState {
+        case .active: return "active"
+        case .background: return "background"
+        default: return "inactive"
+        }
+    }
+
+    func linia2ChooseEngine(then proceed: @escaping () -> Void) {
+        var done = false
+        let finish: (Bool, String) -> Void = { [weak self] useWeb, reason in
+            guard let self = self, !done else { return }
+            done = true
+            self.linia2EngineChosen = true
+            if !useWeb { self.webRTCClient.linia2DisableWebEngine(reason: reason) }
+            guard !self.closed else { return }
+            proceed()
+        }
+        let startWeb: () -> Void = { [weak self] in
+            guard let self = self, !done, !self.closed else { return }
+            self.diag?.add(["type": "web-load-start", "app": Self.appStateName()])
+            self.webRTCClient.linia2EnableWebEngine(audioOnly: self.isAudioOnlyCall, caller: self.callDirection == .outgoing,
+                                                    video: !self.isAudioOnlyCall && !self.cameraDenied)
+            guard let w = self.webRTCClient.web else { finish(false, "no-engine"); return }
+            if w.isReady { finish(true, ""); return }
+            w.onReady = { finish(true, "") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebWaitReady) {
+                finish(false, "not-ready app=" + Self.appStateName())
+            }
+        }
+        if UIApplication.shared.applicationState == .active {
+            startWeb()
+            return
+        }
+        diag?.add(["type": "web-wait-active", "app": Self.appStateName()])
+        var obs: NSObjectProtocol?
+        obs = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            if let o = obs { NotificationCenter.default.removeObserver(o); obs = nil }
+            startWeb()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebWaitActive) {
+            if let o = obs { NotificationCenter.default.removeObserver(o); obs = nil }
+            if UIApplication.shared.applicationState != .active { finish(false, "background") }
+        }
+    }
 }

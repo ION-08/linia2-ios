@@ -33,6 +33,11 @@ final class Linia2WebCallEngine: NSObject {
     private(set) var webView: WKWebView!
     private weak var client: WebRTCClient?
     private var loaded = false
+    /// Страница прислала «ready» (скрипт исполняется).
+    var isReady: Bool { loaded }
+    /// Вызывается один раз при «ready» (выбор движка на экране звонка).
+    var onReady: (() -> Void)?
+    private let loadStarted = Date()
     private var pending: [String] = []
     private var closed = false
     /// Последняя статистика JS (для call-diag и «Плохая связь»).
@@ -74,6 +79,7 @@ final class Linia2WebCallEngine: NSObject {
             client.onDiagEvent?(["type": "error", "where": "web-bundle"])
             return
         }
+        client.onDiagEvent?(["type": "web-load", "app": Self.appState()])
         wv.loadHTMLString(html, baseURL: URL(string: "https://v2.chat-linia.site/linia2-call/"))
     }
 
@@ -148,6 +154,14 @@ final class Linia2WebCallEngine: NSObject {
         }
     }
 
+    static func appState() -> String {
+        switch UIApplication.shared.applicationState {
+        case .active: return "active"
+        case .background: return "background"
+        default: return "inactive"
+        }
+    }
+
     private static func jsString(_ s: String) -> String {
         guard let d = try? JSONSerialization.data(withJSONObject: [s]), let arr = String(data: d, encoding: .utf8) else { return "\"\"" }
         return String(arr.dropFirst().dropLast())
@@ -199,9 +213,14 @@ final class Linia2WebCallEngine: NSObject {
         switch t {
         case "ready":
             loaded = true
+            client.onDiagEvent?(["type": "web-ready", "engine": "web", "app": Self.appState(),
+                                 "ms_load": Int(Date().timeIntervalSince(loadStarted) * 1000), "pending": pending.count])
             let list = pending
             pending.removeAll()
             list.forEach { webView.evaluateJavaScript($0, completionHandler: nil) }
+            let r = onReady
+            onReady = nil
+            r?()
         case "offer":
             if let d = m["sdp"] as? [String: Any], let sdp = d["sdp"] as? String {
                 client.delegate?.sendOffer(withDescription: RTCSessionDescription(type: .offer, sdp: sdp))
@@ -242,7 +261,7 @@ final class Linia2WebCallEngine: NSObject {
         case "media":
             hasAudio = (m["audio"] as? Bool) ?? false
             hasVideo = (m["video"] as? Bool) ?? false
-            client.onDiagEvent?(["type": "web-media", "audio": hasAudio, "video": hasVideo])
+            client.onDiagEvent?(["type": "web-media", "audio": hasAudio, "video": hasVideo, "app": Self.appState()])
         case "cameraFailed":
             client.onDiagEvent?(["type": "error", "where": "web-camera"])
         case "stats":
@@ -250,6 +269,7 @@ final class Linia2WebCallEngine: NSObject {
         case "diag":
             if var ev = m["ev"] as? [String: Any] {
                 ev["engine"] = "web"
+                ev["app"] = Self.appState()
                 client.onDiagEvent?(ev)
             }
         default:
@@ -273,6 +293,19 @@ extension Linia2WebCallEngine: WKUIDelegate, WKNavigationDelegate {
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         // Только наша страница: никаких переходов и загрузок.
         decisionHandler(navigationAction.navigationType == .other ? .allow : .cancel)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        client?.onDiagEvent?(["type": "web-nav", "state": "finish", "app": Self.appState(),
+                              "ms_load": Int(Date().timeIntervalSince(loadStarted) * 1000)])
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        client?.onDiagEvent?(["type": "error", "where": "web-nav-fail", "msg": String(error.localizedDescription.prefix(80)), "app": Self.appState()])
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        client?.onDiagEvent?(["type": "error", "where": "web-nav-fail0", "msg": String(error.localizedDescription.prefix(80)), "app": Self.appState()])
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

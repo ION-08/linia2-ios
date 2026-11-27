@@ -38,6 +38,10 @@ audio{display:none}
     } catch (e) {}
   }
   function diag(ev) { post({ t: 'diag', ev: ev }); }
+  // LINIA2: все необработанные ошибки страницы — в диагностику звонка.
+  window.addEventListener('error', function (e) { diag({ type: 'error', where: 'js', msg: String((e && e.message) || e).slice(0, 120), line: (e && e.lineno) || 0 }); });
+  window.addEventListener('unhandledrejection', function (e) { var r = e && e.reason; diag({ type: 'error', where: 'js-promise', msg: String(r && (r.name || r.message) || r).slice(0, 120) }); });
+  diag({ type: 'web-script', vis: document.visibilityState });
   function err(where, e) { post({ t: 'diag', ev: { type: 'error', where: where, msg: String(e && (e.name || e.message) || e) } }); }
   // Все операции — строго по очереди (как поток signaling у нативного WebRTC): offer/answer/кандидаты не обгоняют друг друга.
   function q(name, fn) {
@@ -62,8 +66,16 @@ audio{display:none}
   function audioConstraints() { return { echoCancellation: true, noiseSuppression: true, autoGainControl: true }; }
   function videoConstraints() { return { facingMode: S.facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } }; }
   function gum(c) {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error('nomedia'));
-    return navigator.mediaDevices.getUserMedia(c);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { diag({ type: 'gum', state: 'err', name: 'nomedia' }); return Promise.reject(new Error('nomedia')); }
+    var t0 = Date.now();
+    diag({ type: 'gum', state: 'start', audio: !!c.audio, video: !!c.video, vis: document.visibilityState });
+    return navigator.mediaDevices.getUserMedia(c).then(function (st) {
+      diag({ type: 'gum', state: 'ok', a: st.getAudioTracks().length, v: st.getVideoTracks().length, ms: Date.now() - t0 });
+      return st;
+    }, function (e) {
+      diag({ type: 'gum', state: 'err', name: String(e && (e.name || e.message) || e).slice(0, 60), ms: Date.now() - t0, vis: document.visibilityState });
+      throw e;
+    });
   }
   function liveTrack(kind) {
     var st = S.stream; if (!st) return null;
@@ -185,11 +197,13 @@ audio{display:none}
   }
   function applyOffer(desc) {
     var pc = S.pc;
+    diag({ type: 'web-offer-received', signaling: pc.signalingState });
     return pc.setRemoteDescription(desc)
       .then(drainCache)
       .then(function () { return pc.createAnswer(); })
-      .then(function (a) { return pc.setLocalDescription(a); })
+      .then(function (a) { diag({ type: 'web-answer-created' }); return pc.setLocalDescription(a); })
       .then(function () {
+        diag({ type: 'web-answer-sent' });
         post({ t: 'answer', sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } });
         post({ t: 'setupComplete', remoteOffer: true });
       })
@@ -213,7 +227,7 @@ audio{display:none}
     },
     remoteOffer: function (desc) {
       return q('remoteOffer', function () {
-        var pc = S.pc; if (!pc) return;
+        var pc = S.pc; if (!pc) { diag({ type: 'error', where: 'web-offer-no-pc' }); return; }
         if (pc.signalingState === 'have-local-offer') {
           // Встречные offer (оба переподключаются): звонящий («невежливый») игнорирует, принимающий откатывает свой.
           if (S.cfg.caller) { diag({ type: 'glare', action: 'ignore' }); return; }
