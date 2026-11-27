@@ -106,26 +106,26 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
         updateBarVisibility(animated: false)
     }
 
-    /// Меню видно всегда (на всех экранах, в том числе в чате); прячется только под модальными окнами (звонок и т.п.).
+    /// Меню — только на главных экранах вкладок (как в Telegram, решение владельца 27.11): в чате и на вложенных
+    /// экранах его нет (там «Назад»); под модальными окнами (звонок и т.п.) тоже скрыто.
     func updateBarVisibility(animated: Bool) {
-        let visible = presentedViewController == nil
-        SendMessageBar.linia2TabBarReserve = 72 + 6 + 8   // высота меню + отступ от низа + зазор (плюс safe area — в панели ввода)
+        let nav = selectedViewController as? UINavigationController
+        let onRoot = (nav?.viewControllers.count ?? 1) <= 1
+        let visible = presentedViewController == nil && onRoot
+        SendMessageBar.linia2TabBarReserve = 0   // в чате меню нет — панель ввода у нижнего края (плюс safe area)
         let apply = {
             self.bar.alpha = visible ? 1 : 0
             self.bar.transform = visible ? .identity : CGAffineTransform(translationX: 0, y: 30)
         }
         bar.isUserInteractionEnabled = visible
-        let nav = selectedViewController as? UINavigationController
         statusScrim.isHidden = (nav?.viewControllers.count ?? 1) > 1
         if animated { UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .beginFromCurrentState], animations: apply) } else { apply() }
     }
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
         let isRoot = navigationController.viewControllers.first === viewController
-        // Вложенные экраны оставляют место под меню (корневые резервируют его сами). В чате место держит панель ввода.
-        if !isRoot && !(viewController is MessageViewController) && viewController.additionalSafeAreaInsets.bottom < 1 {
-            viewController.additionalSafeAreaInsets.bottom = 72 + 6 + 4
-        }
+        // На вложенных экранах меню нет — места под него не резервируем.
+        _ = isRoot
         updateBarVisibility(animated: animated)
     }
 

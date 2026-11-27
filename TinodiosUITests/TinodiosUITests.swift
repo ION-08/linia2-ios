@@ -395,13 +395,15 @@ final class TinodiosUITests: XCTestCase {
         ensureSomeUser()
         tab("l2.tab.settings").tap(); sleep(1)
         wait(app.staticTexts["О приложении"].firstMatch, "«О приложении»").tap(); sleep(2)
-        XCTAssertTrue(tabBarVisible, "нет нижнего меню на экране «О приложении»")
-        screenshot("about-with-tabbar")
+        // Требование владельца 27.11: нижнее меню только на главных экранах вкладок.
+        XCTAssertFalse(tabBarVisible, "нижнее меню видно на вложенном экране «О приложении»")
+        screenshot("about-no-tabbar")
         back()
         tab("l2.tab.contacts").tap(); sleep(1)
         wait(app.buttons["Добавить контакт"].firstMatch, "«Добавить контакт»").tap(); sleep(2)
-        XCTAssertTrue(tabBarVisible, "нет нижнего меню на экране «Добавить контакт»")
+        XCTAssertFalse(tabBarVisible, "нижнее меню видно на вложенном экране «Добавить контакт»")
         back()
+        XCTAssertTrue(tabBarVisible, "на главном экране «Контакты» нет нижнего меню")
     }
 
     // MARK: - 3. Настройки
@@ -536,11 +538,12 @@ final class TinodiosUITests: XCTestCase {
     }
 
     func test19_TabBarVisibleInChat() {
+        // Требование владельца 27.11 (баг сборки 1006): в открытом чате нижнего меню нет, только «Назад».
         openPeerChat()
-        XCTAssertTrue(tabBarVisible, "в чате не видно нижнего меню")
-        let input = chatInput(), bar = tab("l2.tab.chats")
-        XCTAssertLessThanOrEqual(input.frame.maxY, bar.frame.minY + 2, "поле ввода заходит на нижнее меню")
-        screenshot("chat-tabbar")
+        XCTAssertFalse(tabBarVisible, "в чате видно нижнее меню «Чаты / Звонки / Контакты / Настройки»")
+        let input = chatInput()
+        XCTAssertGreaterThan(input.frame.maxY, app.frame.height - 140, "панель ввода не у нижнего края (оставлено место под меню)")
+        screenshot("chat-no-tabbar")
     }
 
     func test20_SendMessageAppears() {
@@ -557,9 +560,12 @@ final class TinodiosUITests: XCTestCase {
     }
 
     func test22_BackViaTabBar() {
+        // Меню в чате больше нет (27.11): выход из чата — «Назад», после этого меню снова видно.
         openPeerChat()
-        tab("l2.tab.chats").tap(); sleep(2)
-        assertOnChatList("меню «Чаты»")
+        XCTAssertFalse(tabBarVisible, "в чате видно нижнее меню")
+        back(); sleep(2)
+        assertOnChatList("«Назад» из чата")
+        XCTAssertTrue(tabBarVisible, "в списке чатов нет нижнего меню")
     }
 
     func test23_SwipeBack() {
