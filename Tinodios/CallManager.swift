@@ -18,6 +18,8 @@ import CallKit
 import WebRTC
 
 class CallManager {
+    /// LINIA2: звонок, для которого после переподключения нужно повторить accept (см. watchForOffer).
+    fileprivate var acceptResendFor: UUID?
     private static let kCallTimeout = 30
 
     public struct Call {
@@ -758,7 +760,6 @@ extension CallManager: CallManagerImpl {
     /// LINIA2 («ответил, а у звонящего „Вызов…“»): accept отправлен, а offer собеседника не пришёл — accept,
     /// вероятно, ушёл в «мёртвый» сокет (приложение разбужено push-ем). Переподключить сокет; после входа и
     /// подписки — повторить accept (один раз на переподключение, пока не придёт offer).
-    private var acceptResendFor: UUID?
     private func watchForOffer(_ uuid: UUID, attempt: Int) {
         guard attempt < 3 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {

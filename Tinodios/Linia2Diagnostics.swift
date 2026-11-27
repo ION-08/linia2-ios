@@ -379,7 +379,8 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
             let lid = (events.last?["lid"] as? String) ?? "prev"
             var summary: [String: Any] = ["type": "launch", "step": "prev-summary", "n": events.count,
                                           "last": (events.last?["step"] as? String) ?? "", "last_ms": (events.last?["ms"] as? Int) ?? 0]
-            summary["clean_exit"] = events.contains { ($0["step"] as? String) == "terminate" || ($0["step"] as? String) == "background" } ? 1 : 0
+            let clean = events.contains(where: { ($0["step"] as? String) == "terminate" || ($0["step"] as? String) == "background" })
+            summary["clean_exit"] = clean ? 1 : 0
             self.upload(sid: "launch-" + lid, topic: "launch", events: events + [summary]) { ok in
                 if ok { self.queue.async { try? FileManager.default.removeItem(at: prev) } }
             }
