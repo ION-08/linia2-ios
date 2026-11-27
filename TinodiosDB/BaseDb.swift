@@ -196,6 +196,9 @@ public class BaseDb {
             self.account = nil
             return
         }
+        // LINIA2: вход тем же пользователем (каждое переподключение) — без записи в базу на потоке сети
+        // (на большой базе запись ждала занятую базу и вход не укладывался в таймаут).
+        if credMethods == nil, let a = self.account, a.uid == uid { return }
         do {
             if self.account != nil {
                 try self.accountDb?.deactivateAll()
@@ -203,7 +206,8 @@ public class BaseDb {
             self.account = self.accountDb?.addOrActivateAccount(for: uid, withCredMethods: credMethods)
         } catch {
             BaseDb.log.error("BaseDb - setUid failed %@", error.localizedDescription)
-            self.account = nil
+            // База занята (BUSY) — не «забывать» текущий вход тем же пользователем.
+            if self.account?.uid != uid { self.account = nil }
         }
     }
     public func logout() {
@@ -353,13 +357,16 @@ extension BaseDb {
         ]
         var total = 0
         for job in jobs {
-            let select = "SELECT id, \(job.column) FROM \(job.table) WHERE \(job.column) IS NOT NULL AND " +
-                "substr(\(job.column),1,5) NOT IN ('l2c1:','l2p1:','l2m1:','l2m1w') LIMIT \(max(1, batch))"
+            // LINIA2 (большой аккаунт, «тормозит после входа»): постранично по id (раньше каждая часть заново
+            // просматривала таблицу с начала — квадратичное время на сотнях тысяч сообщений, база занята).
+            let select = "SELECT id, \(job.column) FROM \(job.table) WHERE id > ? AND \(job.column) IS NOT NULL AND " +
+                "substr(\(job.column),1,5) NOT IN ('l2c1:','l2p1:','l2m1:','l2m1w') ORDER BY id LIMIT \(max(1, batch))"
             let update = "UPDATE \(job.table) SET \(job.column) = ? WHERE id = ? AND \(job.column) = ?"
+            var lastId: Int64 = -1
             while true {
                 var batch: [(Int64, String)] = []
                 do {
-                    for row in try db.prepare(select) {
+                    for row in try db.prepare(select, lastId) {
                         if let id = row[0] as? Int64, let v = row[1] as? String { batch.append((id, v)) }
                     }
                 } catch {
@@ -367,11 +374,14 @@ extension BaseDb {
                     return false
                 }
                 if batch.isEmpty { break }
+                lastId = batch.last!.0
                 var changed = 0
+                var sealFailed = false
                 do {
                     try db.transaction {
                         for (id, v) in batch {
-                            guard let enc = job.content ? L2Vault.sealContent(v) : L2Vault.sealMeta(v), enc != v else { continue }
+                            guard let enc = job.content ? L2Vault.sealContent(v) : L2Vault.sealMeta(v) else { sealFailed = true; continue }
+                            guard enc != v else { continue }
                             try db.run(update, enc, id, v)
                             changed += db.changes
                         }
@@ -380,8 +390,8 @@ extension BaseDb {
                     BaseDb.log.error("BaseDb - migration update failed: %@", error.localizedDescription)
                     return false
                 }
-                // Ничего не зашифровалось (ключ стал недоступен) — не крутиться, повторим при следующем запуске.
-                if changed == 0 { return false }
+                // Ключ стал недоступен — не крутиться, повторим при следующем запуске.
+                if changed == 0 && sealFailed { return false }
                 total += changed
                 if pause > 0 { Thread.sleep(forTimeInterval: pause) }
             }
@@ -429,6 +439,14 @@ extension BaseDb {
 
     /// Сжать файл (после стирания/миграции): VACUUM переписывает базу без свободных страниц.
     public func vacuum() {
+        // LINIA2: большая база — VACUUM не успевает за фоновое время (~30 с), iOS прерывает его с открытой
+        // блокировкой файла (0xdead10cc / база занята после возврата). secure_delete уже затирает старые
+        // значения, поэтому крупные базы не сжимаем.
+        let size = ((try? FileManager.default.attributesOfItem(atPath: pathToDatabase))?[.size] as? NSNumber)?.int64Value ?? 0
+        if size > 64 * 1024 * 1024 {
+            BaseDb.log.info("BaseDb - VACUUM skipped: database is %lld bytes", size)
+            return
+        }
         try? self.db?.execute("VACUUM")
     }
 

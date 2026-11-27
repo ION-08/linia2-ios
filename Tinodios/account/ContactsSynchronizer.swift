@@ -144,10 +144,20 @@ class ContactsSynchronizer {
             var lastSyncMarker = self.serverSyncMarker
             let tinode = Cache.tinode
             do {
-                tinode.setAutoLoginWithToken(token: token)
-                _ = try tinode.connectDefault(inBackground: true)?.getResult()
-
-                _ = try tinode.loginToken(token: token, creds: nil).getResult()
+                // LINIA2 (большой аккаунт: «подключилось с 3-й попытки»): раньше здесь шло СВОЁ подключение и вход —
+                // параллельно с обычным (connectInBackground), второй вход с тем же токеном сбрасывал первый.
+                // Теперь ждём обычного входа (до 60 с); не вошли — синхронизация в следующий раз.
+                var waited = 0
+                while !tinode.isConnectionAuthenticated && waited < 120 {
+                    Thread.sleep(forTimeInterval: 0.5)
+                    waited += 1
+                }
+                guard tinode.isConnectionAuthenticated else {
+                    Cache.log.info("ContactsSynchronizer - not logged in, skipping sync")
+                    return
+                }
+                // Сразу после входа идёт загрузка списка чатов — не мешать ей.
+                Thread.sleep(forTimeInterval: 5)
                 // Generic params don't matter.
                 _ = try tinode.subscribe(to: Tinode.kTopicFnd, set: MsgSetMeta<Int, Int>?(nil), get: nil).getResult()
                 let metaDesc: MetaSetDesc<Int, String> = MetaSetDesc(pub: nil, priv: contacts)

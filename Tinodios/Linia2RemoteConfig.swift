@@ -627,6 +627,14 @@ final class Linia2Failover: TinodeEventListener {
     }
 
     private func tick() {
+        // LINIA2 (большой аккаунт: «подключилось с 3-й попытки»): флаг connected ставится через main.async из
+        // onConnect и при занятом главном потоке / очереди разбора отстаёт — раньше по нему рвался рабочий сокет.
+        // Состояние сокета — напрямую.
+        if !connected && Cache.tinode.isConnected {
+            connected = true
+            if connectedAt == nil { connectedAt = Date() }
+            attemptStarted = nil
+        }
         updateBanner()
         // Соединение есть, а входа нет — войти заново (не чаще раза в 20 с, пока приложение на экране).
         if connectedButNotLoggedIn, UIApplication.shared.applicationState == .active,
@@ -658,6 +666,8 @@ final class Linia2Failover: TinodeEventListener {
     }
 
     private func switchToNext(_ why: String) {
+        // Сокет открыт (вход может ещё идти — на большом аккаунте долго) — не рвать.
+        if Cache.tinode.isConnected { attemptStarted = Date(); return }
         let hosts = SharedUtils.linia2Hosts
         guard hosts.count > 1 else { attemptStarted = Date(); return }
         let i = hosts.firstIndex(of: SharedUtils.linia2ActiveHost) ?? 0

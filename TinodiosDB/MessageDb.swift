@@ -620,6 +620,41 @@ public class MessageDb {
     }
 
     func queryLatest() -> [StoredMessage]? {
+        guard let topicDb = baseDb.topicDb else { return nil }
+        // LINIA2 (большой аккаунт: запуск на главном потоке): по одному последнему сообщению на топик через
+        // частичный индекс (topic_id, effective_seq DESC) — O(топиков · log N). Прежний запрос (самосоединение
+        // всей таблицы сообщений) — запасной путь при ошибке.
+        do {
+            var ids: [Int64] = []
+            let sql = "SELECT (SELECT m.id FROM \(MessageDb.kTableName) m WHERE m.topic_id = t.id AND m.effective_seq IS NOT NULL" +
+                " ORDER BY m.effective_seq DESC LIMIT 1) FROM \(TopicDb.kTableName) t"
+            for row in try db.prepare(sql) {
+                if let id = row[0] as? Int64 { ids.append(id) }
+            }
+            let topics = topicDb.table
+            var messages = [StoredMessage]()
+            // Порциями — ограничение SQLite на число параметров.
+            var start = 0
+            while start < ids.count {
+                let chunk = Array(ids[start..<min(start + 400, ids.count)])
+                start += 400
+                let q = self.table.select(self.table[*], topics[topicDb.topic])
+                    .join(.leftOuter, topics, on: self.table[self.topicId] == topics[topicDb.id])
+                    .filter(chunk.contains(self.table[self.id]) && self.table[self.delId] == nil)
+                for row in try db.prepare(q) {
+                    let sm = self.readOne(r: row)
+                    sm.topic = row[topicDb.topic]
+                    messages.append(sm)
+                }
+            }
+            return messages
+        } catch {
+            BaseDb.log.error("MessageDb - queryLatest (fast) failed: %@ — using full query", error.localizedDescription)
+        }
+        return queryLatestFull()
+    }
+
+    private func queryLatestFull() -> [StoredMessage]? {
         let messages2 = self.table.alias("m2")
         guard let topicDb = baseDb.topicDb else { return nil }
         let topics = topicDb.table
