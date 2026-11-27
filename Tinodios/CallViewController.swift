@@ -223,6 +223,57 @@ class WebRTCClient: NSObject {
     /// setLocalDescription → drainIceCandidatesCache) ждал ту же очередь: взаимная блокировка, главный поток
     /// зависал навсегда («Соединение…», входящий звонок 27.11 seq 30: после «start» — ни одного события).
     private var remoteDescriptionApplied = false
+    /// LINIA2 (диагностика реальной сети): счётчики кандидатов «тип/протокол», напр. "relay/udp".
+    private let diagLock = NSLock()
+    private var diagLocalCands: [String: Int] = [:]
+    private var diagRemoteCands: [String: Int] = [:]
+
+    /// "candidate:… 1 udp 2122… 10.0.0.1 5000 typ host …" → "host/udp".
+    static func candKind(_ sdp: String) -> String {
+        let t = sdp.split(separator: " ").map(String.init)
+        let proto = t.count > 2 ? t[2].lowercased() : "?"
+        let type = t.firstIndex(of: "typ").flatMap { $0 + 1 < t.count ? t[$0 + 1] : nil } ?? "?"
+        return type + "/" + proto
+    }
+
+    /// Первые 4 символа a=ice-ufrag (пароль не берём никогда).
+    static func ufrag4(_ sdp: String) -> String {
+        for line in sdp.components(separatedBy: "\n") where line.hasPrefix("a=ice-ufrag:") {
+            return String(line.dropFirst("a=ice-ufrag:".count).trimmingCharacters(in: .whitespacesAndNewlines).prefix(4))
+        }
+        return "-"
+    }
+
+    func diagCountRemote(_ c: RTCIceCandidate) {
+        let k = Self.candKind(c.sdp)
+        diagLock.lock(); diagRemoteCands[k, default: 0] += 1; diagLock.unlock()
+    }
+
+    /// Итог для диагностики: кандидаты и выбранная пара (при connected / failed).
+    func diagReportPair(_ reason: String) {
+        diagLock.lock(); let lc = diagLocalCands; let rc = diagRemoteCands; diagLock.unlock()
+        guard let pc = localPeer else { return }
+        pc.statistics { [weak self] report in
+            var cands: [String: [String: NSObject]] = [:]
+            var pairs: [[String: NSObject]] = []
+            for (id, st) in report.statistics {
+                if st.type == "local-candidate" || st.type == "remote-candidate" { cands[id] = st.values }
+                if st.type == "candidate-pair" { pairs.append(st.values) }
+            }
+            var states: [String: Int] = [:]
+            for p in pairs { states[(p["state"] as? String) ?? "?", default: 0] += 1 }
+            var ev: [String: Any] = ["type": "pair", "reason": reason, "lc": lc, "rc": rc, "pairs": states]
+            let sel = pairs.first { ($0["nominated"] as? NSNumber)?.boolValue == true && ($0["state"] as? String) == "succeeded" }
+                ?? pairs.first { ($0["state"] as? String) == "succeeded" }
+            if let p = sel {
+                let l = cands[(p["localCandidateId"] as? String) ?? ""] ?? [:]
+                let r = cands[(p["remoteCandidateId"] as? String) ?? ""] ?? [:]
+                ev["sel"] = "\((l["candidateType"] as? String) ?? "?")/\((l["protocol"] as? String) ?? "?") -> \((r["candidateType"] as? String) ?? "?")/\((r["protocol"] as? String) ?? "?")"
+                if let rtt = (p["currentRoundTripTime"] as? NSNumber)?.doubleValue { ev["rtt"] = Int(rtt * 1000) }
+            }
+            self?.onDiagEvent?(ev)
+        }
+    }
 
     weak var delegate: WebRTCClientDelegate?
 
@@ -330,6 +381,7 @@ class WebRTCClient: NSObject {
             remoteDescriptionApplied = false
             remoteIceCandidatesCache.removeAll()
         }
+        diagLock.lock(); diagLocalCands = [:]; diagRemoteCands = [:]; diagLock.unlock()
         // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
         guard let audioTrack = self.localAudioTrack, let videoTrack = self.localVideoTrack else {
             Cache.log.error("WebRTCClient - no local tracks (call already closed?)")
@@ -776,6 +828,10 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         onDiagEvent?(["type": "ice", "state": Self.iceName(newState)])
         if newState == .connected || newState == .completed { linia2Established = true }
+        if newState == .connected || newState == .failed {
+            let r = newState == .connected ? "connected" : "failed"
+            DispatchQueue.main.async { [weak self] in self?.diagReportPair(r) }
+        }
         // LINIA2: состояние — экрану звонка (переподключение при обрыве, ICE restart).
         DispatchQueue.main.async { [weak self] in
             guard let self = self, self.localPeer === peerConnection else { return }
@@ -824,6 +880,8 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         Cache.log.info("WebRTCClient: new local ice candidate %@", candidate)
+        let k = Self.candKind(candidate.sdp)
+        diagLock.lock(); diagLocalCands[k, default: 0] += 1; diagLock.unlock()
         self.delegate?.sendIceCandidate(candidate)
     }
 
@@ -1682,12 +1740,12 @@ extension CallViewController: CameraCaptureDelegate {
 
 extension CallViewController: WebRTCClientDelegate {
     func sendOffer(withDescription sdp: RTCSessionDescription) {
-        diag?.add(["type": "offer-sent", "seq": self.callSeqId])
+        diag?.add(["type": "offer-sent", "seq": self.callSeqId, "ufrag": WebRTCClient.ufrag4(sdp.sdp)])
         self.topic?.videoCall(event: "offer", seq: self.callSeqId, payload: sdp.serialize())
     }
 
     func sendAnswer(withDescription sdp: RTCSessionDescription) {
-        diag?.add(["type": "answer-sent", "seq": self.callSeqId])
+        diag?.add(["type": "answer-sent", "seq": self.callSeqId, "ufrag": WebRTCClient.ufrag4(sdp.sdp)])
         self.topic?.videoCall(event: "answer", seq: self.callSeqId, payload: sdp.serialize())
     }
 
@@ -1826,7 +1884,7 @@ extension CallViewController: TinodeVideoCallDelegate {
             return
         }
         guard !closed else { return }
-        diag?.add(["type": "offer"])
+        diag?.add(["type": "offer", "ufrag": WebRTCClient.ufrag4(desc.sdp)])
         // Data channel should be created by the peer. Not creating one.
         // LINIA2: обычно соединение уже создано при «Принять» (handleCallInvite) — тогда ответ мгновенный.
         guard self.webRTCClient.createPeerConnection(withDataChannel: false) else {
@@ -1844,7 +1902,7 @@ extension CallViewController: TinodeVideoCallDelegate {
             self.handleCallClose()
             return
         }
-        diag?.add(["type": "answer"])
+        diag?.add(["type": "answer", "ufrag": WebRTCClient.ufrag4(desc.sdp)])
         self.webRTCClient.handleRemoteAnswerDescription(desc)
     }
 
@@ -1855,6 +1913,7 @@ extension CallViewController: TinodeVideoCallDelegate {
             self.handleCallClose()
             return
         }
+        self.webRTCClient.diagCountRemote(candidate)
         self.webRTCClient.handleRemoteIceCandidate(candidate, saveInCache: !self.callInitialSetupComplete)
     }
 
