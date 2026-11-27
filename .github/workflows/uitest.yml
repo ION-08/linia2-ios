@@ -202,20 +202,17 @@ jobs:
         run: |
           set -o pipefail
           # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
-          # Служба симуляторов после XCUITest бывает «мёртвой» (Mach -308 server died, No matching device) —
-          # перезапускаем её и заново включаем нужный iPhone.
-          xcrun simctl shutdown all 2>/dev/null || true
-          killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-          sleep 5
+          # Свой .xctestrun в отдельной папке сборки (не тот, что оставил `xcodebuild test` основного шага —
+          # с ним были «No matching device … in XCTestDevices» и «server died»). Собирается один раз на оба шага.
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
-          XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+          DD="$RUNNER_TEMP/dd-steps"
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
           if [ -z "$XR" ]; then
-            # `xcodebuild test` не оставляет .xctestrun — дособираем для test-without-building (продукты уже собраны, быстро).
             xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
-              -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
+              -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
               CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
               > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -30 "$RUNNER_TEMP/bft-$$.log"
-            XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
           PUSHDIR="$HOME/Library/Caches/l2push"; rm -rf "$PUSHDIR"; mkdir -p "$PUSHDIR" "$RUNNER_TEMP/out/launch"
@@ -258,20 +255,17 @@ jobs:
           set -o pipefail
           OUT="$RUNNER_TEMP/out/calls"; mkdir -p "$OUT/web"
           # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
-          # Служба симуляторов после XCUITest бывает «мёртвой» (Mach -308 server died, No matching device) —
-          # перезапускаем её и заново включаем нужный iPhone.
-          xcrun simctl shutdown all 2>/dev/null || true
-          killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-          sleep 5
+          # Свой .xctestrun в отдельной папке сборки (не тот, что оставил `xcodebuild test` основного шага —
+          # с ним были «No matching device … in XCTestDevices» и «server died»). Собирается один раз на оба шага.
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
-          XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+          DD="$RUNNER_TEMP/dd-steps"
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
           if [ -z "$XR" ]; then
-            # `xcodebuild test` не оставляет .xctestrun — дособираем для test-without-building (продукты уже собраны, быстро).
             xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
-              -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
+              -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
               CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
               > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -30 "$RUNNER_TEMP/bft-$$.log"
-            XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
           # Разрешения на микрофон и камеру — без системных окон.
