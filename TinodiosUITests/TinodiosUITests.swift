@@ -670,9 +670,12 @@ final class TinodiosUITests: XCTestCase {
         XCTAssertTrue(nav.buttons.element(boundBy: 0).isHittable, "в шапке нет «Назад»")
         XCTAssertTrue(labelContains(peerName).exists, "в шапке нет имени собеседника")
         XCTAssertTrue(app.buttons["l2.chat.call"].firstMatch.exists || nav.buttons["Позвонить"].exists, "в шапке нет кнопки звонка")
-        XCTAssertTrue(tabBarVisible, "в чате нет нижнего меню")
+        // Требование владельца 27.11: нижнее меню — только на главных экранах; в чате его нет.
+        XCTAssertFalse(tabBarVisible, "в чате видно нижнее меню (должно быть только на главных экранах)")
         XCTAssertTrue(labelContains("История").exists, "экран чата пустой — нет сообщений из истории")
         screenshot("chat-header")
+        backToMain()
+        XCTAssertTrue(tabBarVisible, "на главном экране нет нижнего меню")
     }
 
     func test31_MessageMenuRussianAndOrder() {
@@ -818,7 +821,18 @@ final class TinodiosUITests: XCTestCase {
         openPeerChat()
     }
 
+    /// Из чата — назад на главный экран (нижнее меню теперь только там, требование владельца 27.11).
+    private func backToMain() {
+        let b = any("l2.chat.back")
+        if b.exists && b.isHittable { b.tap() } else { back() }
+        _ = tab("l2.tab.chats").waitForExistence(timeout: 5)
+        sleep(1)
+    }
+
+    /// В чате меню нет; вкладки по умолчанию проверяются на главном экране (после «Назад»).
     private func assertDefaultTabs() {
+        XCTAssertFalse(tabBarVisible, "в чате видно нижнее меню")
+        backToMain()
         for id in ["chats", "calls", "contacts", "settings"] {
             XCTAssertTrue(tab("l2.tab." + id).exists, "нет вкладки \(id)")
         }
@@ -826,20 +840,21 @@ final class TinodiosUITests: XCTestCase {
 
     func test36_EmptyConfig() {
         openPeerChat(config: "{}")
-        assertDefaultTabs()
         XCTAssertTrue(labelContains("История").exists, "с пустым конфигом не видна история")
         longPressMessage("История 1")
         XCTAssertTrue(any("l2.react.👍").exists, "с пустым конфигом нет встроенных реакций")
         XCTAssertTrue(any("l2.menu.reply").exists, "с пустым конфигом нет «Ответить»")
         closeMenu()
+        assertDefaultTabs()
     }
 
     func test37_BrokenConfig() {
         openPeerChat(config: "{ \"schema\": 1, \"tabs\": [ это не JSON")
-        assertDefaultTabs()
         XCTAssertTrue(app.buttons["l2.chat.attach"].firstMatch.exists, "с битым конфигом пропали вложения")
         sendMessage("Битый конфиг " + String(Int(Date().timeIntervalSince1970) % 100000))
         XCTAssertEqual(app.state, .runningForeground, "вылет с битым конфигом")
+        if app.keyboards.firstMatch.exists { app.swipeDown(); sleep(1) }
+        assertDefaultTabs()
     }
 
     func test38_OldConfig() {
@@ -849,11 +864,11 @@ final class TinodiosUITests: XCTestCase {
          "features":{"reactions":true,"videoCalls":true},"reactions":{"emoji":["❤️","👍"]},"banner":{"enabled":false}}
         """
         openPeerChat(config: old)
-        assertDefaultTabs()
         longPressMessage("История 1")
         XCTAssertTrue(any("l2.react.❤️").exists && any("l2.react.👍").exists, "старый набор реакций не применился")
         XCTAssertFalse(any("l2.react.🤝").exists, "старый конфиг: показан встроенный ряд вместо заданного")
         closeMenu()
+        assertDefaultTabs()
     }
 
     func test39_CustomConfigAppliedLive() {
@@ -864,8 +879,6 @@ final class TinodiosUITests: XCTestCase {
          "menus":{"message":["copy","reply","report"]}}
         """
         openPeerChat(config: cfg)
-        XCTAssertFalse(tab("l2.tab.calls").exists, "скрытая вкладка «Звонки» видна")
-        XCTAssertEqual(tab("l2.tab.chats").label, "Беседы", "название вкладки не из конфига")
         let attach = app.buttons["l2.chat.attach"].firstMatch
         XCTAssertFalse(attach.exists && attach.isHittable, "вложения не выключились")
         longPressMessage("История 1")
@@ -877,6 +890,11 @@ final class TinodiosUITests: XCTestCase {
         XCTAssertLessThan(copy.frame.minY, reply.frame.minY, "порядок меню не из конфига")
         screenshot("custom-config")
         closeMenu()
+        // Вкладки — на главном экране (в чате нижнего меню нет).
+        XCTAssertFalse(tabBarVisible, "в чате видно нижнее меню")
+        backToMain()
+        XCTAssertFalse(tab("l2.tab.calls").exists, "скрытая вкладка «Звонки» видна")
+        XCTAssertEqual(tab("l2.tab.chats").label, "Беседы", "название вкладки не из конфига")
     }
 
     func test40_FutureSchemaIgnored() {
