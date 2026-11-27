@@ -41,6 +41,25 @@ class NotificationService: UNNotificationServiceExtension {
 
         if let bestAttemptContent = bestAttemptContent {
             let payload = bestAttemptContent.userInfo
+            // LINIA2: звонок закончился (пропущен / отклонён / завершён) — сказать приложению, чтобы оно сняло
+            // звонящий CallKit-звонок (VoIP push «hang-up» сервер больше не шлёт).
+            if let st = payload["webrtc"] as? String, ["missed", "declined", "finished", "disconnected", "busy"].contains(st),
+               let topic = payload["topic"] as? String, !topic.isEmpty {
+                let seqOf: (String) -> Int = { k in
+                    if let v = payload[k] as? Int { return v }
+                    let s = (payload[k] as? String ?? "").trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                    return Int(s) ?? 0
+                }
+                let replace = seqOf("replace")
+                let seq = replace > 0 ? replace : seqOf("seq")
+                if let d = UserDefaults(suiteName: BaseDb.kAppGroupId) {
+                    var items = (d.array(forKey: "linia2.calls.endedByPush") as? [[String: Any]]) ?? []
+                    items.append(["topic": topic, "seq": seq, "state": st, "t": Date().timeIntervalSince1970])
+                    d.set(Array(items.suffix(20)), forKey: "linia2.calls.endedByPush")
+                }
+                CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                                     CFNotificationName("info.codix.liniya2.call-ended" as CFString), nil, nil, true)
+            }
             // LINIA2: обработчик вызывается на любом пути (раньше «return» без него — уведомление ждало 30 с).
             guard let topicName = payload["topic"] as? String, !topicName.isEmpty, let from = payload["xfrom"] as? String, !from.isEmpty else {
                 contentHandler(bestAttemptContent)

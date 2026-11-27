@@ -106,6 +106,7 @@ class CallManager {
             self?.connectTimer?.invalidate()
             self?.connectTimer = nil
         }
+        Linia2CallEndedByPush.observe()
         if CallManager.useCallKit {
             // Звук включает CallKit (provider didActivate) — иначе на заблокированном экране нет звука.
             let rtc = RTCAudioSession.sharedInstance()
@@ -301,8 +302,11 @@ class CallManager {
                 }
                 CallManager.activateAudioSession(withSpeaker: !audioOnly)
                 tinode.videoCall(topic: topicName, seq: seq, event: "ringing")
-                let timeout = (tinode.getServerParam(for: "callTimeout")?.asInt() ?? CallManager.kCallTimeout) + 5
+                // Без ответа — снять (reportCall .unanswered): таймаут сервера + 5 с, не дольше 45 с.
+                let timeout = min((tinode.getServerParam(for: "callTimeout")?.asInt() ?? CallManager.kCallTimeout) + 5, 45)
                 self.timer = self.makeCallTimeoutTimer(withDeadline: TimeInterval(timeout))
+                // Звонящий мог сбросить (VoIP «hang-up» сервер не шлёт, info по сокету может не дойти) — опрос сервера.
+                self.verifyStillRinging(uuid: uuid, topic: topicName, seq: seq, attempt: 0)
             } else {
                 Cache.log.error("Incoming call (topic: %@, seq: %d) error: %@", topicName, seq, err!.localizedDescription)
                 self.callInProgress = nil
@@ -407,8 +411,6 @@ class CallManager {
                 drop("error")
             } else {
                 completion()
-                // Звонок мог закончиться, пока push шёл (или это повтор старого): спросить сервер.
-                self.verifyStillRinging(uuid: uuid, topic: topic, seq: seq, attempt: 0)
             }
         }
     }
@@ -445,10 +447,11 @@ class CallManager {
 
     /// Проверка у сервера, что показанный по VoIP push звонок ещё идёт (через 1,5 и 6 с после показа).
     /// «Звонка нет» (завершён / принят на другом устройстве) — снять как завершённый собеседником.
+    /// LINIA2: сервер больше не шлёт VoIP push «hang-up» — пока звонок звонит, спрашиваем сервер каждые 3 с
+    /// (первый раз через 1,5 с), до ~60 с (дальше снимает таймаут звонка).
     private func verifyStillRinging(uuid: UUID, topic: String, seq: Int, attempt: Int) {
-        let delays: [TimeInterval] = [1.5, 4.5]
-        guard attempt < delays.count else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) {
+        guard attempt < 20 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 1.5 : 3)) {
             guard let cur = self.callInProgress, cur.uuid == uuid, !cur.accepted else { return }
             // Локально уже известно, что звонок закончился (сообщение звонка заменено).
             if let t = Cache.tinode.getTopic(topicName: topic),
@@ -872,5 +875,43 @@ final class Linia2MainStallMonitor {
                                               "authed": authed ? 1 : 0, "backlog": backlog, "call": CallManager.state.uuid != nil ? 1 : 0])
             }
         }
+    }
+}
+
+
+/// LINIA2: обычный push о пропущенном / отклонённом / завершённом звонке (webrtc = missed | declined | finished …)
+/// видит расширение уведомлений: оно пишет topic:seq в общие настройки App Group и шлёт Darwin-уведомление —
+/// приложение (разбуженное VoIP push, ещё без сокета) снимает звонящий CallKit-звонок.
+enum Linia2CallEndedByPush {
+    static let kKey = "linia2.calls.endedByPush"
+    static let kDarwinName = "info.codix.liniya2.call-ended" as CFString
+
+    private final class Token {}
+    private static let token = Token()
+
+    static func observe() {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        let observer = UnsafeRawPointer(Unmanaged.passUnretained(token).toOpaque())
+        CFNotificationCenterAddObserver(center, observer, { _, _, _, _, _ in
+            DispatchQueue.main.async { Linia2CallEndedByPush.check() }
+        }, kDarwinName, nil, .deliverImmediately)
+    }
+
+    /// Проверить запись расширения (и при возврате приложения на экран).
+    static func check() {
+        guard let d = UserDefaults(suiteName: BaseDb.kAppGroupId), let items = d.array(forKey: kKey) as? [[String: Any]] else { return }
+        let now = Date().timeIntervalSince1970
+        let fresh = items.filter { now - (($0["t"] as? Double) ?? 0) < 120 }
+        let cm = Cache.callManager
+        for it in fresh {
+            guard let topic = it["topic"] as? String else { continue }
+            let seq = (it["seq"] as? Int) ?? 0
+            if seq > 0 { Linia2EndedCalls.mark(topic, seq) }
+            if let cur = cm.callInProgress, cur.topic == topic, !cur.accepted, !cm.currentCallIsOutgoing,
+               seq <= 0 || cur.seq == seq {
+                cm.endRemotely(topic: topic, seq: cur.seq, why: "push-" + ((it["state"] as? String) ?? "end"))
+            }
+        }
+        d.set(fresh.isEmpty ? nil : fresh, forKey: kKey)
     }
 }

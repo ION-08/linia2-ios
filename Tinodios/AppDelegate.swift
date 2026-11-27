@@ -255,6 +255,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2Turn.shared.prefetch()
         // LINIA2: звонок, принятый на заблокированном экране / в фоне, — показать его экран.
         Linia2CallCenter.shared.applicationDidBecomeActive()
+        Linia2CallEndedByPush.check()   // звонок, пропущенный по push, пока приложение было в фоне
         Linia2Voip.shared.register()
         Linia2GuestLinks.refreshGuestUid()
         self.appIsStarting = false
