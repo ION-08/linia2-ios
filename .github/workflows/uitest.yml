@@ -56,7 +56,7 @@ jobs:
       fail-fast: false
       matrix:
         # guest_only — только e2e-часть и только шаг «гость по ссылке → iOS».
-        include: ${{ fromJSON((inputs.guest_only || inputs.launch_only) && '[{"device":"pro","idx":2,"suite":"e2e"}]' || '[{"device":"pro","idx":1,"suite":"main"},{"device":"pro","idx":2,"suite":"e2e"}]') }}
+        include: ${{ fromJSON(inputs.launch_only && '[{"device":"pro","idx":1,"suite":"main"}]' || inputs.guest_only && '[{"device":"pro","idx":2,"suite":"e2e"}]' || '[{"device":"pro","idx":1,"suite":"main"},{"device":"pro","idx":2,"suite":"e2e"}]') }}
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
@@ -208,13 +208,16 @@ jobs:
                  TEST_RUNNER_L2_REG_LOGIN="$L2_REG_LOGIN" TEST_RUNNER_L2_REG_PASSWORD="$L2_REG_PASSWORD" \
                  TEST_RUNNER_L2_REVIEW_LOGIN="${{ secrets.L2_REVIEW_LOGIN }}" TEST_RUNNER_L2_REVIEW_PASSWORD="${{ secrets.L2_REVIEW_PASSWORD }}"
           # Нестабильные тесты перезапускаются до 2 раз; каждый перезапуск виден в отчёте.
+          # launch_only (ручной запуск): тесты запуска на машине основного набора (на e2e-машине установка падает: «server died»).
+          if [ "${{ inputs.launch_only }}" = "true" ]; then
+            SEL="-only-testing:TinodiosUITests/Linia2LaunchTests/test9_ColdStartUnderNetworkPathStorm -only-testing:TinodiosUITests/Linia2LaunchTests/test1_ColdStartWithUnreadBotMessages -only-testing:TinodiosUITests/Linia2LaunchTests/test6_StartWithServerUnreachable"
+          else
+            SEL="-only-testing:TinodiosUITests -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests -skip-testing:TinodiosUITests/Linia2DesignShots -skip-testing:TinodiosUITests/Linia2LaunchTests -skip-testing:TinodiosUITests/Linia2PanicTests -skip-testing:TinodiosUITests/Linia2GuestLinkCallTests"
+          fi
           xcodebuild test \
             -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
             -destination "platform=iOS Simulator,id=$UDID" \
-            -only-testing:TinodiosUITests \
-            -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests \
-            -skip-testing:TinodiosUITests/Linia2DesignShots -skip-testing:TinodiosUITests/Linia2LaunchTests \
-            -skip-testing:TinodiosUITests/Linia2PanicTests -skip-testing:TinodiosUITests/Linia2GuestLinkCallTests \
+            $SEL \
             -parallel-testing-enabled NO \
             -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
