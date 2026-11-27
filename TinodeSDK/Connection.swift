@@ -256,6 +256,11 @@ public class Connection: WebSocketConnectionDelegate {
         webSocketConnection?.close(byUs: false)
     }
 
+    func linia2Ping(timeout: TimeInterval, done: @escaping (Bool) -> Void) {
+        guard let ws = webSocketConnection else { done(false); return }
+        ws.linia2Ping(timeout: timeout, done: done)
+    }
+
     func send(payload data: Data) {
         webSocketConnection?.send(data: data)
     }
