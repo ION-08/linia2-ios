@@ -594,21 +594,21 @@ final class Linia2Failover: TinodeEventListener {
         }.joined(separator: ",")
         let st: String = p.status == .satisfied ? "ok" : (p.status == .unsatisfied ? "none" : "req")
         let line = "\(st)|\(ifs)|\(p.isExpensive)|\(p.isConstrained)|\(p.supportsIPv4)|\(p.supportsIPv6)"
-        pathQueue.async {
+        Linia2Failover.pathQueue.async {
             let now = Date()
-            guard line != lastPathLine, now.timeIntervalSince(lastPathLog) >= 2 else { return }
-            lastPathLine = line; lastPathLog = now
+            guard line != Linia2Failover.lastPathLine, now.timeIntervalSince(Linia2Failover.lastPathLog) >= 2 else { return }
+            Linia2Failover.lastPathLine = line; Linia2Failover.lastPathLog = now
             Linia2LaunchLog.shared.step("net-path", ["status": st, "ifs": ifs, "expensive": p.isExpensive ? 1 : 0,
                                                      "constrained": p.isConstrained ? 1 : 0,
                                                      "ipv4": p.supportsIPv4 ? 1 : 0, "ipv6": p.supportsIPv6 ? 1 : 0])
         }
     }
     static func coalescedNetworkCheck() {
-        pathQueue.async {
-            guard !checkScheduled else { return }
-            checkScheduled = true
-            pathQueue.asyncAfter(deadline: .now() + 2) {
-                checkScheduled = false
+        Linia2Failover.pathQueue.async {
+            guard !Linia2Failover.checkScheduled else { return }
+            Linia2Failover.checkScheduled = true
+            Linia2Failover.pathQueue.asyncAfter(deadline: .now() + 2) {
+                Linia2Failover.checkScheduled = false
                 DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2NetworkChanged() }
             }
         }
