@@ -832,3 +832,45 @@ extension CallManager: CallManagerImpl {
         DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallMuted, object: nil, userInfo: ["muted": muted]) }
     }
 }
+
+/// LINIA2: замер зависаний главного потока всегда (не только в звонке): раз в 1 с с фонового потока —
+/// сколько главный поток не отвечал. Пауза ≥ 2 с (приложение на экране) — событие l2_main_stall:
+/// длительность, этап (секунды от запуска), вошли ли, сколько входящих сообщений ждёт разбора.
+final class Linia2MainStallMonitor {
+    static let shared = Linia2MainStallMonitor()
+    private let queue = DispatchQueue(label: "info.codix.liniya2.stall-monitor", qos: .utility)
+    private var timer: DispatchSourceTimer?
+    private var sentAt: Date?
+    private var reports = 0
+
+    func start() {
+        queue.async {
+            guard self.timer == nil else { return }
+            let t = DispatchSource.makeTimerSource(queue: self.queue)
+            t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+            t.setEventHandler { [weak self] in self?.tick() }
+            self.timer = t
+            t.resume()
+        }
+    }
+
+    private func tick() {
+        guard sentAt == nil else { return }   // главный ещё не ответил на прошлый пинг
+        let sent = Date()
+        sentAt = sent
+        DispatchQueue.main.async {
+            let lag = Date().timeIntervalSince(sent)
+            let active = UIApplication.shared.applicationState == .active
+            let tinode = Cache.tinode
+            let authed = tinode.isConnectionAuthenticated
+            let backlog = tinode.connection?.incomingBacklog ?? 0
+            self.queue.async {
+                self.sentAt = nil
+                guard lag >= 2, active, self.reports < 20 else { return }
+                self.reports += 1
+                L2Log.event("l2_main_stall", ["ms": Int(lag * 1000), "since_launch": Int(Date().timeIntervalSince(AppDelegate.launchedAt)),
+                                              "authed": authed ? 1 : 0, "backlog": backlog, "call": CallManager.state.uuid != nil ? 1 : 0])
+            }
+        }
+    }
+}

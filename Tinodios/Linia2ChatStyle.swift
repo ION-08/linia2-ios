@@ -113,7 +113,7 @@ extension ChatListViewController: UITextFieldDelegate {
 
     func linia2Refilter() {
         topics = linia2Filtered(linia2All)
-        rowIndex = Dictionary(uniqueKeysWithValues: topics.enumerated().map { ($0.element.name, $0.offset) })
+        rowIndex = Dictionary(topics.enumerated().map { ($0.element.name, $0.offset) }, uniquingKeysWith: { a, _ in a })
         tableView.reloadData()
     }
 

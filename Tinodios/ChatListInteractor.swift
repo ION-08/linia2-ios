@@ -178,11 +178,28 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
             DispatchQueue.main.async { [weak self] in self?.loadAndPresentTopics() }
             return
         }
+        // LINIA2 (большой аккаунт): при входе приходят сотни pres/meta — каждый вызывал полную перезагрузку
+        // списка на главном потоке. Теперь не чаще раза в 0,5 с: первый — сразу, остальные — одним разом.
+        let now = Date()
+        if now.timeIntervalSince(lastReload) < 0.5 {
+            guard !reloadScheduled else { return }
+            reloadScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self else { return }
+                self.reloadScheduled = false
+                self.lastReload = .distantPast
+                self.loadAndPresentTopics()
+            }
+            return
+        }
+        lastReload = now
         self.topics = self.getTopics(archived: false)
         self.archivedTopics = self.getTopics(archived: true)
         self.presenter?.presentTopics(
             self.topics ?? [], archivedTopics: self.archivedTopics)
     }
+    private var lastReload = Date.distantPast
+    private var reloadScheduled = false
 
     func updateChat(_ name: String) {
         self.presenter?.topicUpdated(name)

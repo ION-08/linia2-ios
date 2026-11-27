@@ -80,17 +80,41 @@ public class Connection: WebSocketConnectionDelegate {
         maybeInitReconnectClosure()
     }
 
+    // LINIA2 (большой аккаунт: сигналы звонка доходили с задержкой 3–7 с): входящие сообщения разбираются
+    // в отдельной последовательной очереди (порядок сохраняется), чтобы чтение сокета не ждало разбора
+    // (запись в базу по сотням pres/meta/data). Сигналы звонка (offer / answer / ice-candidate / hang-up)
+    // обрабатываются сразу, без ожидания очереди. «accept» / «ringing» — по порядку (зависят от ответа
+    // сервера с seq звонка, который может стоять в очереди).
+    private let incomingQueue = DispatchQueue(label: "co.tinode.incoming", qos: .userInitiated)
+    private let backlogLock = NSLock()
+    private var backlog = 0
+    private func enqueue(_ work: @escaping () -> Void) {
+        backlogLock.lock(); backlog += 1; backlogLock.unlock()
+        incomingQueue.async {
+            work()
+            self.backlogLock.lock(); self.backlog -= 1; self.backlogLock.unlock()
+        }
+    }
+    /// Сколько входящих ждут разбора (для диагностики задержек).
+    public var incomingBacklog: Int { backlogLock.lock(); defer { backlogLock.unlock() }; return backlog }
+
+    static func isUrgentCallSignal(_ text: String) -> Bool {
+        guard text.hasPrefix("{\"info\""), text.contains("\"what\":\"call\"") else { return false }
+        return text.contains("\"event\":\"offer\"") || text.contains("\"event\":\"answer\"")
+            || text.contains("\"event\":\"ice-candidate\"") || text.contains("\"event\":\"hang-up\"")
+    }
+
     func onConnected(connection: WebSocket) {
         self.backoffSteps.reset()
         let r = self.reconnecting
         self.reconnecting = false
         let p = self.param
         self.param = nil
-        self.connectionListener?.onConnect(reconnecting: r, param: p)
+        enqueue { self.connectionListener?.onConnect(reconnecting: r, param: p) }
     }
 
     func onDisconnected(connection: WebSocket, isServerOriginated clean: Bool, closeCode: URLSessionWebSocketTask.CloseCode, reason: String) {
-        self.connectionListener?.onDisconnect(isServerOriginated: clean, code: closeCode, reason: reason)
+        enqueue { self.connectionListener?.onDisconnect(isServerOriginated: clean, code: closeCode, reason: reason) }
         guard !self.reconnecting else {
             return
         }
@@ -101,11 +125,18 @@ public class Connection: WebSocketConnectionDelegate {
     }
 
     func onError(connection: WebSocket, error: Error) {
-        self.connectionListener?.onError(error: error)
+        enqueue { self.connectionListener?.onError(error: error) }
     }
 
     func onMessage(connection: WebSocket, text: String) {
-        self.connectionListener?.onMessage(with: text)
+        if Connection.isUrgentCallSignal(text) {
+            // Сигналы звонка — между собой по порядку (все на очереди сокета), без ожидания разбора остального.
+            self.connectionListener?.onMessage(with: text)
+            return
+        }
+        let n = incomingBacklog
+        if n > 0 && n % 200 == 0 { Tinode.log.info("Connection: %d incoming messages waiting", n) }
+        enqueue { self.connectionListener?.onMessage(with: text) }
     }
 
     func onMessage(connection: WebSocket, data: Data) {

@@ -157,6 +157,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2Firebase.configureIfNeeded()
         UNUserNotificationCenter.current().delegate = self
         if Linia2Firebase.configured { Messaging.messaging().delegate = self }
+        Linia2MainStallMonitor.shared.start()   // LINIA2: замер зависаний главного потока (l2_main_stall)
         // LINIA2: PushKit — как можно раньше (VoIP push при холодном старте ждёт делегата; отчёт CallKit — сразу).
         registerForVoip()
         L2Log.event("l2_app_start", ["push_launch": launchOptions?[.remoteNotification] != nil ? 1 : 0])
