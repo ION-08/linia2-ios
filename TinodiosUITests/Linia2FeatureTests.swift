@@ -12,15 +12,29 @@ import XCTest
 
 /// Минимальный клиент Tinode (WebSocket) для собеседника в тестах.
 final class L2PeerClient {
-    private let task: URLSessionWebSocketTask
+    private static let url = URL(string: "wss://v2.chat-linia.site/v0/channels?apikey=AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K")!
+    private var task: URLSessionWebSocketTask
     private var nextId = 100
     private(set) var uid: String?
     /// Полученные {data} (по порядку).
     private(set) var datas: [[String: Any]] = []
+    /// Для переподключения: пока тест ждёт (вход A, 35 с в фоне), простаивающий WebSocket закрывается
+    /// («Socket is not connected») — тогда входим заново и подписываемся на те же чаты.
+    private var credentials: (login: String, password: String)?
+    private var subscribed: [String] = []
 
     init() {
-        task = URLSession.shared.webSocketTask(with: URL(string: "wss://v2.chat-linia.site/v0/channels?apikey=AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K")!)
+        task = URLSession.shared.webSocketTask(with: L2PeerClient.url)
         task.resume()
+    }
+
+    private func reconnect() -> Bool {
+        task.cancel(with: .goingAway, reason: nil)
+        task = URLSession.shared.webSocketTask(with: L2PeerClient.url)
+        task.resume()
+        guard let cr = credentials, login(cr.login, cr.password) else { return false }
+        for t in subscribed { request("sub", ["topic": t]) }
+        return true
     }
 
     deinit { task.cancel(with: .goingAway, reason: nil) }
@@ -52,10 +66,13 @@ final class L2PeerClient {
         b["id"] = id
         guard let raw = try? JSONSerialization.data(withJSONObject: [key: b]), let s = String(data: raw, encoding: .utf8) else { return nil }
         let sem = DispatchSemaphore(value: 0)
-        task.send(.string(s)) { _ in sem.signal() }
+        var sendError: Error?
+        task.send(.string(s)) { e in sendError = e; sem.signal() }
         _ = sem.wait(timeout: .now() + 10)
+        if sendError != nil { return nil }
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
+            if task.closeCode != .invalid || task.state != .running { return nil }   // соединение закрыто
             guard let m = receiveOne(timeout: max(0.5, end.timeIntervalSinceNow)) else { continue }
             if let d = m["data"] as? [String: Any] { datas.append(d) }
             if let c = m["ctrl"] as? [String: Any], c["id"] as? String == id { return c }
@@ -76,11 +93,13 @@ final class L2PeerClient {
         let secret = Data((login + ":" + password).utf8).base64EncodedString()
         guard let c = request("login", ["scheme": "basic", "secret": secret]), (c["code"] as? Int ?? 500) < 300 else { return false }
         uid = (c["params"] as? [String: Any])?["user"] as? String
+        credentials = (login, password)
         return true
     }
 
     /// Подписаться на чат с пользователем и загрузить последние сообщения.
     func open(_ topic: String) {
+        if !subscribed.contains(topic) { subscribed.append(topic) }
         request("sub", ["topic": topic, "get": ["what": "desc data", "data": ["limit": 30]]])
     }
 
@@ -96,7 +115,11 @@ final class L2PeerClient {
 
     @discardableResult
     func publish(_ topic: String, content: Any, head: [String: Any]) -> Int? {
-        let c = request("pub", ["topic": topic, "noecho": true, "head": head, "content": content])
+        let body: [String: Any] = ["topic": topic, "noecho": true, "head": head, "content": content]
+        var c = request("pub", body)
+        // Соединение закрылось, пока тест ждал (или ответ не пришёл), — одно переподключение (вход + подписка)
+        // и повтор. Возможный дубль сообщения тестам не мешает (ищут по метке).
+        if c == nil, reconnect() { c = request("pub", body) }
         return (c?["params"] as? [String: Any])?["seq"] as? Int
     }
 }

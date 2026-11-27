@@ -220,22 +220,32 @@ class Linia2CallTestBase: XCTestCase {
         screenshot("held-\(last)s")
     }
 
-    /// Микрофон и камера: выкл → вкл (по подписям доступности).
+    /// Подпись элемента стала (`equal: true`) или перестала быть (`false`) равной `label` — ждём до `timeout` с.
+    private func waitLabel(_ id: String, _ label: String, equal: Bool, timeout: TimeInterval) -> String {
+        let end = Date().addingTimeInterval(timeout)
+        var cur = any(id).label
+        while (cur == label) != equal && Date() < end { usleep(200_000); cur = any(id).label }
+        return cur
+    }
+
+    /// Микрофон и камера: выкл → вкл (по подписям доступности). Подпись должна смениться не позже чем через 2 с.
     func toggleMicAndCamera(_ what: String) {
         let mic = any("l2.call.mic")
         wait(mic, "кнопка микрофона")
         let mic0 = mic.label
-        mic.tap(); sleep(1)
-        XCTAssertNotEqual(any("l2.call.mic").label, mic0, "\(what): микрофон не переключился")
-        any("l2.call.mic").tap(); sleep(1)
-        XCTAssertEqual(any("l2.call.mic").label, mic0, "\(what): микрофон не вернулся")
+        mic.tap()
+        XCTAssertNotEqual(waitLabel("l2.call.mic", mic0, equal: false, timeout: 2), mic0, "\(what): микрофон не переключился")
+        screenshot("mic-off")
+        any("l2.call.mic").tap()
+        XCTAssertEqual(waitLabel("l2.call.mic", mic0, equal: true, timeout: 2), mic0, "\(what): микрофон не вернулся")
         let cam = any("l2.call.video")
         wait(cam, "кнопка камеры")
         let cam0 = cam.label
-        cam.tap(); sleep(2)
-        XCTAssertNotEqual(any("l2.call.video").label, cam0, "\(what): камера не переключилась")
-        any("l2.call.video").tap(); sleep(2)
-        XCTAssertEqual(any("l2.call.video").label, cam0, "\(what): камера не вернулась")
+        cam.tap()
+        XCTAssertNotEqual(waitLabel("l2.call.video", cam0, equal: false, timeout: 2), cam0, "\(what): камера не переключилась")
+        screenshot("camera-toggled")
+        any("l2.call.video").tap()
+        XCTAssertEqual(waitLabel("l2.call.video", cam0, equal: true, timeout: 2), cam0, "\(what): камера не вернулась")
         XCTAssertNotNil(connectedSeconds(), "\(what): звонок оборвался после переключения микрофона/камеры")
         screenshot("toggled")
     }

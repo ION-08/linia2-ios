@@ -90,6 +90,13 @@ class CameraManager: NSObject {
         }
     }
 
+    /// LINIA2: запуск/остановка камеры — по порядку, на своей последовательной очереди с приоритетом
+    /// «по действию пользователя». Раньше — глобальная очередь .background: система её притормаживает
+    /// (на загруженном устройстве/симуляторе — секундами), кнопка «Камера» всё это время была выключена
+    /// и подпись не менялась; два быстрых нажатия могли выполниться не по порядку.
+    private let sessionQueue = DispatchQueue(label: "l2.camera.session", qos: .userInitiated)
+
+    /// `isCapturing` (желаемое состояние) меняется сразу, на главном потоке; сама сессия — в sessionQueue.
     func startCapture(completion: (() -> Void)? = nil) {
         Cache.log.info("CallVC - CameraManager: start capture")
 
@@ -97,8 +104,8 @@ class CameraManager: NSObject {
         isCapturing = true
 
         #if arch(arm64)
-        DispatchQueue.global(qos: .background).async {
-            self.captureSession.startRunning()
+        sessionQueue.async {
+            if !self.captureSession.isRunning { self.captureSession.startRunning() }
             completion?()
         }
         #else
@@ -111,8 +118,8 @@ class CameraManager: NSObject {
         isCapturing = false
 
         #if arch(arm64)
-        DispatchQueue.global(qos: .background).async {
-            self.captureSession.stopRunning()
+        sessionQueue.async {
+            if self.captureSession.isRunning { self.captureSession.stopRunning() }
             completion?()
         }
         #else
@@ -822,6 +829,8 @@ class CallViewController: UIViewController {
         linia2UpdateProximity()   // свёрнут — экран не гасить
         // Свёрнут — показать плашку «Идёт звонок».
         Linia2CallCenter.shared.refreshBanner()
+        // Экран звонка закрыт — нижнее меню снова видно (под модальным окном оно прячется).
+        DispatchQueue.main.async { Linia2TabBarController.current?.updateBarVisibility(animated: true) }
     }
 
     /// Запуск звонка — один раз (экран может быть свёрнут и открыт снова).
@@ -916,33 +925,32 @@ class CallViewController: UIViewController {
 
     func setMuted(_ muted: Bool) {
         isMuted = muted
-        if !isHeld { webRTCClient.setAudioEnabled(!muted) } else { heldRestore?.audio = !muted }
+        // Сначала кнопка (вид и подпись), потом трек: включение/выключение трека WebRTC синхронно ждёт
+        // свой поток и не должно задерживать отклик кнопки.
         linia2UpdateButtons()
+        if !isHeld { webRTCClient.setAudioEnabled(!muted) } else { heldRestore?.audio = !muted }
     }
 
+    /// «Камера»: состояние, вид и подпись кнопки меняются сразу по нажатию; запуск/остановка сессии камеры —
+    /// в фоне по порядку (CameraManager.sessionQueue). Раньше кнопка выключалась до завершения startRunning/
+    /// stopRunning в фоновой очереди .background — это занимало секунды, нажатие «не срабатывало».
     @IBAction func didToggleCamera(_ sender: Any) {
-        videoToggleButton.isEnabled = false
         if cameraManager.isCapturing {
-            cameraManager.stopCapture {
-                DispatchQueue.main.async {
-                    self.localView.isHidden = true
-                    self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventMuted)
-                    self.videoToggleButton.isEnabled = true
-                    self.linia2UpdateButtons()
-                    self.linia2UpdateProximity()
-                }
-            }
+            cameraManager.stopCapture()
+            localView.isHidden = true
+            webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventMuted)
         } else {
-            cameraManager.startCapture {
+            localView.isHidden = false
+            cameraManager.startCapture { [weak self] in
+                // Собеседнику «видео есть» — когда камера действительно запущена (и её не выключили снова).
                 DispatchQueue.main.async {
-                    self.localView.isHidden = false
+                    guard let self = self, !self.closed, self.cameraManager.isCapturing, !self.isHeld else { return }
                     self.webRTCClient.sendOverDataChannel(event: WebRTCClient.kVideoEventUnmuted)
-                    self.videoToggleButton.isEnabled = true
-                    self.linia2UpdateButtons()
-                    self.linia2UpdateProximity()
                 }
             }
         }
+        linia2UpdateButtons()
+        linia2UpdateProximity()
     }
 
     @objc func didTapFlip() {

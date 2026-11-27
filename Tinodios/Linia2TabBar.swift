@@ -76,6 +76,14 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
         if let o = configObserver { NotificationCenter.default.removeObserver(o) }
     }
 
+    /// Закрылось модальное окно (экран звонка и т.п.) — меню снова видно. Раньше видимость пересчитывалась только
+    /// при переходах в навигаторе и выборе вкладки: при холодном старте по входящему звонку чат открывался, пока
+    /// экран звонка уже показывался, меню пряталось (alpha 0) и после звонка так и оставалось скрытым.
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        updateBarVisibility(animated: false)
+    }
+
     /// LINIA2: безопасное переключение вкладок (быстрые нажатия, во время загрузки и анимаций):
     /// только с главного потока, только на существующий контроллер, «вернуться к началу» — не во время
     /// перехода в навигаторе (popToRoot посреди push/pop ломал стек и ронял приложение).

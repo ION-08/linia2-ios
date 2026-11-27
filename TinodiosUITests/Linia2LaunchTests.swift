@@ -323,8 +323,13 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         loginA()
         guard let peerUid = c.uid else { XCTFail("нет uid собеседника"); return }
         XCUIDevice.shared.press(.home)
-        sleep(3)
+        // Состояние процесса XCTest узнаёт у системы с задержкой (на экране уже «Домой», а app.state ещё
+        // .runningForeground — прогон 45921914236). Ждём смены до 15 с; требование то же: приложение ушло в фон.
+        let bgEnd = Date().addingTimeInterval(15)
+        while Date() < bgEnd && app.state == .runningForeground { usleep(250_000) }
         XCTAssertNotEqual(app.state, .runningForeground, "приложение не ушло в фон")
+        XCTAssertNotEqual(app.state, .notRunning, "приложение упало при уходе в фон")
+        sleep(1)
         let tag = "L3-" + Self.stamp
         let seq = sendBotMessages(c, to: topic, tag: tag, count: 3)
         try requestPush(pushPayload(topic: peerUid, from: peerUid, seq: seq), name: "short")

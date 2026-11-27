@@ -518,6 +518,12 @@ class MessageViewController: UIViewController {
         linia2EnablePopGesture()
         linia2ScheduleHistoryCheck()
         linia2UpdateBurnUI()
+        // Панель ввода — inputAccessoryView, видна, только пока чат — первый отвечающий. Чат, открытый под
+        // экраном звонка (входящий при холодном старте), им не становился — после звонка панели не было.
+        if presentedViewController == nil, linia2Search == nil, !isFirstResponder,
+           sendMessageBar.inputField?.isFirstResponder != true {
+            becomeFirstResponder()
+        }
 
         collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: sendMessageBar.frame.height, right: 0)
 
