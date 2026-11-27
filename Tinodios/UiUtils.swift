@@ -274,8 +274,8 @@ class UiUtils {
         UNUserNotificationCenter.current().delegate = appDelegate
 
         // LINIA2: после первого входа — по очереди уведомления, микрофон, камера (с пояснением перед системным окном).
-        Linia2Permissions.shared.requestNotifications { _ in
-            Linia2Permissions.shared.requestMediaIfNeeded()
+        Linia2PermissionsOnboarding.shared.requestNotifications { _ in
+            Linia2PermissionsOnboarding.shared.requestMediaIfNeeded()
         }
 
         application.registerForRemoteNotifications()

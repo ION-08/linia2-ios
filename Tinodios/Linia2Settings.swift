@@ -1294,8 +1294,8 @@ final class Linia2StorageViewController: Linia2GroupedTableViewController {
 /// запросом — короткое пояснение. Доступ уже есть или уже запрещён — не спрашиваем (запрещённый микрофон
 /// при звонке — подсказка «Открыть Настройки» на экране звонка). Тексты — из удалённых настроек
 /// (texts: perm.push.*, perm.mic.*, perm.camera.*), выключение — feature «permissionsOnboarding».
-final class Linia2Permissions {
-    static let shared = Linia2Permissions()
+final class Linia2PermissionsOnboarding {
+    static let shared = Linia2PermissionsOnboarding()
     private var running = false
     private static let kSkipped = "linia2.perm.skipped"   // «Не сейчас» на пояснении: [вид]
 
@@ -1311,7 +1311,7 @@ final class Linia2Permissions {
                         DispatchQueue.main.async { completion(granted) }
                     }
                 }
-                guard st.authorizationStatus == .notDetermined, !Linia2Permissions.isUITest,
+                guard st.authorizationStatus == .notDetermined, !Linia2PermissionsOnboarding.isUITest,
                       Linia2Config.shared.feature("permissionsOnboarding", default: true) else {
                     // Уже решено (или автотест) — системный вызов вернётся сразу, без окна.
                     ask()
@@ -1326,7 +1326,7 @@ final class Linia2Permissions {
 
     /// Микрофон и камера — после уведомлений, по очереди.
     func requestMediaIfNeeded() {
-        guard !running, !Linia2Permissions.isUITest, Linia2Config.shared.feature("permissionsOnboarding", default: true) else { return }
+        guard !running, !Linia2PermissionsOnboarding.isUITest, Linia2Config.shared.feature("permissionsOnboarding", default: true) else { return }
         running = true
         whenReady {
             self.requestMic {
@@ -1367,7 +1367,7 @@ final class Linia2Permissions {
     /// Пояснение перед системным окном. «Не сейчас» — больше не показываем при входе (спросим при звонке).
     private func explain(kind: String, title: String, text: String, proceed: @escaping () -> Void, skip: @escaping () -> Void) {
         whenReady {
-            guard let top = Linia2Permissions.topController() else { proceed(); return }
+            guard let top = Linia2PermissionsOnboarding.topController() else { proceed(); return }
             let cfg = Linia2Config.shared
             let a = UIAlertController(title: cfg.text("perm.\(kind).title") ?? title,
                                       message: cfg.text("perm.\(kind).text") ?? text, preferredStyle: .alert)
@@ -1390,8 +1390,8 @@ final class Linia2Permissions {
     /// Приложение на экране, PIN введён, нет звонка, ничего не показано модально поверх — тогда спрашиваем.
     private func whenReady(_ action: @escaping () -> Void, attempts: Int = 120) {
         let ready = UIApplication.shared.applicationState == .active && !Linia2AppLock.shared.isLocked
-            && Cache.callManager.callInProgress == nil && Linia2Permissions.topController() != nil
-            && !(Linia2Permissions.topController() is UIAlertController)
+            && Cache.callManager.callInProgress == nil && Linia2PermissionsOnboarding.topController() != nil
+            && !(Linia2PermissionsOnboarding.topController() is UIAlertController)
         if ready { action(); return }
         guard attempts > 0 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.whenReady(action, attempts: attempts - 1) }
