@@ -46,7 +46,7 @@ final class Linia2Turn {
         let cached: [Server] = queue.sync { validUntil.timeIntervalSinceNow > 60 ? servers : [] }
         if !cached.isEmpty {
             if validUntil.timeIntervalSinceNow < 3600 { prefetch() }
-            return cached.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+            return cached.map { RTCIceServer(urlStrings: Self.withTcpFallback($0.urls), username: $0.username, credential: $0.credential) }
         }
         let sem = DispatchSemaphore(value: 0)
         var result: [Server] = []
@@ -57,7 +57,22 @@ final class Linia2Turn {
             }
         }
         _ = sem.wait(timeout: .now() + timeout)
-        return result.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+        return result.map { RTCIceServer(urlStrings: Self.withTcpFallback($0.urls), username: $0.username, credential: $0.credential) }
+    }
+
+    /// LINIA2: запасной путь TURN через TCP (сети, где UDP закрыт или рвётся при смене сети): для каждого
+    /// `turn:хост:порт` (UDP или без указания транспорта) добавляется `?transport=tcp`, если сервер его не прислал.
+    /// `turns:` (TLS) оставляем как есть. Сервер Линии сейчас отдаёт udp и tcp — тогда список не меняется.
+    static func withTcpFallback(_ urls: [String]) -> [String] {
+        var out = urls
+        for u in urls where u.hasPrefix("turn:") {
+            let base = u.components(separatedBy: "?").first ?? u
+            let query = u.contains("?") ? (u.components(separatedBy: "?").last ?? "") : ""
+            guard !query.contains("transport=tcp") else { continue }
+            let tcp = base + "?transport=tcp"
+            if !out.contains(tcp) { out.append(tcp) }
+        }
+        return out
     }
 
     // Вызывается только на `queue`.

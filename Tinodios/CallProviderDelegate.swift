@@ -95,6 +95,11 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
         provider.reportCall(with: uuid, updated: u)
     }
 
+    /// Звонок завершён не пользователем (например, связь потеряна) — сообщить системе с причиной.
+    func reportEnded(uuid: UUID, reason: CXCallEndedReason) {
+        provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+    }
+
     func reportOutgoingConnected(uuid: UUID) {
         provider.reportOutgoingCall(with: uuid, connectedAt: Date())
     }

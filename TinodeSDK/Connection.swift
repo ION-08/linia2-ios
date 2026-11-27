@@ -46,6 +46,13 @@ public class Connection: WebSocketConnectionDelegate {
     private var apiKey: String
     private var useTLS = false
     private var connectQueue = DispatchQueue(label: "co.tinode.connection")
+    /// LINIA2 (только автотесты, -l2-uitest): до этого момента подключение к серверу запрещено — эмуляция обрыва сети.
+    private var linia2BlockedUntilValue: Date?
+    private let linia2BlockLock = NSLock()
+    var linia2BlockedUntil: Date? {
+        get { linia2BlockLock.lock(); defer { linia2BlockLock.unlock() }; return linia2BlockedUntilValue }
+        set { linia2BlockLock.lock(); linia2BlockedUntilValue = newValue; linia2BlockLock.unlock() }
+    }
     private var autoreconnect: Bool = false
     private var reconnecting: Bool = false
     private var backoffSteps = ExpBackoffSteps()
@@ -127,6 +134,7 @@ public class Connection: WebSocketConnectionDelegate {
     }
     private func connectSocket() {
         guard !isConnected else { return }
+        if let until = linia2BlockedUntil, until > Date() { return }
         let request = try! createUrlRequest()
         self.openConnection(with: request)
     }
@@ -159,6 +167,11 @@ public class Connection: WebSocketConnectionDelegate {
             autoreconnect = false
             reconnectClosure!.cancel()
         }
+    }
+
+    /// LINIA2 (автотесты): закрыть сокет, не выключая автопереподключение (как при пропаже сети).
+    func linia2DropSocket() {
+        webSocketConnection?.close()
     }
 
     func send(payload data: Data) {

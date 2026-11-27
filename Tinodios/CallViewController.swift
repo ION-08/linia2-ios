@@ -9,6 +9,7 @@
 import AVFoundation
 import AVKit
 import Foundation
+import Network
 import TinodeSDK
 import UIKit
 import WebRTC
@@ -155,6 +156,12 @@ protocol WebRTCClientDelegate: AnyObject {
     var isAudioOnlyCall: Bool { get }
     /// LINIA2: мы звоним (первый offer создаём сами, не дожидаясь negotiationneeded).
     var linia2IsCaller: Bool { get }
+    /// LINIA2 (переподключение): состояние ICE — на главном потоке.
+    func linia2IceStateChanged(_ state: RTCIceConnectionState)
+    /// LINIA2: ответ собеседника на наш offer применён / мы ответили на offer собеседника (в т.ч. ICE restart).
+    func linia2NegotiationDone(remoteOffer: Bool)
+    /// LINIA2: перенастройка уже соединённого звонка не удалась — звонок не рвём, повторим ICE restart.
+    func linia2NegotiationFailed(_ stage: String)
 }
 
 /// TinodeVideoCallDelegate
@@ -167,6 +174,9 @@ protocol TinodeVideoCallDelegate: AnyObject {
     func handleIceCandidateMsg(with payload: JSONValue?)
     func handleRemoteHangup()
     func handleRinging()
+    /// LINIA2: веб-сокет Tinode закрылся / вход после переподключения выполнен.
+    func linia2SignalingDown(reason: String)
+    func linia2SignalingLoggedIn(code: Int)
 }
 
 class WebRTCClient: NSObject {
@@ -195,6 +205,8 @@ class WebRTCClient: NSObject {
     /// LINIA2: первый offer уже создан (звонящий) / ответ собеседника применён — дальше разрешена перенастройка.
     private(set) var initialOfferSent = false
     private var remoteAnswerApplied = false
+    /// LINIA2: ICE хотя бы раз соединился — дальше ошибки ICE/SDP не завершают звонок (переподключение, ICE restart).
+    private(set) var linia2Established = false
     /// Диагностика звонка (события ICE/соединения/треков) — см. Linia2CallDiag.
     var onDiagEvent: (([String: Any]) -> Void)?
 
@@ -243,8 +255,10 @@ class WebRTCClient: NSObject {
         if !saveInCache {
             self.localPeer?.add(candidate) { err in
                 if let err = err {
+                    // LINIA2: кандидат прошлого поколения (после ICE restart) или с уже недоступного адреса — не повод
+                    // завершать звонок: остальные кандидаты/TURN продолжают работать.
                     Cache.log.error("WebRTCClient: could not add ICE candidate: %@", err.localizedDescription)
-                    self.delegate?.closeCall()
+                    self.onDiagEvent?(["type": "error", "where": "addIceCandidate"])
                 }
             }
         } else {
@@ -270,7 +284,7 @@ class WebRTCClient: NSObject {
             self.remoteIceCandidatesCache.removeAll()
         }
         if !success {
-            self.delegate?.closeCall()
+            onDiagEvent?(["type": "error", "where": "drainIceCandidates"])
         }
     }
 
@@ -358,20 +372,100 @@ class WebRTCClient: NSObject {
                     if let error = error {
                         Cache.log.error("WebRTCClient - failed to make answer SDP %@", error.localizedDescription)
                     }
-                    self?.delegate?.closeCall()
+                    if self?.linia2Established ?? false {
+                        DispatchQueue.main.async { self?.delegate?.linia2NegotiationFailed("answer") }
+                    } else {
+                        self?.delegate?.closeCall()
+                    }
                     return
                 }
 
                 peerConnection.setLocalDescription(sdp, completionHandler: { [weak self](error) in
                     if let error = error {
                         Cache.log.error("WebRTCClient - failed to set local SDP (answer) %@", error.localizedDescription)
-                        self?.delegate?.closeCall()
+                        if self?.linia2Established ?? false {
+                            DispatchQueue.main.async { self?.delegate?.linia2NegotiationFailed("setLocalAnswer") }
+                        } else {
+                            self?.delegate?.closeCall()
+                        }
                         return
                     }
                     self?.delegate?.sendAnswer(withDescription: sdp)
                     self?.delegate?.markConnectionSetupComplete()
+                    DispatchQueue.main.async { self?.delegate?.linia2NegotiationDone(remoteOffer: true) }
                 })
             })
+    }
+
+    var iceIsConnected: Bool {
+        guard let pc = localPeer else { return false }
+        return pc.iceConnectionState == .connected || pc.iceConnectionState == .completed
+    }
+    var signalingIsStable: Bool { localPeer?.signalingState == .stable }
+
+    /// LINIA2: ICE restart — новый offer с новыми ufrag/pwd (IceRestart), собеседнику через Tinode «offer» с тем же seq.
+    /// `relayOnly` — только через TURN (в т.ч. TCP): после неудачных попыток напрямую.
+    /// Возвращает false, если сейчас нельзя (нет соединения, ждём ответ собеседника на его offer).
+    @discardableResult
+    func linia2RestartIce(relayOnly: Bool) -> Bool {
+        guard let pc = localPeer else { return false }
+        if pc.signalingState == .haveRemoteOffer { return false }
+        // Свежие TURN-данные и (при необходимости) только relay.
+        let cfg = pc.configuration
+        let fresh = Linia2Turn.shared.iceServers(timeout: 0.3)
+        if !fresh.isEmpty {
+            let freshUrls = Set(fresh.flatMap { $0.urlStrings })
+            cfg.iceServers = cfg.iceServers.filter { Set($0.urlStrings).isDisjoint(with: freshUrls) } + fresh
+        }
+        if relayOnly { cfg.iceTransportPolicy = .relay }
+        if !pc.setConfiguration(cfg) {
+            Cache.log.error("WebRTCClient: setConfiguration before ICE restart failed")
+            onDiagEvent?(["type": "error", "where": "setConfiguration"])
+        }
+        let start: () -> Void = { [weak self] in
+            guard let self = self, self.localPeer === pc else { return }
+            var c = self.delegate?.isAudioOnlyCall ?? false ? WebRTCClient.kAudioOnlyMediaConstraints : WebRTCClient.kVideoCallMediaConstraints
+            c[kRTCMediaConstraintsIceRestart] = kRTCMediaConstraintsValueTrue
+            pc.offer(for: RTCMediaConstraints(mandatoryConstraints: c, optionalConstraints: nil), completionHandler: { [weak self] sdp, error in
+                guard let self = self else { return }
+                guard let sdp = sdp else {
+                    Cache.log.error("WebRTCClient - ICE restart offer failed %@", error?.localizedDescription ?? "")
+                    DispatchQueue.main.async { self.delegate?.linia2NegotiationFailed("restartOffer") }
+                    return
+                }
+                pc.setLocalDescription(sdp, completionHandler: { [weak self] error in
+                    guard let self = self else { return }
+                    if let error = error {
+                        Cache.log.error("WebRTCClient - ICE restart setLocalDescription failed %@", error.localizedDescription)
+                        DispatchQueue.main.async { self.delegate?.linia2NegotiationFailed("restartSetLocal") }
+                        return
+                    }
+                    self.delegate?.sendOffer(withDescription: sdp)
+                })
+            })
+        }
+        onDiagEvent?(["type": "ice-restart", "relay": relayOnly, "signaling": pc.signalingState.rawValue])
+        if pc.signalingState == .haveLocalOffer {
+            // Прошлый offer остался без ответа (потерялся при обрыве) — откатываем и шлём новый.
+            pc.setLocalDescription(RTCSessionDescription(type: .rollback, sdp: ""), completionHandler: { _ in
+                DispatchQueue.main.async { start() }
+            })
+        } else {
+            start()
+        }
+        return true
+    }
+
+    /// LINIA2 (автотесты): приостановить/возобновить отправку RTP (encodings.isActive) — эмуляция пропажи медиапути.
+    func linia2SetSendingPaused(_ paused: Bool) {
+        guard let pc = localPeer else { return }
+        for sender in pc.senders {
+            let p = sender.parameters
+            guard !p.encodings.isEmpty else { continue }
+            for e in p.encodings { e.isActive = !paused }
+            sender.parameters = p
+        }
+        onDiagEvent?(["type": "uitest-media", "paused": paused])
     }
 
     func sendOverDataChannel(event: String) {
@@ -381,6 +475,7 @@ class WebRTCClient: NSObject {
     func disconnect() {
         initialOfferSent = false
         remoteAnswerApplied = false
+        linia2Established = false
         localPeer?.close()
         localPeer = nil
 
@@ -456,7 +551,7 @@ extension WebRTCClient {
                 var ice: RTCIceServer
                 if let username = vals["username"]?.asString() {
                     let credential = vals["credential"]?.asString()
-                    ice = RTCIceServer(urlStrings: iceStrings, username: username, credential: credential)
+                    ice = RTCIceServer(urlStrings: Linia2Turn.withTcpFallback(iceStrings), username: username, credential: credential)
                 } else {
                     ice = RTCIceServer(urlStrings: iceStrings)
                 }
@@ -509,11 +604,36 @@ extension WebRTCClient {
     // Processes remote offer SDP.
     func handleRemoteOfferDescription(_ desc: RTCSessionDescription) {
         guard let peerConnection = localPeer else { return }
+        // LINIA2: встречные offer (оба переподключаются одновременно, ICE restart) — «вежливый» (принимающий звонок)
+        // откатывает свой offer и отвечает; «невежливый» (звонящий) offer собеседника игнорирует — тот откатит свой.
+        if peerConnection.signalingState == .haveLocalOffer {
+            if delegate?.linia2IsCaller ?? false {
+                Cache.log.info("WebRTCClient: glare — ignoring remote offer (impolite)")
+                onDiagEvent?(["type": "glare", "action": "ignore"])
+                return
+            }
+            onDiagEvent?(["type": "glare", "action": "rollback"])
+            peerConnection.setLocalDescription(RTCSessionDescription(type: .rollback, sdp: ""), completionHandler: { [weak self] err in
+                if let err = err {
+                    Cache.log.error("WebRTCClient: rollback failed: %@", err.localizedDescription)
+                }
+                DispatchQueue.main.async { self?.applyRemoteOffer(desc, peerConnection) }
+            })
+            return
+        }
+        applyRemoteOffer(desc, peerConnection)
+    }
+
+    private func applyRemoteOffer(_ desc: RTCSessionDescription, _ peerConnection: RTCPeerConnection) {
         peerConnection.setRemoteDescription(desc, completionHandler: { [weak self](error) in
             guard let self = self else { return }
             if let error = error {
                 Cache.log.error("WebRTCClient.handleRemoteOfferDescription failure: %@", error.localizedDescription)
-                self.delegate?.closeCall()
+                if self.linia2Established {
+                    DispatchQueue.main.async { self.delegate?.linia2NegotiationFailed("remoteOffer") }
+                } else {
+                    self.delegate?.closeCall()
+                }
                 return
             }
             self.answer(peerConnection)
@@ -522,14 +642,24 @@ extension WebRTCClient {
 
     // Processes remote answer SDP.
     func handleRemoteAnswerDescription(_ desc: RTCSessionDescription) {
+        // LINIA2: запоздалый/повторный answer (мы уже откатили свой offer) — не ошибка звонка.
+        if let pc = localPeer, pc.signalingState != .haveLocalOffer, linia2Established {
+            onDiagEvent?(["type": "answer-ignored", "signaling": pc.signalingState.rawValue])
+            return
+        }
         self.localPeer?.setRemoteDescription(desc, completionHandler: { (error) in
             if let e = error {
                 Cache.log.error("WebRTCClient.handleRemoteAnswerDescription failure: %@", e.localizedDescription)
-                self.delegate?.closeCall()
+                if self.linia2Established {
+                    DispatchQueue.main.async { self.delegate?.linia2NegotiationFailed("remoteAnswer") }
+                } else {
+                    self.delegate?.closeCall()
+                }
                 return
             }
             self.remoteAnswerApplied = true
             self.delegate?.markConnectionSetupComplete()
+            DispatchQueue.main.async { self.delegate?.linia2NegotiationDone(remoteOffer: false) }
         })
     }
 }
@@ -577,11 +707,19 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         onDiagEvent?(["type": "ice", "state": Self.iceName(newState)])
+        if newState == .connected || newState == .completed { linia2Established = true }
+        // LINIA2: состояние — экрану звонка (переподключение при обрыве, ICE restart).
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.localPeer === peerConnection else { return }
+            self.delegate?.linia2IceStateChanged(newState)
+        }
         switch newState {
         case .closed:
-            fallthrough
-        case .failed:
             self.delegate?.closeCall()
+        case .failed:
+            // LINIA2: соединённый звонок при обрыве не завершаем — экран звонка делает ICE restart и ждёт до 30 с.
+            // Не соединился ни разу — как раньше, завершаем.
+            if !linia2Established { self.delegate?.closeCall() }
         case .connected, .completed:
             // LINIA2: соединение установлено — экран звонка показывает «Идёт звонок» и таймер.
             DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallConnected, object: nil) }
@@ -758,6 +896,29 @@ class CallViewController: UIViewController {
     /// LINIA2: диагностика звонка на сервер (/invite/api/call-diag).
     private(set) var diag: Linia2CallDiag?
 
+    // LINIA2: переподключение при смене сети / обрыве (как в Telegram/WhatsApp): звонок держится до kReconnectGrace с,
+    // на экране «Переподключение…»; не восстановилось — «Связь потеряна».
+    static let kReconnectGrace: TimeInterval = 30
+    /// Начало текущего переподключения (nil — связь в порядке).
+    private(set) var reconnectingSince: Date?
+    /// Нет связи с сервером Tinode (веб-сокет закрыт или топик ещё не подписан заново).
+    private var wsDown = false
+    /// Медиапуть потерян (ICE disconnected/failed, сменилась сеть) — до успешного ICE restart.
+    private var iceDown = false
+    /// Нужно сделать ICE restart, как только будет связь с сервером.
+    private var needIceRestart = false
+    /// Наш ICE restart offer отправлен, ждём answer.
+    private var iceRestartPending = false
+    private var lastIceRestartAt: Date?
+    private var iceRestartAttempts = 0
+    private var iceDisconnectedAt: Date?
+    private var reconnectTimer: Timer?
+    private var reconnectTicks = 0
+    private var resubscribing = false
+    private(set) var connectionLost = false
+    private var pathMonitor: NWPathMonitor?
+    private var lastPathKey: String?
+
     class InfoListener: TinodeEventListener {
         private weak var delegate: TinodeVideoCallDelegate?
         init(delegateEventsTo callDelegate: TinodeVideoCallDelegate) {
@@ -782,6 +943,15 @@ class CallViewController: UIViewController {
             default:
                 debugPrint(info)
             }
+        }
+
+        // LINIA2: обрыв и восстановление связи с сервером — звонок не завершаем (см. «Переподключение»).
+        func onDisconnect(byServer: Bool, code: URLSessionWebSocketTask.CloseCode, reason: String) {
+            DispatchQueue.main.async { self.delegate?.linia2SignalingDown(reason: reason) }
+        }
+
+        func onLogin(code: Int, text: String) {
+            DispatchQueue.main.async { self.delegate?.linia2SignalingLoggedIn(code: code) }
         }
     }
 
@@ -842,6 +1012,10 @@ class CallViewController: UIViewController {
         let d = Linia2CallDiag(topic: topic?.name ?? "", seq: { [weak self] in self?.callSeqId ?? 0 }, client: webRTCClient)
         diag = d
         webRTCClient.onDiagEvent = { [weak d] ev in d?.add(ev) }
+        d.stateProvider = { [weak self] in
+            guard let self = self else { return [:] }
+            return ["rc": self.reconnectingSince != nil ? 1 : 0, "wsDown": self.wsDown ? 1 : 0, "iceDown": self.iceDown ? 1 : 0]
+        }
         let st = UIApplication.shared.applicationState
         d.start(["dir": callDirection == .outgoing ? "out" : "in", "audioOnly": isAudioOnlyCall,
                  "app": st == .active ? "active" : (st == .background ? "background" : "inactive"),
@@ -981,6 +1155,7 @@ class CallViewController: UIViewController {
         webRTCClient.delegate = self
         cameraManager.delegate = self
         Cache.tinode.addListener(self.listener)
+        linia2StartPathMonitor()
         // Prevent screen from dimming/going to sleep.
         UIApplication.shared.isIdleTimerDisabled = true
         // LINIA2: аудиозвонок у уха — экран гаснет (датчик приближения).
@@ -1273,7 +1448,11 @@ class CallViewController: UIViewController {
         }
         guard !closed else { return }
         closed = true
-        diag?.end(connectedAt != nil ? "connected" : "not-connected")
+        diag?.end(connectionLost ? "connection-lost" : (connectedAt != nil ? "connected" : "not-connected"))
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
         playSoundEffect(nil)
         uiTimer?.invalidate()
         uiTimer = nil
@@ -1468,6 +1647,53 @@ extension CallViewController: WebRTCClientDelegate {
             self.linia2SetAvatarVisible(!remoteLive)
         }
     }
+
+    func linia2IceStateChanged(_ state: RTCIceConnectionState) {
+        guard started, !closed, !connectionLost else { return }
+        switch state {
+        case .connected, .completed:
+            iceDisconnectedAt = nil
+            if iceDown { linia2CheckIceRecovered(reason: "ice-connected") }
+        case .disconnected:
+            guard linia2WasConnected else { return }
+            // WebRTC часто сам восстанавливается за 1–2 с; дольше — «Переподключение…» и ICE restart.
+            iceDisconnectedAt = Date()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self = self, !self.closed, let d = self.iceDisconnectedAt, Date().timeIntervalSince(d) >= 1.9 else { return }
+                self.needIceRestart = true
+                self.linia2SetLinkState(ice: true, reason: "ice-disconnected")
+                self.linia2MaybeRestartIce()
+            }
+        case .failed:
+            guard linia2WasConnected else { return }
+            needIceRestart = true
+            iceRestartPending = false
+            linia2SetLinkState(ice: true, reason: "ice-failed")
+            linia2MaybeRestartIce()
+        default:
+            break
+        }
+    }
+
+    func linia2NegotiationDone(remoteOffer: Bool) {
+        guard !closed else { return }
+        if remoteOffer {
+            // Собеседник сам сделал ICE restart — наш больше не нужен.
+            needIceRestart = false
+        }
+        if iceRestartPending || remoteOffer { diag?.add(["type": "ice-restart", "state": remoteOffer ? "answered" : "answer-applied"]) }
+        iceRestartPending = false
+        // Проверить чуть позже: после смены ufrag ICE может на мгновение уйти в checking.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.linia2CheckIceRecovered(reason: "ice-restarted") }
+    }
+
+    func linia2NegotiationFailed(_ stage: String) {
+        guard !closed, !connectionLost else { return }
+        diag?.add(["type": "error", "where": stage])
+        iceRestartPending = false
+        needIceRestart = true
+        if reconnectingSince == nil { linia2SetLinkState(ice: true, reason: "negotiation-failed") }
+    }
 }
 
 extension CallViewController: TinodeVideoCallDelegate {
@@ -1548,6 +1774,270 @@ extension CallViewController: TinodeVideoCallDelegate {
         self.dialingAnimation(on: true)
         self.playSoundEffect("call-out", loop: true)
     }
+
+    func linia2SignalingDown(reason: String) {
+        guard started, !closed, !connectionLost else { return }
+        diag?.add(["type": "signaling", "state": "down", "reason": reason])
+        // Звонок продолжается (медиа может идти напрямую); hang-up не отправляем — сервер ждёт переподключения.
+        linia2SetLinkState(ws: true, reason: "ws-closed")
+    }
+
+    func linia2SignalingLoggedIn(code: Int) {
+        guard started, !closed, !connectionLost, wsDown, code < 300 else { return }
+        linia2Resubscribe()
+    }
+}
+
+
+// MARK: - LINIA2: переподключение звонка (смена сети Wi‑Fi ↔ LTE/5G, смена IP, кратковременный обрыв)
+//
+// Звонок не завершается при потере связи: экран показывает «Переподключение…», CallKit-звонок и аудиосессия
+// не трогаются. Восстановление:
+//  • веб-сокет Tinode закрылся → переподключение без экспоненциальной паузы (каждые 2 с), вход (autoLogin),
+//    повторная подписка на топик; звонок продолжается с тем же seq (hang-up не отправляется);
+//  • медиапуть потерян (ICE disconnected > 2 с / failed, сменилась сеть — NWPathMonitor) → ICE restart:
+//    offer с новыми ufrag/pwd через Tinode «offer» (тот же seq), собеседник отвечает «answer»; со 2-й попытки —
+//    только через TURN (relay, в т.ч. TURN/TCP);
+//  • не восстановилось за kReconnectGrace (30 с) → «Связь потеряна», CallKit reportCall(endedAt:reason: .failed).
+extension CallViewController {
+    var linia2StatusColor: UIColor {
+        if connectionLost { return L2.hex(0xFF6B5E) }
+        return reconnectingSince != nil || isPoorConnection || isHeld ? L2.hex(0xFFB547) : L2.hex(0xC9D1DE)
+    }
+
+    /// Звонок уже соединялся (иначе — обычные правила: не соединился — завершаем).
+    private var linia2WasConnected: Bool { connectedAt != nil || webRTCClient.linia2Established }
+
+    /// Обновить «упало/восстановилось»; начать или закончить переподключение.
+    func linia2SetLinkState(ws: Bool? = nil, ice: Bool? = nil, reason: String) {
+        guard started, !closed, !connectionLost else { return }
+        if let w = ws { wsDown = w }
+        if let i = ice { iceDown = i }
+        if wsDown || iceDown {
+            if reconnectingSince == nil {
+                reconnectingSince = Date()
+                reconnectTicks = 0
+                iceRestartAttempts = 0
+                Cache.log.info("CallVC: reconnecting (%@)", reason)
+                diag?.add(["type": "reconnect", "state": "start", "reason": reason, "ws": wsDown, "ice": iceDown])
+                reconnectTimer?.invalidate()
+                reconnectTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.linia2ReconnectStep() }
+            } else {
+                diag?.add(["type": "reconnect", "state": "update", "reason": reason, "ws": wsDown, "ice": iceDown])
+            }
+        } else if let since = reconnectingSince {
+            reconnectingSince = nil
+            reconnectTimer?.invalidate()
+            reconnectTimer = nil
+            iceRestartAttempts = 0
+            Cache.log.info("CallVC: reconnected (%@)", reason)
+            diag?.add(["type": "reconnect", "state": "done", "reason": reason, "ms": Int(Date().timeIntervalSince(since) * 1000)])
+        }
+        stateLabel.text = linia2StatusText
+        stateLabel.textColor = linia2StatusColor
+        Linia2CallCenter.shared.refreshBanner()
+    }
+
+    /// Раз в секунду, пока идёт переподключение.
+    private func linia2ReconnectStep() {
+        guard let since = reconnectingSince, !closed, !connectionLost else {
+            reconnectTimer?.invalidate()
+            reconnectTimer = nil
+            return
+        }
+        if Date().timeIntervalSince(since) >= Self.kReconnectGrace {
+            linia2ConnectionLost()
+            return
+        }
+        reconnectTicks += 1
+        let tinode = Cache.tinode
+        if !tinode.isConnected {
+            wsDown = true
+            // Без экспоненциальной паузы SDK (после 15 с обрыва она уже 8–16 с): пробуем каждые 2 с.
+            // interactively: false — не перебивает уже идущую попытку подключения.
+            if reconnectTicks % 2 == 0 {
+                DispatchQueue.global(qos: .userInitiated).async { _ = tinode.reconnectNow(interactively: false, reset: false) }
+            }
+        } else if wsDown, tinode.isConnectionAuthenticated {
+            linia2Resubscribe()
+        }
+        if !wsDown {
+            linia2MaybeRestartIce()
+            linia2CheckIceRecovered(reason: "ice-restarted")
+        }
+    }
+
+    /// Сервер снова доступен: подписка на топик (сообщения звонка приходят только подписчикам), затем — ICE restart.
+    private func linia2Resubscribe() {
+        guard wsDown, !closed, !connectionLost, !resubscribing, let topic = topic else { return }
+        if topic.attached {
+            linia2SignalingRestored()
+            return
+        }
+        resubscribing = true
+        diag?.add(["type": "resubscribe"])
+        topic.subscribe().then(
+            onSuccess: { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.resubscribing = false
+                    self?.linia2SignalingRestored()
+                }
+                return nil
+            },
+            onFailure: { [weak self, weak topic] err in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.resubscribing = false
+                    // Уже подписан другим экраном (чат) — тоже годится; иначе повторим на следующем шаге.
+                    if topic?.attached ?? false {
+                        self.linia2SignalingRestored()
+                    } else {
+                        self.diag?.add(["type": "error", "where": "resubscribe", "err": err.localizedDescription])
+                    }
+                }
+                return nil
+            })
+    }
+
+    private func linia2SignalingRestored() {
+        guard wsDown else { return }
+        diag?.add(["type": "signaling", "state": "restored", "seq": callSeqId])
+        linia2SetLinkState(ws: false, reason: "ws-restored")
+        linia2MaybeRestartIce()
+    }
+
+    /// ICE restart, если он нужен и есть связь с сервером (offer/answer идут через Tinode).
+    private func linia2MaybeRestartIce() {
+        guard !closed, !connectionLost, !wsDown, linia2WasConnected, callSeqId > 0,
+              Cache.tinode.isConnected, topic?.attached ?? false else { return }
+        let sinceLast = lastIceRestartAt.map { Date().timeIntervalSince($0) } ?? .infinity
+        if iceRestartPending {
+            // Ответ на наш restart не пришёл (потерялся при обрыве) — повторяем через 6 с.
+            guard sinceLast > 6 else { return }
+        } else if !needIceRestart {
+            // Restart прошёл, но ICE ещё не соединился — даём 6 с, затем следующая попытка (уже через TURN).
+            guard iceDown, sinceLast > 6 else { return }
+        }
+        if sinceLast < 2 { return }
+        let relay = iceRestartAttempts >= 1
+        guard webRTCClient.linia2RestartIce(relayOnly: relay) else { return }
+        iceRestartAttempts += 1
+        lastIceRestartAt = Date()
+        iceRestartPending = true
+        needIceRestart = false
+        Cache.log.info("CallVC: ICE restart #%d (relay: %@)", iceRestartAttempts, relay ? "yes" : "no")
+    }
+
+    /// После ICE restart: соединение есть и переговоры закончены — медиапуть восстановлен.
+    private func linia2CheckIceRecovered(reason: String) {
+        guard iceDown, !needIceRestart, !iceRestartPending, webRTCClient.signalingIsStable, webRTCClient.iceIsConnected else { return }
+        iceDisconnectedAt = nil
+        linia2SetLinkState(ice: false, reason: reason)
+    }
+
+    /// Не восстановилось за 30 с: «Связь потеряна» на экране ~3 с, затем экран закрывается.
+    private func linia2ConnectionLost() {
+        guard !closed, !connectionLost else { return }
+        let since = reconnectingSince ?? Date()
+        connectionLost = true
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        Cache.log.info("CallVC: connection lost — ending call")
+        diag?.add(["type": "reconnect", "state": "lost", "ms": Int(Date().timeIntervalSince(since) * 1000), "ws": wsDown, "ice": iceDown])
+        stateLabel.text = linia2StatusText
+        stateLabel.textColor = linia2StatusColor
+        Linia2CallCenter.shared.refreshBanner()
+        if ownsCall { Cache.callManager.failCallInProgress() }
+        playSoundEffect("call-end")
+        UIAccessibility.post(notification: .announcement, argument: "Связь потеряна")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self = self, !self.closed else { return }
+            let shown = self.viewIfLoaded?.window != nil
+            self.handleCallClose()
+            if !shown { UiUtils.showToast(message: "Звонок завершён: связь потеряна") }
+        }
+    }
+
+    // MARK: Смена сети (NWPathMonitor)
+
+    func linia2StartPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let m = NWPathMonitor()
+        m.pathUpdateHandler = { [weak self] path in
+            let ok = path.status == .satisfied
+            let key = (ok ? "ok|" : "none|") + (path.availableInterfaces.first?.name ?? "")
+            let ifType: String = path.usesInterfaceType(.wifi) ? "wifi" : (path.usesInterfaceType(.cellular) ? "cellular" :
+                                 (path.usesInterfaceType(.wiredEthernet) ? "wired" : "other"))
+            DispatchQueue.main.async { self?.linia2PathChanged(key: key, satisfied: ok, type: ifType) }
+        }
+        m.start(queue: DispatchQueue(label: "info.codix.liniya2.call-path"))
+        pathMonitor = m
+    }
+
+    private func linia2PathChanged(key: String, satisfied: Bool, type: String) {
+        guard !closed, !connectionLost else { return }
+        guard let prev = lastPathKey else { lastPathKey = key; return }   // первое значение — текущая сеть
+        guard prev != key else { return }
+        lastPathKey = key
+        diag?.add(["type": "net", "status": satisfied ? "ok" : "none", "if": type, "key": key])
+        guard linia2WasConnected else { return }
+        // Сеть сменилась: старые пути ICE и TCP-сокет сервера, скорее всего, мертвы. Звонок НЕ завершаем,
+        // CallKit/аудиосессию не трогаем: «Переподключение…», новый сокет к серверу и ICE restart.
+        needIceRestart = true
+        linia2SetLinkState(ice: true, reason: satisfied ? "path-change" : "path-lost")
+        guard satisfied else { return }
+        DispatchQueue.global(qos: .userInitiated).async { _ = Cache.tinode.reconnectNow(interactively: true, reset: true) }
+    }
+
+    // MARK: Автотесты: эмуляция обрыва сети (-l2-uitest)
+
+    /// Симулятор нельзя отключить от сети с хоста. Кнопки (только под -l2-uitest) эмулируют обрыв на N секунд:
+    ///  1) веб-сокет Tinode закрывается и переподключение запрещено N с (настоящий обрыв сигнализации — сервер
+    ///     видит отключение участника);
+    ///  2) отправка RTP останавливается (encodings.isActive = false) — исходящий звук пропадает; приём от собеседника
+    ///     при этом идёт (входящий UDP с хоста не перекрыть);
+    ///  3) медиапуть считается потерянным, как при смене сети (NWPathMonitor): «Переподключение…» и ICE restart
+    ///     через Tinode offer/answer, как только сервер снова доступен.
+    func linia2AddUITestHooks() {
+        guard ProcessInfo.processInfo.arguments.contains("-l2-uitest") else { return }
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for sec in [5, 15, 35] {
+            let b = UIButton(type: .custom)
+            b.tag = sec
+            b.backgroundColor = UIColor.white.withAlphaComponent(0.03)
+            b.accessibilityIdentifier = "l2.call.uitest.drop\(sec)"
+            b.accessibilityLabel = "Тест: обрыв связи \(sec) с"
+            b.addTarget(self, action: #selector(linia2UITestDrop(_:)), for: .touchUpInside)
+            b.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            stack.addArrangedSubview(b)
+        }
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 2),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 120),
+        ])
+    }
+
+    @objc func linia2UITestDrop(_ sender: UIButton) {
+        linia2SimulateOutage(seconds: TimeInterval(sender.tag))
+    }
+
+    func linia2SimulateOutage(seconds: TimeInterval) {
+        guard started, !closed else { return }
+        diag?.add(["type": "uitest-outage", "s": Int(seconds)])
+        webRTCClient.linia2SetSendingPaused(true)
+        needIceRestart = true
+        linia2SetLinkState(ice: true, reason: "uitest-outage")
+        Cache.tinode.linia2SimulateOutage(seconds: seconds)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self = self, !self.closed else { return }
+            self.webRTCClient.linia2SetSendingPaused(false)
+        }
+    }
 }
 
 
@@ -1565,6 +2055,8 @@ extension CallViewController {
 
     /// Текст состояния: «Соединение…», «Идёт звонок мм:сс», «Плохая связь · мм:сс», «На удержании».
     var linia2StatusText: String {
+        if connectionLost { return "Связь потеряна" }
+        if reconnectingSince != nil { return "Переподключение…" }
         if isHeld { return "На удержании" }
         guard let s = connectedAt else {
             return callDirection == .outgoing && callSeqId > 0 ? "Вызов…" : "Соединение…"
@@ -1728,6 +2220,7 @@ extension CallViewController {
         speakerToggleButton.accessibilityIdentifier = "l2.call.speaker"
         // «Динамик» доступен сразу (и во время дозвона): переключение выхода не зависит от соединения.
         speakerToggleButton.isEnabled = true
+        linia2AddUITestHooks()
     }
 
     /// Круглая кнопка 72 pt с подписью.
@@ -1882,7 +2375,7 @@ extension CallViewController {
         if let u = unstableUntil, u < Date() { unstableUntil = nil }
         isPoorConnection = unstableUntil != nil || (connectedAt != nil && lastStatsPoor)
         stateLabel.text = linia2StatusText
-        stateLabel.textColor = isPoorConnection || isHeld ? L2.hex(0xFFB547) : L2.hex(0xC9D1DE)
+        stateLabel.textColor = linia2StatusColor
         if let c = connectedAt, Date().timeIntervalSince(c) < 10 || Int(Date().timeIntervalSince1970) % 2 == 0 { linia2CheckQuality() }
     }
 
@@ -1928,7 +2421,7 @@ extension CallViewController {
                 self.lastStatsPoor = poor
                 self.isPoorConnection = poor || self.unstableUntil != nil
                 self.stateLabel.text = self.linia2StatusText
-                self.stateLabel.textColor = self.isPoorConnection || self.isHeld ? L2.hex(0xFFB547) : L2.hex(0xC9D1DE)
+                self.stateLabel.textColor = self.linia2StatusColor
             }
         }
     }

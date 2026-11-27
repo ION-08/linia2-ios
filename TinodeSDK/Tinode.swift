@@ -1048,6 +1048,20 @@ public class Tinode {
         if changed { _ = reconnectNow(interactively: true, reset: false) }
     }
 
+    /// LINIA2 (только автотесты, -l2-uitest): эмуляция обрыва сети на `seconds` с — веб-сокет закрывается,
+    /// повторное подключение запрещено до срока, затем — сразу переподключение (вход — как обычно, autoLogin).
+    public func linia2SimulateOutage(seconds: TimeInterval) {
+        operationsQueue.sync {
+            connection?.linia2BlockedUntil = Date().addingTimeInterval(seconds)
+            connection?.linia2DropSocket()
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds + 0.1) { [weak self] in
+            guard let self = self else { return }
+            self.operationsQueue.sync { self.connection?.linia2BlockedUntil = nil }
+            _ = self.reconnectNow(interactively: true, reset: false)
+        }
+    }
+
     public func disconnect() {
         operationsQueue.sync {
             // Remove auto-login data.

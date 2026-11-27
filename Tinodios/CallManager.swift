@@ -361,6 +361,24 @@ extension CallManager: CallManagerImpl {
         }
     }
 
+    /// LINIA2: связь потеряна (переподключение не удалось за 30 с) — звонок завершается как «не удался»:
+    /// CallKit reportCall(endedAt:reason: .failed). Экран звонка закрывается сам (показав «Связь потеряна»),
+    /// поэтому .linia2CallEnded здесь не отправляем.
+    func failCallInProgress() {
+        guard let call = self.callInProgress else { return }
+        Cache.log.info("Call failed (connection lost): topic=%@, seq=%d", call.topic, call.seq)
+        L2Log.event("l2_call_lost", ["kind": call.audioOnly ? "audio" : "video",
+                                     "dir": call.from == Cache.tinode.myUid ? "out" : "in"])
+        self.callInProgress = nil
+        self.timer?.invalidate()
+        self.timer = nil
+        if call.seq > 0 { remember(call.topic, call.seq) }
+        CallManager.deactivateAudioSession()
+        if CallManager.useCallKit {
+            callDelegate.reportEnded(uuid: call.uuid, reason: .failed)
+        }
+    }
+
     func setHeld(_ held: Bool) {
         DispatchQueue.main.async { NotificationCenter.default.post(name: .linia2CallHeld, object: nil, userInfo: ["held": held]) }
     }

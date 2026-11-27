@@ -10,6 +10,11 @@
 //  микрофон и камера выкл/вкл → «Положить трубку» (кладёт iOS) → экран звонка закрылся → запись в «Звонках».
 //  Linia2CallPeerTests — второй симулятор, пользователь C: ждёт входящий, принимает, держит, проверяет кнопки,
 //  ждёт завершения со стороны A и запись в «Звонках».
+//  7–9. Обрыв сети посреди звонка iOS → веб (аудио) на 5, 15 и 35 с: тестовые кнопки экрана звонка (только под
+//  -l2-uitest) закрывают веб-сокет Tinode и запрещают переподключение на N с, останавливают отправку RTP и
+//  помечают медиапуть потерянным (как при смене сети) → после паузы — вход, подписка, ICE restart (offer/answer
+//  через Tinode, тот же seq). 5 и 15 с: «Переподключение…», затем снова «Идёт звонок» и байты аудио растут в обе
+//  стороны; 35 с: через 30 с «Связь потеряна» и экран звонка закрывается. Веб (B) в это время держит звонок.
 //
 //  Окружение (TEST_RUNNER_*): L2_LOGIN/L2_PASSWORD (A), L2_PEER_NAME (B, «Собеседник CI»),
 //  L2_C_LOGIN/L2_C_PASSWORD (C), L2_C_NAME («Собеседник iOS»), L2_A_NAME (имя A у C, «Тест CI»).
@@ -184,6 +189,33 @@ class Linia2CallTestBase: XCTestCase {
         wait(any("l2.call.state"), "экран звонка после «Принять»", timeout: 30)
     }
 
+    /// Байты аудио (приём, передача) из accessibilityValue «arx=N atx=M» у l2.call.state.
+    func audioBytes() -> (rx: Int, tx: Int)? {
+        let e = any("l2.call.state")
+        guard e.exists, let v = e.value as? String else { return nil }
+        let nums = v.split(separator: " ").compactMap { Int($0.split(separator: "=").last ?? "") }
+        return nums.count == 2 ? (nums[0], nums[1]) : nil
+    }
+
+    /// Байты аудио растут в обе стороны (за `timeout` с); возвращает время ожидания или nil.
+    func waitAudioBothWays(timeout: TimeInterval) -> TimeInterval? {
+        let t0 = Date()
+        var base: (rx: Int, tx: Int)?
+        while Date().timeIntervalSince(t0) < timeout {
+            if let b = audioBytes() {
+                if let b0 = base {
+                    if b.rx > b0.rx && b.tx > b0.tx { return Date().timeIntervalSince(t0) }
+                } else {
+                    base = b
+                }
+            }
+            usleep(250_000)
+        }
+        return nil
+    }
+
+    var callStateLabel: String { any("l2.call.state").exists ? any("l2.call.state").label : "нет экрана" }
+
     /// Секунды из «Идёт звонок мм:сс» / «Плохая связь · мм:сс»; nil — не соединено.
     func connectedSeconds() -> Int? {
         let e = any("l2.call.state")
@@ -282,21 +314,26 @@ final class Linia2CallTests: Linia2CallTestBase {
 
     private func login() { ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD")) }
 
-    private func outgoing(to name: String, video: Bool, _ what: String) {
-        login()
-        openChat(with: name)
-        // Собеседник может быть ещё не готов (вход, предыдущий звонок) — до 4 попыток дозвона.
+    /// Позвонить из открытого чата и дождаться соединения: собеседник может быть ещё не готов — до 4 попыток.
+    private func dial(video: Bool, _ what: String) -> Bool {
         for attempt in 1...4 {
             startCall(video: video)
             let end = Date().addingTimeInterval(75)
             while connectedSeconds() == nil && any("l2.call.hangup").exists && Date() < end { usleep(500_000) }
-            if connectedSeconds() != nil { break }
+            if connectedSeconds() != nil { return true }
             screenshot("no-answer-\(attempt)")
             if any("l2.call.hangup").exists { any("l2.call.hangup").tap() }
             assertCallClosed(what + " (не ответили, попытка \(attempt))", timeout: 15)
-            if attempt == 4 { XCTFail("\(what): собеседник не ответил за 4 попытки"); return }
+            if attempt == 4 { XCTFail("\(what): собеседник не ответил за 4 попытки"); return false }
             sleep(15)
         }
+        return false
+    }
+
+    private func outgoing(to name: String, video: Bool, _ what: String) {
+        login()
+        openChat(with: name)
+        guard dial(video: video, what) else { return }
         holdConnected(what)
         toggleMicAndCamera(what)
         hangUp(what)
@@ -351,6 +388,94 @@ final class Linia2CallTests: Linia2CallTestBase {
         hangUp(what)
         assertInCallLog(name: peerName, video: false, what)
         XCTAssertEqual(app.state, .runningForeground, "\(what): вылет")
+    }
+
+    func test7_ReconnectAfter5s() { reconnect(outage: 5) }
+    func test8_ReconnectAfter15s() { reconnect(outage: 15) }
+    func test9_ConnectionLostAfter35s() { reconnect(outage: 35) }
+
+    /// Обрыв сети посреди звонка iOS → веб (аудио) на `outage` с (эмуляция — см. CallViewController.linia2AddUITestHooks).
+    private func reconnect(outage: Int) {
+        let what = "обрыв связи \(outage) с (iOS → веб, аудио)"
+        login()
+        openChat(with: peerName)
+        guard dial(video: false, what) else { return }
+        // До обрыва: звук идёт в обе стороны.
+        XCTAssertNotNil(waitAudioBothWays(timeout: 20), "\(what): до обрыва нет звука в обе стороны (\(callStateLabel))")
+        sleep(5)
+        screenshot("before-drop")
+        let drop = any("l2.call.uitest.drop\(outage)")
+        wait(drop, "тестовая кнопка обрыва \(outage) с").tap()
+        let dropped = Date()
+        // «Переподключение…» — сразу (≤ 3 с).
+        while !callStateLabel.hasPrefix("Переподключение") && Date().timeIntervalSince(dropped) < 3 { usleep(100_000) }
+        XCTAssertTrue(callStateLabel.hasPrefix("Переподключение"), "\(what): нет «Переподключение…» (\(callStateLabel))")
+        screenshot("reconnecting")
+        // Пока связи нет — звонок не завершается и остаётся «Переподключение…».
+        let holdUntil = Double(min(outage, 28)) - 1
+        while Date().timeIntervalSince(dropped) < holdUntil {
+            guard any("l2.call.hangup").exists else {
+                screenshot("закрылся-при-обрыве")
+                XCTFail("\(what): экран звонка закрылся через \(Int(Date().timeIntervalSince(dropped))) с обрыва")
+                return
+            }
+            let l = callStateLabel
+            if !l.hasPrefix("Переподключение") {
+                XCTFail("\(what): во время обрыва состояние «\(l)» через \(Int(Date().timeIntervalSince(dropped))) с")
+                break
+            }
+            usleep(500_000)
+        }
+        if outage < 30 {
+            // Связь вернулась: снова «Идёт звонок» (ICE restart + повторная подписка) не позже чем через 20 с.
+            let end = dropped.addingTimeInterval(TimeInterval(outage + 20))
+            while connectedSeconds() == nil && any("l2.call.hangup").exists && Date() < end { usleep(250_000) }
+            guard connectedSeconds() != nil else {
+                screenshot("не-восстановился")
+                XCTFail("\(what): звонок не восстановился за \(outage + 20) с (\(callStateLabel))")
+                return
+            }
+            let restoredIn = Date().timeIntervalSince(dropped) - Double(outage)
+            screenshot(String(format: "restored-%.0fs", max(0, restoredIn)))
+            // Звук снова идёт в обе стороны.
+            let dt = waitAudioBothWays(timeout: 15)
+            let bytes = audioBytes()
+            let bytesText = bytes == nil ? "нет байтов" : "rx=\(bytes!.rx) tx=\(bytes!.tx)"
+            XCTAssertNotNil(dt, "\(what): после восстановления нет звука в обе стороны (\(callStateLabel), \(bytesText))")
+            screenshot("audio-both-ways")
+            // И держится дальше (ещё 15 с без нового обрыва).
+            let holdEnd = Date().addingTimeInterval(15)
+            while Date() < holdEnd {
+                guard any("l2.call.hangup").exists, connectedSeconds() != nil || callStateLabel.hasPrefix("Плохая") else {
+                    screenshot("обрыв-после-восстановления")
+                    XCTFail("\(what): после восстановления звонок оборвался (\(callStateLabel))")
+                    return
+                }
+                sleep(1)
+            }
+            hangUp(what)
+        } else {
+            // 30 с без связи — «Связь потеряна», затем экран закрывается (сам, без «Завершить»).
+            var lostAt: Date?
+            let end = dropped.addingTimeInterval(45)
+            while Date() < end && any("l2.call.hangup").exists {
+                if callStateLabel == "Связь потеряна" { lostAt = Date(); break }
+                usleep(200_000)
+            }
+            guard let lost = lostAt else {
+                screenshot("нет-связь-потеряна")
+                XCTFail("\(what): нет «Связь потеряна» за 45 с (\(callStateLabel))")
+                return
+            }
+            screenshot("connection-lost")
+            let after = lost.timeIntervalSince(dropped)
+            XCTAssertGreaterThanOrEqual(after, 28, "\(what): «Связь потеряна» слишком рано — через \(Int(after)) с")
+            XCTAssertLessThanOrEqual(after, 36, "\(what): «Связь потеряна» слишком поздно — через \(Int(after)) с")
+            assertCallClosed(what, timeout: 10)
+            // Сеть «вернулась» (35 с) — приложение снова на связи, вылета нет.
+            sleep(8)
+            XCTAssertEqual(app.state, .runningForeground, "\(what): вылет")
+        }
     }
 }
 

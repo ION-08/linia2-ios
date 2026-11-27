@@ -306,7 +306,7 @@ jobs:
           M=$(grep -c "Test Case .* passed" "$OUT/main.log" || true); SK=$(grep -c "Test Case .* skipped" "$OUT/main.log" "$OUT/peer.log" | awk -F: '{s+=$2} END {print s+0}')
           {
             echo "### Звонки (обязательны для выпуска)"
-            echo "- iOS (A): пройдено $M из 5 $(grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && echo ✅ || echo ❌)"
+            echo "- iOS (A): пройдено $M из 8 $(grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && echo ✅ || echo ❌)"
             echo "- iOS (C, принимающий на втором симуляторе): $( [ "$PRC" = 0 ] && echo '✅' || echo "❌ (код $PRC)")"
             echo "- Веб (B): $( [ "$WRC" = 0 ] && echo '✅' || echo "❌ (код $WRC)")"
             echo "- Пропущенных: $SK (допустимо 0)"

@@ -114,6 +114,12 @@ final class Linia2Push: TinodeEventListener {
 
 /// Только технические данные соединения: ICE, тип кандидатов, протокол, аудиотрек, уровень, байты, RTT, потери.
 /// Содержимое разговора не передаётся. Отчёты копятся и отправляются пачками (каждые 5 с и в конце звонка).
+/// Переподключение (смена сети, обрыв): события
+///   reconnect {state: start|update|done|lost, reason, ws, ice, ms} — начало/конец «Переподключение…» (ms — длительность);
+///   ice-restart {relay, signaling} — наш ICE restart offer; ice-restart {state: answer-applied|answered};
+///   signaling {state: down|restored, reason, seq}, resubscribe, net {status, if} — смена сети (NWPathMonitor);
+///   glare {action: ignore|rollback} — встречные offer; uitest-outage {s}, uitest-media {paused} — эмуляция в автотестах.
+/// В stats: rc=1 — идёт переподключение. Пачки, не ушедшие из-за отсутствия сети, отправляются повторно.
 final class Linia2CallDiag {
     let sid = "i" + String(Int(Date().timeIntervalSince1970 * 1000), radix: 36) + String(Int.random(in: 0..<1_000_000), radix: 36)
     private let topic: String
@@ -124,6 +130,8 @@ final class Linia2CallDiag {
     private var timer: Timer?
     private var ended = false
     private let started = Date()
+    /// Дополнительные поля для stats (состояние переподключения) — с главного потока.
+    var stateProvider: (() -> [String: Any])?
 
     init(topic: String, seq: @escaping () -> Int, client: WebRTCClient) {
         self.topic = topic
@@ -211,6 +219,7 @@ final class Linia2CallDiag {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 ev["ice"] = client.iceStateName
+                for (k, v) in self.stateProvider?() ?? [:] { ev[k] = v }
                 self.add(ev)
                 self.flush()
             }
@@ -229,6 +238,14 @@ final class Linia2CallDiag {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         req.httpBody = data
-        URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
+            // Нет сети (обрыв во время звонка) — вернуть пачку в очередь, уйдёт со следующей отправкой.
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard err != nil || status >= 500 else { return }
+            DispatchQueue.main.async {
+                guard let self = self, self.events.count < 300 else { return }
+                self.events.insert(contentsOf: batch, at: 0)
+            }
+        }.resume()
     }
 }
