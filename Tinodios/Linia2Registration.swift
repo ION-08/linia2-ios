@@ -1,7 +1,7 @@
 //
 //  Linia2Registration.swift
 //  Линия 2.0: первый запуск — «Добро пожаловать», код приглашения (6 ячеек), регистрация, вход,
-//  создание PIN-кода и предложение Face ID, затем «Чаты».
+//  создание PIN-кода (вход только по PIN, без Face ID), затем «Чаты».
 //
 
 import UIKit
@@ -93,7 +93,7 @@ enum Linia2Auth {
         }
     }
 
-    /// После входа: если PIN ещё не создан — создать (с предложением Face ID), затем открыть «Чаты».
+    /// После входа: если PIN ещё не создан — создать, затем открыть «Чаты» (Face ID не предлагается — вход только по PIN).
     static func finishLogin(from nav: UINavigationController?) {
         if Linia2AppLock.shared.isEnabled || nav == nil {
             UiUtils.routeToChatListVC()
@@ -769,7 +769,7 @@ final class Linia2RegisterViewController: Linia2FormViewController, UITextFieldD
     }
 }
 
-// MARK: - г) Создание PIN-кода (в онбординге) и предложение Face ID
+// MARK: - г) Создание PIN-кода (в онбординге)
 
 final class Linia2PinOnboardingViewController: UIViewController {
     override var preferredStatusBarStyle: UIStatusBarStyle { .default }   // Дизайн: по теме (в светлой «белые часы» были невидимы)
@@ -779,9 +779,9 @@ final class Linia2PinOnboardingViewController: UIViewController {
         view.backgroundColor = L2.background
         navigationItem.hidesBackButton = true
         let pin = Linia2PinViewController(mode: .setNew, embedded: true)
-        pin.onFinish = { [weak self] ok in
+        pin.onFinish = { ok in
             guard ok else { return }
-            self?.offerBiometrics()
+            UiUtils.routeToChatListVC()
         }
         addChild(pin)
         pin.view.translatesAutoresizingMaskIntoConstraints = false
@@ -794,57 +794,5 @@ final class Linia2PinOnboardingViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: animated)
-    }
-
-    private func offerBiometrics() {
-        guard let name = Linia2AppLock.shared.biometryName else {
-            UiUtils.routeToChatListVC()
-            return
-        }
-        let vc = Linia2BiometryOfferViewController(name: name)
-        navigationController?.pushViewController(vc, animated: true)
-    }
-}
-
-final class Linia2BiometryOfferViewController: Linia2FormViewController {
-    private let name: String
-
-    init(name: String) {
-        self.name = name
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    required init?(coder: NSCoder) { return nil }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        navigationItem.hidesBackButton = true
-        let icon = UIImageView(image: L2.symbol(name == "Face ID" ? "faceid" : "touchid", 72, .light))
-        icon.tintColor = L2.accent
-        icon.contentMode = .center
-        icon.heightAnchor.constraint(equalToConstant: 110).isActive = true
-        let titles = bigTitle("Включить \(name)?", "Открывайте «Линия 2.0» по \(name) — быстрее, чем вводить PIN-код. PIN останется запасным способом.")
-        let yes = L2Button("Включить \(name)")
-        yes.addTarget(self, action: #selector(enable), for: .touchUpInside)
-        let no = L2Button("Не сейчас", kind: .secondary)
-        no.addTarget(self, action: #selector(skip), for: .touchUpInside)
-        stack.addArrangedSubview(icon)
-        titles.forEach { stack.addArrangedSubview($0) }
-        if let last = titles.last { stack.setCustomSpacing(34, after: last) }
-        stack.addArrangedSubview(yes)
-        stack.addArrangedSubview(no)
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: animated)
-    }
-
-    @objc private func enable() {
-        Linia2AppLock.shared.enableBiometrics { _ in UiUtils.routeToChatListVC() }
-    }
-
-    @objc private func skip() {
-        UiUtils.routeToChatListVC()
     }
 }

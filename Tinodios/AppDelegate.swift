@@ -100,7 +100,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         DispatchQueue.main.async { Linia2Failover.shared.start() }   // LINIA2_FAILOVER: резервные адреса + «Подключение…»
         // LINIA2: тема и акцент.
         Linia2Theme.apply(to: window)
-        // LINIA2: блокировка приложения PIN-кодом / Face ID.
+        // LINIA2: блокировка приложения PIN-кодом (Face ID отключён).
         Linia2AppLock.shared.start()
 
         let baseDb = BaseDb.sharedInstance

@@ -1,11 +1,12 @@
 //
 //  Linia2AppLock.swift
-//  Линия 2.0: блокировка приложения PIN-кодом или Face ID / Touch ID (включается в настройках).
-//  PIN (4 цифры) хранится в Keychain только как солёный хеш SHA-256, доступный лишь на этом устройстве.
+//  Линия 2.0: блокировка приложения PIN-кодом (включается в настройках).
+//  PIN (4–6 цифр) хранится в Keychain только как солёный хеш SHA-256, доступный лишь на этом устройстве.
+//  Вход — ТОЛЬКО по PIN: Face ID / Touch ID отключены полностью (LocalAuthentication не используется,
+//  чтобы на том же экране можно было ввести код паники и чтобы биометрию нельзя было применить принудительно).
 //
 
 import CryptoKit
-import LocalAuthentication
 import Security
 import UIKit
 
@@ -65,7 +66,8 @@ final class Linia2AppLock {
     static let shared = Linia2AppLock()
 
     private let kEnabled = "linia2.applock.enabled"
-    private let kBiometrics = "linia2.applock.biometrics"
+    /// Ключ прежней настройки «Разблокировка по Face ID» — только чтобы стереть её у обновившихся.
+    private let kBiometricsLegacy = "linia2.applock.biometrics"
     private let kPinLength = "linia2.applock.pinlength"
     private let kLockAfter: TimeInterval = 30   // блокировать после 30 с в фоне
 
@@ -76,23 +78,8 @@ final class Linia2AppLock {
 
     var isEnabled: Bool { UserDefaults.standard.bool(forKey: kEnabled) && Linia2PinStore.exists }
 
-    var useBiometrics: Bool {
-        get { UserDefaults.standard.bool(forKey: kBiometrics) }
-        set { UserDefaults.standard.set(newValue, forKey: kBiometrics) }
-    }
-
-    /// Тип биометрии на устройстве: "Face ID", "Touch ID" или nil.
-    var biometryName: String? {
-        let ctx = LAContext()
-        guard ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return nil }
-        switch ctx.biometryType {
-        case .faceID: return "Face ID"
-        case .touchID: return "Touch ID"
-        default: return nil
-        }
-    }
-
     func start() {
+        UserDefaults.standard.removeObject(forKey: kBiometricsLegacy)
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(willResignActive), name: UIApplication.willResignActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -120,21 +107,8 @@ final class Linia2AppLock {
         return true
     }
 
-    /// Включить разблокировку по Face ID / Touch ID (с подтверждением системы).
-    func enableBiometrics(completion: @escaping (Bool) -> Void) {
-        let ctx = LAContext()
-        ctx.localizedCancelTitle = "Отмена"
-        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Включить разблокировку «Линия 2.0»") { ok, _ in
-            DispatchQueue.main.async {
-                self.useBiometrics = ok
-                completion(ok)
-            }
-        }
-    }
-
     func disable() {
         UserDefaults.standard.set(false, forKey: kEnabled)
-        useBiometrics = false
         Linia2PinStore.delete()
     }
 
@@ -294,7 +268,7 @@ final class Linia2PinViewController: UIViewController {
         let pad = UIStackView()
         pad.axis = .vertical
         pad.spacing = 16
-        let rows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["bio", "0", "del"]]
+        let rows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["none", "0", "del"]]
         for row in rows {
             let h = UIStackView()
             h.axis = .horizontal
@@ -349,13 +323,6 @@ final class Linia2PinViewController: UIViewController {
         resetTexts()
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        if mode == .unlock && Linia2AppLock.shared.useBiometrics && Linia2AppLock.shared.biometryName != nil {
-            biometricTapped()
-        }
-    }
-
     private func rebuildDots() {
         dots.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for _ in 0..<pinLength {
@@ -374,8 +341,7 @@ final class Linia2PinViewController: UIViewController {
         switch mode {
         case .unlock:
             titleLabel.text = "Введите PIN-код"
-            hintLabel.text = Linia2AppLock.shared.useBiometrics && Linia2AppLock.shared.biometryName != nil
-                ? "или используйте \(Linia2AppLock.shared.biometryName ?? "Face ID")" : "для входа в «Линия 2.0»"
+            hintLabel.text = "для входа в «Линия 2.0»"
         case .confirmOld:
             titleLabel.text = "Текущий PIN-код"
             hintLabel.text = "Введите текущий PIN-код"
@@ -407,15 +373,10 @@ final class Linia2PinViewController: UIViewController {
             b.setImage(L2.symbol("delete.left", 24), for: .normal)
             b.accessibilityLabel = "Стереть"
             b.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
-        case "bio":
-            if mode == .unlock && Linia2AppLock.shared.useBiometrics, let name = Linia2AppLock.shared.biometryName {
-                b.setImage(L2.symbol(name == "Face ID" ? "faceid" : "touchid", 30), for: .normal)
-                b.tintColor = L2.accent
-                b.accessibilityLabel = name
-                b.addTarget(self, action: #selector(biometricTapped), for: .touchUpInside)
-            } else {
-                b.isEnabled = false
-            }
+        case "none":
+            // Место бывшей кнопки Face ID — пустое (вход только по PIN).
+            b.isEnabled = false
+            b.isAccessibilityElement = false
         default:
             b.setTitle(key, for: .normal)
             b.titleLabel?.font = L2.rounded(32, .medium)
@@ -502,15 +463,6 @@ final class Linia2PinViewController: UIViewController {
         }
     }
 
-    @objc private func biometricTapped() {
-        let ctx = LAContext()
-        ctx.localizedCancelTitle = "Ввести PIN-код"
-        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
-                           localizedReason: "Разблокировать «Линия 2.0»") { ok, _ in
-            DispatchQueue.main.async { if ok { self.onFinish?(true) } }
-        }
-    }
-
     @objc private func forgotTapped() {
         let a = UIAlertController(title: "Забыли PIN-код?",
                                   message: "Чтобы сбросить PIN-код, нужно выйти из аккаунта и снова войти по логину и паролю.",
@@ -530,7 +482,6 @@ final class Linia2PinViewController: UIViewController {
 
 final class Linia2AppLockSettingsViewController: UITableViewController {
     private let lockSwitch = UISwitch()
-    private let bioSwitch = UISwitch()
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { return nil }
@@ -539,9 +490,8 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
         super.viewDidLoad()
         title = "Блокировка приложения"
         lockSwitch.onTintColor = L2.accentStrong
-        bioSwitch.onTintColor = L2.accentStrong
+        lockSwitch.accessibilityIdentifier = "l2.applock.switch"
         lockSwitch.addTarget(self, action: #selector(lockChanged), for: .valueChanged)
-        bioSwitch.addTarget(self, action: #selector(bioChanged), for: .valueChanged)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -553,33 +503,24 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
 
     private func refresh() {
         lockSwitch.isOn = lock.isEnabled
-        bioSwitch.isOn = lock.useBiometrics
         tableView.reloadData()
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int { lock.isEnabled ? 2 : 1 }
 
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        if section == 0 { return 1 }
-        return lock.biometryName != nil ? 2 : 1
-    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == 0 ? "При открытии приложения и после 30 секунд в фоне потребуется PIN-код" +
-            (lock.biometryName.map { " или \($0)" } ?? "") + "." : nil
+        section == 0 ? "При открытии приложения и после 30 секунд в фоне потребуется PIN-код." : nil
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
         cell.selectionStyle = .none
-        switch (indexPath.section, indexPath.row) {
-        case (0, 0):
+        if indexPath.section == 0 {
             cell.textLabel?.text = "PIN-код для входа"
             cell.accessoryView = lockSwitch
-        case (1, 0) where lock.biometryName != nil:
-            cell.textLabel?.text = "Разблокировка по \(lock.biometryName ?? "Face ID")"
-            cell.accessoryView = bioSwitch
-        default:
+        } else {
             cell.textLabel?.text = "Сменить PIN-код"
             cell.textLabel?.textColor = L2.accent
             cell.selectionStyle = .default
@@ -589,7 +530,7 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard indexPath.section == 1, tableView.cellForRow(at: indexPath)?.accessoryView == nil else { return }
+        guard indexPath.section == 1 else { return }
         // Сменить PIN: сначала текущий, потом новый.
         let check = Linia2PinViewController(mode: .confirmOld)
         check.onFinish = { [weak self] ok in
@@ -616,18 +557,6 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
                 self?.refresh()
             }
             present(check, animated: true)
-        }
-    }
-
-    @objc private func bioChanged() {
-        guard bioSwitch.isOn else { lock.useBiometrics = false; return }
-        let ctx = LAContext()
-        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
-                           localizedReason: "Включить разблокировку «Линия 2.0»") { ok, _ in
-            DispatchQueue.main.async {
-                self.lock.useBiometrics = ok
-                self.refresh()
-            }
         }
     }
 }

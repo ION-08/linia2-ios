@@ -25,10 +25,10 @@ class SettingsSecurityViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // LINIA2: пункт «Блокировка приложения» (PIN-код / Face ID).
+        // LINIA2: пункт «Блокировка приложения» (PIN-код).
         let footer = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 76))
         let lockButton = UIButton(type: .system)
-        lockButton.setTitle("Блокировка приложения (PIN-код, Face ID)", for: .normal)
+        lockButton.setTitle("Блокировка приложения (PIN-код)", for: .normal)
         lockButton.titleLabel?.font = .systemFont(ofSize: 17)
         lockButton.setTitleColor(Linia2Style.green, for: .normal)
         lockButton.translatesAutoresizingMaskIntoConstraints = false

@@ -415,7 +415,7 @@ final class TinodiosUITests: XCTestCase {
             XCTAssertEqual(app.state, .runningForeground, "вылет в «\(item)»")
             screenshot("settings-" + item)
             if item == "Конфиденциальность" {
-                for sub in ["Блокировка приложения (PIN-код, Face ID)", "Безопасность аккаунта"] {
+                for sub in ["Блокировка приложения", "Безопасность аккаунта"] {
                     let s = app.staticTexts[sub].firstMatch
                     if s.waitForExistence(timeout: 3) { s.tap(); sleep(2); screenshot("privacy-" + sub); back() }
                 }

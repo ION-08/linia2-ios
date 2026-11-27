@@ -572,8 +572,8 @@ final class Linia2PrivacyViewController: Linia2GroupedTableViewController {
             Group(header: nil, footer: "Звонки Линии 2.0 появятся в приложении «Телефон» → «Недавние» и синхронизируются с iCloud.", rows: [
                 Row(symbol: "phone.fill", color: L2.hex(0x2FB39A), title: "Показывать звонки в истории iPhone") {},
             ]),
-            Group(header: nil, footer: "PIN-код и Face ID защищают переписку, если телефон попал в чужие руки.", rows: [
-                Row(symbol: "faceid", color: L2.hex(0x2FB39A), title: "Блокировка приложения", subtitle: "PIN-код, Face ID") { [weak self] in
+            Group(header: nil, footer: "PIN-код защищает переписку, если телефон попал в чужие руки.", rows: [
+                Row(symbol: "lock.fill", color: L2.hex(0x2FB39A), title: "Блокировка приложения", subtitle: "PIN-код") { [weak self] in
                     self?.navigationController?.pushViewController(Linia2AppLockSettingsViewController(), animated: true)
                 },
             ]),
