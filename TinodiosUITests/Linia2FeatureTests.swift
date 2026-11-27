@@ -315,7 +315,12 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         let end = Date().addingTimeInterval(20)
         var both = false
         while Date() < end && (v2.value as? String) != "играет" {
-            if (v1.value as? String) == "играет" && (v2.value as? String) == "играет" { both = true }
+            // Читаем сначала второе, потом первое: за время чтения (~0,6 с) первое может доиграть и автоматически
+            // запустить второе — при обратном порядке это давало ложное «оба играют». Настоящая одновременная игра
+            // по-прежнему ловится: тогда «играет» у второго и затем у первого.
+            let second = v2.value as? String
+            let first = v1.value as? String
+            if first == "играет" && second == "играет" { both = true }
             usleep(200_000)
         }
         XCTAssertFalse(both, "два голосовых играли одновременно")
