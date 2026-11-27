@@ -24,6 +24,8 @@ protocol MessagePresentationLogic {
     func dismiss()
     func dismissPendingMessagePreviewBar()
     func clearInputField()
+    /// LINIA2_CHAT_LOAD: сервер подтвердил «сообщений нет» (empty = true) или загрузка не удалась (error).
+    func presentLoadResult(empty: Bool, error: String?)
 }
 
 class MessagePresenter: MessagePresentationLogic {
@@ -103,6 +105,12 @@ class MessagePresenter: MessagePresentationLogic {
 
     private func clearInput() {
         (self.viewController as? MessageViewController)?.sendMessageBar.inputField.text = nil
+    }
+
+    func presentLoadResult(empty: Bool, error: String?) {
+        DispatchQueue.main.async {
+            (self.viewController as? MessageViewController)?.linia2LoadResult(empty: empty, error: error)
+        }
     }
 
     func clearInputField() {

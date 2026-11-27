@@ -246,6 +246,13 @@ class MessageViewController: UIViewController {
     // LINIA2: подпись «Исчезающие сообщения: 20 с после прочтения» над полем ввода (Linia2Burn.swift).
     var linia2BurnLabel: UILabel?
     var linia2BurnLabelBottom: NSLayoutConstraint?
+    // LINIA2_CHAT_LOAD: состояние загрузки переписки (Linia2ChatStyle.swift).
+    var linia2ServerEmpty = false
+    var linia2LoadError: String?
+    var linia2LoadTimedOut = false
+    var linia2LoadTimer: DispatchWorkItem?
+    var linia2RenderPending = false
+    weak var linia2StateView: UIView?
     var linia2LastScreenshotNote: Date?
     var linia2BurnTimer: Timer?
     var linia2BurnFading = Set<String>()
@@ -762,7 +769,7 @@ extension MessageViewController: UICollectionViewDataSource {
     }
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        self.collectionView.toggleNoMessagesNote(on: messages.isEmpty)
+        linia2ScheduleRenderLoadState()   // LINIA2_CHAT_LOAD: одно состояние фона (Linia2ChatStyle.swift)
         return messages.count
     }
 
