@@ -213,7 +213,7 @@ final class Linia2FloatingBar: UIView {
             stack.addArrangedSubview(item)
         }
         pillWidth?.isActive = false
-        pillWidth = pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(max(1, items.count)), constant: -12)
+        pillWidth = pill.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 1.0 / CGFloat(max(1, items.count)), constant: -4)   // Дизайн: шире — подписи с полями внутри выделения
         pillWidth?.isActive = true
         // Сразу привязываем выделение — без этого до первого select() оно прижималось к левому краю.
         select(hasTab(selected) ? selected : (items.first?.tag ?? 0), animated: false)
