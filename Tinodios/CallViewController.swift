@@ -2404,6 +2404,8 @@ extension CallViewController {
             guard let self = self, self.ownsCall else { return }
             // Звонок завершён системой (экран блокировки, CallKit, другой звонок) — закрыть экран.
             if let topic = n.userInfo?["topic"] as? String, topic != self.topic?.name { return }
+            // Завершение прошлого звонка в том же чате (другой seq) не должно гасить текущий (ошибка веба №1).
+            if let seq = n.userInfo?["seq"] as? Int, seq > 0, seq != self.callSeqId { return }
             self.handleCallClose(remoteEnded: (n.userInfo?["remote"] as? Bool) ?? false)
         })
         observers.append(nc.addObserver(forName: .linia2CallHeld, object: nil, queue: .main) { [weak self] n in
