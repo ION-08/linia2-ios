@@ -308,10 +308,10 @@ class WebRTCClient: NSObject {
     var hasPeerConnection: Bool { localPeer != nil }
 
     func createPeerConnection(withDataChannel dataChannel: Bool) -> Bool {
-        // LINIA2: новое соединение — буфер удалённых кандидатов снова копится до применения удалённого описания.
-        remoteIceCandidatesCacheQueue.sync { remoteCandidatesDrained = false; remoteIceCandidatesCache.removeAll() }
         // LINIA2: повторный вызов (соединение создано заранее, при «Принять») — используем готовое.
         if localPeer != nil { return true }
+        // LINIA2: действительно новое соединение — буфер удалённых кандидатов снова копится до применения удалённого описания.
+        remoteIceCandidatesCacheQueue.sync { remoteCandidatesDrained = false; remoteIceCandidatesCache.removeAll() }
         // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
         guard let audioTrack = self.localAudioTrack, let videoTrack = self.localVideoTrack else {
             Cache.log.error("WebRTCClient - no local tracks (call already closed?)")
