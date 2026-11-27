@@ -118,12 +118,15 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
         // Страховка: если ответ так и не пришёл (обрыв связи), разрешить новую попытку.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.meAttachInProgress = false }
 
+        let meSentAt = Date()
+        Linia2LaunchLog.shared.step("me-sub-sent")
         guard let promise = UiUtils.attachToMeTopic(meListener: self.meListener) else {
             meAttachInProgress = false
             return
         }
         promise.then(
             onSuccess: { [weak self] _ in
+                Linia2LaunchLog.shared.step("me-sub-ok", ["ms": Int(Date().timeIntervalSince(meSentAt) * 1000)])
                 DispatchQueue.main.async {
                     self?.meAttachInProgress = false
                     self?.meTopic = tinode.getMeTopic()
@@ -131,6 +134,8 @@ class ChatListInteractor: ChatListBusinessLogic, ChatListDataStore {
                 }
                 return nil
             }, onFailure: { [weak self] err in
+                Linia2LaunchLog.shared.step("me-sub-fail", ["ms": Int(Date().timeIntervalSince(meSentAt) * 1000),
+                                                            "err": String(err.localizedDescription.prefix(120))])
                 DispatchQueue.main.async { self?.meAttachInProgress = false }
                 if let e = err as? TinodeError, case .serverResponseError(let code, _, _) = e {
                     if code == 401 || code==403 || code == 404 {

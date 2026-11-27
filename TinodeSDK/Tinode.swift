@@ -171,7 +171,9 @@ public class Tinode {
     private class ConcurrentFuturesMap {
         static let kFutureExpiryInterval = 3.0
         static let kFutureExpiryTimerTolerance = 0.2
-        static let kFutureTimeout = 5.0
+        // LINIA2: было 5 с. Ответ на вход / {sub me} большого аккаунта (сотни чатов) по мобильной сети идёт дольше —
+        // запрос отклонялся «504 timeout», а пришедший позже ответ на вход терялся (сокет есть, входа нет).
+        static let kFutureTimeout = 30.0
         private var futuresDict = [String: PromisedReply<ServerMessage>]()
         private let futuresQueue = DispatchQueue(label: "co.tinode.futuresmap")
         private var timer: Timer?
@@ -207,6 +209,7 @@ public class Tinode {
                 for id in expiredKeys {
                     futuresDict.removeValue(forKey: id)
                 }
+                if !expiredKeys.isEmpty { Tinode.linia2Event?("future-timeout", ["n": expiredKeys.count, "left": futuresDict.count]) }
             }
         }
         subscript(key: String) -> PromisedReply<ServerMessage>? {
@@ -351,6 +354,8 @@ public class Tinode {
     private var loginInProgress: Bool = false
     // Queue to execute state-mutating operations on.
     private let operationsQueue = DispatchQueue(label: "co.tinode.operations")
+    /// LINIA2: события соединения для «чёрного ящика» запуска приложения (открытие/закрытие сокета, причины).
+    public static var linia2Event: ((String, [String: Any]) -> Void)?
 
     public func hostURL(useWebsocketProtocol: Bool) -> URL? {
         guard !hostName.isEmpty else { return nil }
@@ -955,13 +960,17 @@ public class Tinode {
             }
         }
         let msg = ClientMessage<Int, Int>(login: msgl)
+        let sentAt = Date()
+        Tinode.linia2Event?("login-sent", ["scheme": scheme])
         return sendWithPromise(payload: msg, with: msgId).then(
             onSuccess: { [weak self] pkt in
+                Tinode.linia2Event?("login-reply", ["code": pkt?.ctrl?.code ?? 0, "ms": Int(Date().timeIntervalSince(sentAt) * 1000)])
                 self?.loginInProgress = false
                 try self?.loginSuccessful(ctrl: pkt?.ctrl)
                 return nil
             },
             onFailure: { [weak self] err in
+                Tinode.linia2Event?("login-fail", ["err": String(err.localizedDescription.prefix(120)), "ms": Int(Date().timeIntervalSince(sentAt) * 1000)])
                 self?.loginInProgress = false
                 self?.handleAuthenticationError(error: err)
                 return PromisedReply<ServerMessage>(error: err)
@@ -1040,6 +1049,7 @@ public class Tinode {
     public func linia2SwitchHost(to host: String) {
         let changed: Bool = operationsQueue.sync {
             guard host != hostName else { return false }
+            Tinode.linia2Event?("switch-host", [:])
             hostName = host
             connection?.disconnect()
             connection = nil
@@ -1079,6 +1089,8 @@ public class Tinode {
         }
     }
     private func handleDisconnect(isServerOriginated: Bool, code: URLSessionWebSocketTask.CloseCode, reason: String) {
+        Tinode.linia2Event?("disconnect", ["code": code.rawValue, "server": isServerOriginated ? 1 : 0, "authed": isConnectionAuthenticated ? 1 : 0,
+                                           "reason": String(reason.prefix(120))])
         let e = TinodeError.notConnected("no longer connected to server")
         futures.rejectAndPurgeAll(withError: e)
         serverBuild = nil
@@ -1260,11 +1272,17 @@ public class Tinode {
                     return false
                 }
             }
+            if !reset && connection!.isFreshlyConnecting {
+                // LINIA2: подключение уже идёт — повторный connect закрыл бы его (invalidateAndCancel, на сервере 1005).
+                Tinode.linia2Event?("reconnect-skip", ["why": "connecting", "interactive": interactively ? 1 : 0])
+                return true
+            }
             if connection!.isConnected {
                 // We are done unless we need to reset the connection.
                 if !reset {
                     return true
                 }
+                Tinode.linia2Event?("reconnect-reset", [:])
                 connection!.disconnect()
                 reconnectInteractive = true
             }

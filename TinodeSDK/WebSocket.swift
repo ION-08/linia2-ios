@@ -16,6 +16,15 @@ protocol WebSocketConnectionDelegate {
 }
 
 class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
+    /// LINIA2: максимальный размер одного входящего сообщения. По умолчанию у URLSessionWebSocketTask — 1 МБ:
+    /// ответ {meta sub} на 'me' большого аккаунта (сотни чатов с аватарами в pub) больше — receive падал
+    /// («Message too long»), сокет закрывался клиентом (на сервере — 1005), вход не завершался.
+    static let kMaxMessageSize = 64 * 1024 * 1024
+    /// LINIA2: момент начала текущего подключения (для «не перебивать идущее подключение»).
+    private(set) var connectingSince: Date?
+    private var opened: Date?
+    private var bytesIn = 0
+    private var maxMsg = 0
     enum State: CustomDebugStringConvertible {
         case unopened
         case connecting
@@ -68,12 +77,16 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         guard webSocketTask === socket else { return }
         self.state = .open
+        opened = Date()
+        Tinode.linia2Event?("ws-open", ["ms": Int(Date().timeIntervalSince(connectingSince ?? Date()) * 1000)])
         self.delegate?.onConnected(connection: self)
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         guard webSocketTask === socket else { return }
         self.state = .closed
+        Tinode.linia2Event?("ws-close", ["code": closeCode.rawValue, "by": "server", "reason": String(decoding: reason ?? Data(), as: UTF8.self),
+                                         "open_s": Int(Date().timeIntervalSince(opened ?? Date())), "in_kb": bytesIn / 1024, "max_kb": maxMsg / 1024])
         self.delegate?.onDisconnected(connection: self, isServerOriginated: true, closeCode: closeCode, reason: String(decoding: reason ?? Data(), as: UTF8.self))
     }
 
@@ -94,10 +107,18 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
 
     func connect(req: URLRequest) {
         // Предыдущая сессия держит делегат (self) — закрываем её (её события дальше игнорируются).
+        if session != nil {
+            Tinode.linia2Event?("ws-replace", ["prev": state.debugDescription, "open_s": Int(Date().timeIntervalSince(opened ?? Date()))])
+        }
         session?.invalidateAndCancel()
         session = URLSession(configuration: .default, delegate: self, delegateQueue: delegateQueue)
         let task = session.webSocketTask(with: req)
+        task.maximumMessageSize = WebSocket.kMaxMessageSize
         socket = task
+        connectingSince = Date()
+        opened = nil
+        bytesIn = 0
+        maxMsg = 0
         state = .connecting
         task.resume()
 
@@ -106,6 +127,7 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
 
     // LINIA2: до первого connect() socket — nil (раньше «!» и падение).
     func close() {
+        Tinode.linia2Event?("ws-cancel", ["prev": state.debugDescription, "open_s": Int(Date().timeIntervalSince(opened ?? Date()))])
         state = .closing
         socket?.cancel(with: .goingAway, reason: nil)
     }
@@ -140,6 +162,9 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
             case .success(let message):
                 switch message {
                 case .string(let text):
+                    let n = text.utf8.count
+                    self.bytesIn += n
+                    if n > self.maxMsg { self.maxMsg = n }
                     self.delegate?.onMessage(connection: self, text: text)
                 case .data(let data):
                     self.delegate?.onMessage(connection: self, data: data)
@@ -155,6 +180,11 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
     private func errorHandler(_ error: Error?) {
         guard let error = error else { return }
 
+        let ns = error as NSError
+        Tinode.linia2Event?("ws-error", ["prev": state.debugDescription, "domain": ns.domain, "code": ns.code,
+                                         "desc": String(ns.localizedDescription.prefix(120)),
+                                         "open_s": Int(Date().timeIntervalSince(opened ?? Date())),
+                                         "in_kb": bytesIn / 1024, "max_kb": maxMsg / 1024])
         self.state = .closed
 
         var code = -1

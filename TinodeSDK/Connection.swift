@@ -20,7 +20,9 @@ public class Connection: WebSocketConnectionDelegate {
             let half = UInt32(kBaseSleepMs * (1 << attempt))
             let delay = half + arc4random_uniform(half)
             attempt += 1
-            return Int(delay)
+            // LINIA2: пауза не больше 15 с (было до ~17 мин после нескольких неудач — приложение на экране
+            // «не подключалось», пока его не свернуть и открыть снова). 1 → 2 → 4 → 8 → 15 с.
+            return Int(min(delay, 15_000))
         }
         func reset() {
             attempt = 0
@@ -38,6 +40,12 @@ public class Connection: WebSocketConnectionDelegate {
     var isWaitingToConnect: Bool {
         guard let conn = webSocketConnection else { return false }
         return conn.state == .connecting
+    }
+
+    /// LINIA2: подключение идёт меньше 10 с — не перебивать его новым (новое закрывало начатое).
+    var isFreshlyConnecting: Bool {
+        guard let conn = webSocketConnection, conn.state == .connecting, let t = conn.connectingSince else { return false }
+        return Date().timeIntervalSince(t) < 10
     }
 
     private var webSocketConnection: WebSocket?

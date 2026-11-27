@@ -312,6 +312,8 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
 
     /// Первым делом в didFinishLaunching.
     func start() {
+        // События сокета/входа из TinodeSDK — в журнал (первые 150 за запуск — их хватает на разбор входа).
+        Tinode.linia2Event = { name, extra in Linia2LaunchLog.shared.step("net-" + name, extra) }
         queue.sync {
             guard let dir = Self.dir, let cur = curURL, let prev = prevURL else { return }
             let fm = FileManager.default
