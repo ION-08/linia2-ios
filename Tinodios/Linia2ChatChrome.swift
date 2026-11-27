@@ -141,8 +141,23 @@ final class Linia2PopGesture: NSObject, UIGestureRecognizerDelegate {
     weak var nav: UINavigationController?
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        (nav?.viewControllers.count ?? 0) > 1
+        guard let nav = nav, nav.viewControllers.count > 1, nav.transitionCoordinator == nil else { return false }
+        return true
     }
+
+    /// Как у системного делегата: жест от края главнее остальных — прокрутка ленты, свайп-ответ, нажатия по
+    /// ячейкам ждут, пока он не откажется (касание не у края — отказ сразу). Раньше их жесты могли начаться
+    /// первыми и забрать касание у края — свайп «назад» из чата не срабатывал.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        otherGestureRecognizer.view?.isDescendant(of: nav?.view ?? UIView()) ?? false
+    }
+}
+
+/// Запасной жест «назад» распознаётся вместе с остальными (системным от края, лентой) — ничего не блокирует.
+final class Linia2EdgeBackDelegate: NSObject, UIGestureRecognizerDelegate {
+    static let shared = Linia2EdgeBackDelegate()
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 // MARK: - Экран чата: шапка, фон
@@ -275,6 +290,27 @@ extension MessageViewController {
             g.delegate = Linia2PopGesture.shared
         }
         g.isEnabled = true
+        linia2InstallEdgeBack()
+    }
+
+    /// Запасной «назад» свайпом от левого края: если системный жест не начался (его перехватил другой жест),
+    /// по окончании протягивания дальше 60 pt экран закрывается обычным pop. Пока идёт системный переход — не мешает.
+    private func linia2InstallEdgeBack() {
+        let name = "l2.edgeBack"
+        guard !(view.gestureRecognizers ?? []).contains(where: { $0.name == name }) else { return }
+        let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(linia2EdgeBack(_:)))
+        edge.edges = .left
+        edge.name = name
+        edge.cancelsTouchesInView = false
+        edge.delegate = Linia2EdgeBackDelegate.shared
+        view.addGestureRecognizer(edge)
+    }
+
+    @objc private func linia2EdgeBack(_ g: UIScreenEdgePanGestureRecognizer) {
+        guard g.state == .ended, g.translation(in: view).x > 60,
+              let nav = navigationController, nav.viewControllers.count > 1, nav.topViewController === self,
+              nav.transitionCoordinator == nil, presentedViewController == nil else { return }
+        nav.popViewController(animated: true)
     }
 
     func linia2RestorePopGesture() {
