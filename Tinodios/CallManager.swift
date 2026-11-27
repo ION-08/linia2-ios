@@ -790,7 +790,7 @@ extension CallManager: CallManagerImpl {
               let vc = Linia2CallCenter.shared.active, !vc.closed, vc.connectedAt == nil,
               let diag = vc.diag, !diag.has("offer") else { return }
         // Подписка на топик восстанавливается экраном звонка — note без подписки сервер не примет.
-        guard let t = Cache.tinode.getTopic(topicName: cur.topic), t.attached, Cache.tinode.isConnectionAuthenticated else {
+        guard let t = Cache.tinode.getTopic(topicName: cur.topic) as? DefaultComTopic, t.attached, Cache.tinode.isConnectionAuthenticated else {
             if attempts > 0 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.resendAccept(uuid, attempts: attempts - 1) }
             }
