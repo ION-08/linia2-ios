@@ -305,6 +305,7 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
     private let launchId = String(UUID().uuidString.prefix(8)).lowercased()
     private var handle: FileHandle?
     private var count = 0
+    private var netCount = 0
     private var uploadedPrev = false
 
     private static var dir: URL? {
@@ -350,7 +351,15 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
         let ms = Int(Date().timeIntervalSince(started) * 1000)
         let main = Thread.isMainThread ? 1 : 0
         queue.async {
-            guard self.count < 400 else { return }
+            // LINIA2 (сборка 1011): цикл переподключения забивал все 400 мест событиями net-* — отметки
+            // сторожа главного потока (main-stall / main-blocked) и этапы после цикла терялись.
+            // net-* — не больше 250; сторож — всегда (до 450).
+            let isNet = name.hasPrefix("net-"), isWatchdog = name.hasPrefix("main-")
+            if isNet {
+                guard self.netCount < 250 else { return }
+                self.netCount += 1
+            }
+            guard self.count < (isWatchdog ? 450 : 400) else { return }
             self.count += 1
             var e: [String: Any] = ["type": "launch", "step": name, "ms": ms, "main": main,
                                     "t": Int(Date().timeIntervalSince1970 * 1000), "lid": self.launchId]
