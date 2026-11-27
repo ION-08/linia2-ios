@@ -126,7 +126,10 @@ class Linia2FormViewController: UIViewController {
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(stack)
-        centerConstraint = stack.centerYAnchor.constraint(equalTo: scroll.frameLayoutGuide.centerYAnchor, constant: -20)
+        // Центр — относительно содержимого, а не видимой рамки: привязка к frameLayoutGuide «приклеивала» блок
+        // к рамке, и при прокрутке он ехал вместе с ней — длинный экран (Профиль под нижним меню) не прокручивался.
+        // Пока блок ниже экрана, содержимое = высоте рамки, и блок по-прежнему по центру экрана.
+        centerConstraint = stack.centerYAnchor.constraint(equalTo: scroll.contentLayoutGuide.centerYAnchor, constant: -20)
         centerConstraint.priority = .defaultLow
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -139,6 +142,7 @@ class Linia2FormViewController: UIViewController {
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: sideMargin),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -sideMargin),
             scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
+            scroll.contentLayoutGuide.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),   // без горизонтальной прокрутки
             // Содержимое всегда вмещает весь блок — если он выше видимой области (клавиатура, iPhone SE), его можно прокрутить.
             scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: stack.heightAnchor, constant: 48),
             centerConstraint,

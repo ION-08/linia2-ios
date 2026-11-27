@@ -225,7 +225,7 @@ jobs:
           export TEST_RUNNER_L2_PUSH_DIR="$PUSHDIR"
           export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
           export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
-          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" -parallel-testing-enabled NO \
+          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests/Linia2LaunchTests -resultBundlePath "$RUNNER_TEMP/launch.xcresult" \
             2>&1 | tee "$RUNNER_TEMP/out/launch/launch.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|push:|\*\* TEST' || true
           touch "$PUSHDIR/stop"
@@ -282,12 +282,12 @@ jobs:
             node "$RUNNER_TEMP/call-scenario.mjs" > "$OUT/web/result.json" 2> "$OUT/web/log.txt"; echo $? > "$OUT/web/rc" ) &
           # Второй симулятор: пользователь C принимает звонок A.
           ( TEST_RUNNER_L2_C_LOGIN="$L2_C_LOGIN" TEST_RUNNER_L2_C_PASSWORD="$L2_C_PASSWORD" TEST_RUNNER_L2_A_NAME="Тест CI" \
-            xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID2" -parallel-testing-enabled NO \
+            xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID2" \
               -only-testing:TinodiosUITests/Linia2CallPeerTests/testAnswerIncomingCall -resultBundlePath "$RUNNER_TEMP/peer.xcresult" \
               > "$OUT/peer.log" 2>&1; echo $? > "$OUT/peer.rc" ) &
           sleep 75   # C входит и ждёт звонок
           export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_C_NAME="Собеседник iOS"
-          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" -parallel-testing-enabled NO \
+          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests/Linia2CallTests -resultBundlePath "$RUNNER_TEMP/calls.xcresult" \
             2>&1 | tee "$OUT/main.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|\*\* TEST' || true
           for i in $(seq 1 60); do [ -f "$OUT/web/rc" ] && [ -f "$OUT/peer.rc" ] && break; sleep 5; done
@@ -462,7 +462,7 @@ jobs:
               else xcrun simctl ui "$UDID" content_size large || true; fi
               TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_D_NAME="$L2_D_NAME" \
               TEST_RUNNER_L2_THEME="$THEME" TEST_RUNNER_L2_FONT="$FONT" \
-                xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" -parallel-testing-enabled NO \
+                xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
                   -only-testing:TinodiosUITests/Linia2DesignShots -resultBundlePath "$RUNNER_TEMP/design/$TAG.xcresult" \
                   2>&1 | tee "$RUNNER_TEMP/design/$TAG.log" | grep -E 'error:|Test Case .* (passed|failed)|\*\* TEST' || true
               OUT="$RUNNER_TEMP/design/att-$TAG"; mkdir -p "$OUT"
