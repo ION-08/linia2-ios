@@ -5,10 +5,16 @@
 //   3) звонит iOS (аудио) через window.L2Call.start (повтор, пока iOS не примет) → держит → ждёт, пока iOS положит трубку;
 //   4) то же для видео;
 //   5) веб → iOS (аудио) сразу после перезапуска приложения на iOS (Linia2CallTests.test6): звук в обе стороны ≤ 5 с после ответа.
+//   6–8) переподключение (RECONNECT_CALLS, по умолчанию 3; 0 — пропустить): подряд три входящих АУДИО от iOS, каждый принять;
+//        iOS посреди разговора обрывает себе сеть. Звонки 6 и 7: bytesReceived у веба останавливается (пауза ≥ PAUSE_S, 3 с),
+//        потом снова растёт (≥ 5 приростов), трубку кладёт iOS, «Связь потеряна» не было. Звонок 8: после паузы звонок
+//        завершает сервер по льготному периоду (~30 с) — веб idle ≤ LOST_WAIT_S (60) с от начала паузы, у веба «Связь потеряна».
+//        Сервер/веб: CONTRACTS.md «Звонок при смене сети» (Tinode 0.25.3-linia2-reconnect, L2_RECONNECT в linia2.js).
 // Каждый звонок должен продержаться ≥ MIN_HOLD_S (60) с. Код выхода 0 — все 4 прошли, 1 — проверка не прошла, 2 — не смог выполниться.
 // stdout — одна строка JSON-итога; stderr — ход работы; скриншоты — в OUT_DIR.
 // env: L2_PEER_LOGIN, L2_PEER_PASSWORD (B), L2_IOS_UID (uid A = топик p2p у B), CI_TOKEN (заголовок X-L2-CI),
-//      OUT_DIR, BASE, FIRST_WAIT_S (1800), MIN_HOLD_S (60), END_WAIT_S (240), DIAL_TRIES (8).
+//      OUT_DIR, BASE, FIRST_WAIT_S (1800), MIN_HOLD_S (60), END_WAIT_S (240), DIAL_TRIES (8),
+//      RECONNECT_CALLS (3), RECONNECT_WAIT_S (600 — ожидание каждого входящего), PAUSE_S (3), LOST_WAIT_S (60).
 // Нужен Node 22+ (встроенный WebSocket и fetch), сторонние пакеты не нужны.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -188,7 +194,60 @@ async function main() {
       await ev(`window.L2Call && window.L2Call.hangup()`).catch(() => {});
     }
   }
+  await reconnectCalls();
   result.ok = result.calls.every(c => c.ok) && result.steps.every(s => s.ok);
   finish(result.ok ? 0 : 1);
 }
+// ---- 6–8: переподключение при обрыве сети у iOS ----
+async function reconnectCalls() {
+  const N = +(process.env.RECONNECT_CALLS ?? 3), WAIT = +(process.env.RECONNECT_WAIT_S || 600), PAUSE = +(process.env.PAUSE_S || 3), LOSTW = +(process.env.LOST_WAIT_S || 60);
+  const rcJs = `(function(){try{var r=window.__l2rc||{};return {rec:!!(window.L2Call&&window.L2Call.state().reconnecting),lost:r.lost||0,recovered:r.recovered||0,restarts:r.restarts||0,ui:!!document.getElementById('l2-reconn'),lostUi:!!document.getElementById('l2-lost')}}catch(e){return {}}})()`;
+  for (let k = 1; k <= N; k++) {
+    const last = k === N && N >= 3, name = 'переподключение ' + k + (last ? ' (не вернулся — завершает сервер)' : ' (вернулся)');
+    const c = { name, ok: false, pauseS: 0, grewAfter: 0, endedBy: null, reconnectingUi: false, lostUi: false };
+    result.calls.push(c);
+    try {
+      log(name + ': жду входящий аудио от iOS');
+      const inc = await wait(`(function(){var s=${stateJs};return s.state==='incoming'?s:null})()`, WAIT * 1000, 'входящего звонка');
+      step(name + ': входящий аудио', !!inc.audioOnly, inc.audioOnly ? 'аудио' : 'видео');
+      await sleep(1000);
+      await ev(`(function(){if(window.L2Call&&window.L2Call.accept())return true;var b=document.querySelector('.incoming-call button.positive');if(b){b.click();return true}return false})()`);
+      await wait(`(async function(){var s=await ${statsJs};return s.some(function(x){return x.ice==='connected'||x.ice==='completed'})})()`, 30000, 'ICE connected');
+      step(name + ': ICE connected', true);
+      // Фазы: before (растёт) → pause (не растёт ≥ PAUSE с) → after (снова растёт) / idle.
+      let prev = -1, still = 0, phase = 'before', pauseAt = 0, tPauseStart = 0;
+      const t0 = Date.now();
+      for (;;) {
+        const st = await ev(statsJs).catch(() => []), b = st.reduce((s, x) => s + x.bytes, 0);
+        const cs = await ev(stateJs).catch(() => ({ state: 'idle' })), rc = await ev(rcJs).catch(() => ({}));
+        if (rc.rec || rc.ui) c.reconnectingUi = true;
+        if (rc.lostUi || rc.lost > 0) c.lostUi = true;
+        const grew = prev >= 0 && b > prev; prev = b;
+        if (grew) { if (phase === 'pause') { phase = 'after'; c.pauseS = Math.round((Date.now() - tPauseStart) / 1000); } if (phase === 'after') c.grewAfter++; still = 0; }
+        else { if (!still) tPauseStart = Date.now(); still++; if (phase === 'before' && still >= PAUSE) { phase = 'pause'; pauseAt = Date.now(); log(name + ': пауза медиа'); } }
+        if (cs.state === 'idle') { c.endedBy = phase === 'pause' ? 'server-or-lost' : 'ios'; break; }
+        if (last && pauseAt && Date.now() - pauseAt > LOSTW * 1000) { c.endedBy = 'timeout'; await ev(`window.L2Call.hangup()`).catch(() => {}); break; }
+        if (Date.now() - t0 > (MIN_HOLD_S + END_WAIT_S) * 1000) { c.endedBy = 'timeout'; await ev(`window.L2Call.hangup()`).catch(() => {}); break; }
+        await sleep(1000);
+      }
+      if (pauseAt && c.endedBy !== 'timeout') c.endS = Math.round((Date.now() - pauseAt) / 1000);
+      await shot('rc' + k + '-ended');
+      const okPause = step(name + ': пауза медиа (iOS без сети)', !!pauseAt, pauseAt ? '' : 'bytesReceived не останавливался');
+      const okUi = step(name + ': у веба «Переподключение…»', c.reconnectingUi);
+      let ok;
+      if (!last) {
+        ok = step(name + ': звук снова идёт после паузы', c.grewAfter >= 5, 'приростов после паузы ' + c.grewAfter + ', пауза ' + c.pauseS + ' с')
+          & step(name + ': трубку положил iOS, «Связь потеряна» не было', c.endedBy === 'ios' && !c.lostUi, c.endedBy + (c.lostUi ? ', было «Связь потеряна»' : ''));
+      } else {
+        ok = step(name + ': завершён сервером по льготному периоду, веб idle', c.endedBy === 'server-or-lost' && c.grewAfter === 0 && c.endS <= LOSTW, (c.endedBy || '') + ', через ' + c.endS + ' с после паузы')
+          & step(name + ': у веба «Связь потеряна»', c.lostUi);
+      }
+      c.ok = !!(okPause && okUi && ok);
+    } catch (e) {
+      await shot('rc' + k + '-fail'); step(name, false, e.message);
+      await ev(`window.L2Call && window.L2Call.hangup()`).catch(() => {});
+    }
+  }
+}
+
 main().catch(e => { result.error = String(e && e.message || e); log('ОШИБКА', result.error); finish(2); });

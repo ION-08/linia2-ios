@@ -212,6 +212,8 @@ class WebRTCClient: NSObject {
 
     private var remoteIceCandidatesCacheQueue = DispatchQueue(label: "co.tinode.webrtc.ice-candidates-queue")
     private var remoteIceCandidatesCache: [RTCIceCandidate] = []
+    /// LINIA2: буфер удалённых кандидатов уже разгружен (удалённое описание применено) — новые кандидаты сразу в соединение.
+    private var remoteCandidatesDrained = false
 
     weak var delegate: WebRTCClientDelegate?
 
@@ -262,8 +264,19 @@ class WebRTCClient: NSObject {
                 }
             }
         } else {
+            // LINIA2: гонка «буфер уже разгружен, а флаг ещё не виден на главном потоке» — кандидат попадал в буфер
+            // ПОСЛЕ разгрузки и не применялся никогда (iOS не знал адресов собеседника: ICE «checking» 30+ с,
+            // звука нет — реальный звонок 27.11 11:07). Решение под той же очередью, что и разгрузка.
+            var addNow = false
             self.remoteIceCandidatesCacheQueue.sync {
-                self.remoteIceCandidatesCache.append(candidate)
+                if self.remoteCandidatesDrained || self.localPeer?.remoteDescription != nil {
+                    addNow = true
+                } else {
+                    self.remoteIceCandidatesCache.append(candidate)
+                }
+            }
+            if addNow {
+                self.handleRemoteIceCandidate(candidate, saveInCache: false)
             }
         }
     }
@@ -272,16 +285,20 @@ class WebRTCClient: NSObject {
     func drainIceCandidatesCache() {
         Cache.log.info("Draining iceCandidateCache: %d items", self.remoteIceCandidatesCache.count)
         var success = true
+        var pending: [RTCIceCandidate] = []
         self.remoteIceCandidatesCacheQueue.sync {
-            self.remoteIceCandidatesCache.forEach { candidate in
-                self.localPeer?.add(candidate) { err in
-                    if let err = err {
-                        Cache.log.error("WebRTCClient.drainIceCandidatesCache - could not add ICE candidate: %@", err.localizedDescription)
-                        success = false
-                    }
+            self.remoteCandidatesDrained = true
+            pending = self.remoteIceCandidatesCache
+            self.remoteIceCandidatesCache.removeAll()
+        }
+        onDiagEvent?(["type": "candidates", "drained": pending.count])
+        pending.forEach { candidate in
+            self.localPeer?.add(candidate) { err in
+                if let err = err {
+                    Cache.log.error("WebRTCClient.drainIceCandidatesCache - could not add ICE candidate: %@", err.localizedDescription)
+                    success = false
                 }
             }
-            self.remoteIceCandidatesCache.removeAll()
         }
         if !success {
             onDiagEvent?(["type": "error", "where": "drainIceCandidates"])
@@ -291,6 +308,8 @@ class WebRTCClient: NSObject {
     var hasPeerConnection: Bool { localPeer != nil }
 
     func createPeerConnection(withDataChannel dataChannel: Bool) -> Bool {
+        // LINIA2: новое соединение — буфер удалённых кандидатов снова копится до применения удалённого описания.
+        remoteIceCandidatesCacheQueue.sync { remoteCandidatesDrained = false; remoteIceCandidatesCache.removeAll() }
         // LINIA2: повторный вызов (соединение создано заранее, при «Принять») — используем готовое.
         if localPeer != nil { return true }
         // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
