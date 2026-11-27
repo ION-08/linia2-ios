@@ -33,7 +33,13 @@ class QuotedAttachment: NSTextAttachment {
         attributedString = quotedText
         self.widthPadding = widthPadding
         self.backgroundColor = Constants.kQuoteBackgroundColor
-        self.stripeColor = Constants.kStripeColor
+        // Дизайн: полоска — цветом текста пузыря (белая на зелёном своём, тёмная/светлая на входящем);
+        // акцент на своём зелёном пузыре в светлой теме был не виден.
+        if quotedText.length > 0, let fg = quotedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor {
+            self.stripeColor = fg.withAlphaComponent(0.9)
+        } else {
+            self.stripeColor = Constants.kStripeColor
+        }
         super.init(data: nil, ofType: "public.text")
 
         let textSize = TextSizeHelper().computeSize(for: quotedText, within: maxSize.width - Constants.kHorizontalTextOffset * 2)
