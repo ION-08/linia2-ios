@@ -60,6 +60,7 @@ enum Linia2Storage {
             protect(kingfisherDir, .complete)
             _ = roundDir
         }
+        simulateUpgradeIfRequested()
     }
 
     /// При каждом выходе на экран: ключи (создать, если их ещё нет — телефон разблокирован), миграция.
@@ -69,10 +70,17 @@ enum Linia2Storage {
         migrateIfNeeded()
     }
 
+    /// LINIA2 (баг 1006 «висит на логотипе» при первом запуске после обновления): миграция — в фоне, не раньше
+    /// чем через 6 с после выхода на экран (сначала интерфейс, PIN, подключение), мелкими частями с паузами
+    /// (BaseDb.encryptLegacyRows), без VACUUM на этом пути — он держал базу (и главный поток, читающий её) секундами.
     private static func migrateIfNeeded() {
-        guard !(groupDefaults?.bool(forKey: kMigrated) ?? false), !migrating else { return }
+        guard !(groupDefaults?.bool(forKey: kMigrated) ?? false), !migrating else {
+            if Linia2TestProbe.migrated < 0, groupDefaults?.bool(forKey: kMigrated) ?? false { Linia2TestProbe.migrated = 1 }
+            return
+        }
         migrating = true
-        migrationQueue.asyncAfter(deadline: .now() + 2) {
+        Linia2TestProbe.migrated = 0
+        migrationQueue.asyncAfter(deadline: .now() + 6) {
             defer { DispatchQueue.main.async { migrating = false } }
             guard BaseDb.sharedInstance.encryptLegacyRows() else { return }
             // Старый незашифрованный кэш файлов — удалить (перезагрузится с сервера).
@@ -83,8 +91,38 @@ enum Linia2Storage {
             try? fm.removeItem(at: caches.appendingPathComponent("linia2-urlcache"))
             URLCache.shared.removeAllCachedResponses()
             groupDefaults?.set(true, forKey: kMigrated)
+            DispatchQueue.main.async { Linia2TestProbe.migrated = 1 }
             Cache.log.info("Linia2Storage: local store encrypted")
         }
+    }
+
+    /// Уход в фон: отложенный после миграции VACUUM (вне глаз пользователя, с фоновым заданием).
+    static func didEnterBackground() {
+        guard BaseDb.vacuumPending, !migrating else { return }
+        let app = UIApplication.shared
+        var task = UIBackgroundTaskIdentifier.invalid
+        task = app.beginBackgroundTask(withName: "l2-vacuum") {
+            app.endBackgroundTask(task)
+            task = .invalid
+        }
+        guard task != .invalid else { return }
+        migrationQueue.async {
+            BaseDb.sharedInstance.vacuum()
+            BaseDb.vacuumPending = false
+            DispatchQueue.main.async {
+                if task != .invalid { app.endBackgroundTask(task); task = .invalid }
+            }
+        }
+    }
+
+    /// Только автотесты (-l2-uitest -l2-simulate-upgrade): база «как у старой версии» — открытый текст и
+    /// флаг миграции снят; дальше запуск идёт как первый запуск после обновления.
+    private static func simulateUpgradeIfRequested() {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-l2-uitest"), args.contains("-l2-simulate-upgrade") else { return }
+        let n = BaseDb.sharedInstance.l2DebugDowngradeToPlaintext()
+        groupDefaults?.set(false, forKey: kMigrated)
+        Cache.log.info("Linia2Storage: TEST — simulated pre-encryption database (%d values)", n)
     }
 
     // MARK: - Каталоги
@@ -140,6 +178,7 @@ enum Linia2Storage {
         nc.removeAllDeliveredNotifications()
         nc.removeAllPendingNotificationRequests()
         UIApplication.shared.applicationIconBadgeNumber = 0
+        Linia2EndedCalls.reset()
         // Настройки, привязанные к чатам (имена топиков в ключах): самоуничтожение, срок хранения, гостевой звонок.
         let d = UserDefaults.standard
         for k in d.dictionaryRepresentation().keys where isChatScopedDefaultsKey(k) { d.removeObject(forKey: k) }

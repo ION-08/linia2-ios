@@ -35,7 +35,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             case  "accept":
                 // We have just accepted this call in another client.
                 if !Cache.callManager.currentCallIsOutgoing {
-                    Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq)
+                    Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq, reason: .answeredElsewhere)
                 }
             case "hang-up":
                 Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq)
@@ -59,6 +59,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             Cache.log.info("Call (topic: %@, seq: %d): processing event %@", topicName, seqId, String(reflecting: callState))
             switch callState {
             case .kStarted:
+                // LINIA2 (баг 1006): старое «started» (история при подписке/выборке по push, повтор после отбоя)
+                // не должно поднимать звонок заново: звонок уже завершён здесь или сообщению больше таймаута звонка.
+                if Linia2EndedCalls.contains(topicName, seqId) {
+                    Cache.log.info("Call (topic: %@, seq: %d): already ended — ignoring 'started'", topicName, seqId)
+                    return
+                }
+                if let ts = data.ts, CallManager.isStale(sentAt: ts) {
+                    Cache.log.info("Call (topic: %@, seq: %d): 'started' is too old — ignoring", topicName, seqId)
+                    Linia2EndedCalls.mark(topicName, seqId)
+                    return
+                }
                 // It is a legit incoming call. Start it.
                 let backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
                 DispatchQueue.main.async {
@@ -70,7 +81,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                         UIApplication.shared.endBackgroundTask(backgroundTaskIdentifier)
                     }
                 }
-            case .kAccepted, .kBusy, .kDeclined, .kMissed, .kDisconnected:
+            case .kAccepted, .kBusy, .kDeclined, .kMissed, .kDisconnected, .kFinished:
+                if callState != .kAccepted { Linia2EndedCalls.mark(topicName, seqId) }
                 if !Cache.callManager.currentCallIsOutgoing {
                     Cache.log.info("Dismissing incoming call: topic=%@, seq=%d", topic.name, seqId)
                     Cache.callManager.dismissIncomingCall(onTopic: topic.name, withSeqId: seqId)
@@ -81,8 +93,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
+    /// LINIA2: момент запуска процесса (для замеров «интерфейс готов» в автотестах).
+    static let launchedAt = Date()
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        _ = AppDelegate.launchedAt
         Cache.log.info("App launched with options: %@", launchOptions ?? [:])
+        Linia2ConnectionNotice.quietPeriod(10)   // LINIA2: при запуске — без «Связь потеряна» (только «Подключение…»)
+        Linia2TestHook.applyLaunchOverrides()    // только под -l2-uitest: «сервер недоступен N с» и т.п.
         // LINIA2: Firebase (Crashlytics/Analytics/FCM) — первым делом, чтобы ловить и ранние вылеты.
         // Делегаты уведомлений — до конца didFinishLaunching (иначе теряется нажатие на push при холодном старте).
         Linia2Firebase.configureIfNeeded()
@@ -125,11 +143,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         registerForVoip()
 
         // Try to connect and login in the background.
-        DispatchQueue.global(qos: .userInitiated).async {
-            if !SharedUtils.connectAndLoginSync(using: Cache.tinode, inBackground: false) {
-                UiUtils.logoutAndRouteToLoginVC()
-            }
-        }
+        // LINIA2 (баг 1006): подключение не держит интерфейс (список чатов — из базы, сразу); не удалось —
+        // повторы с нарастающей паузой (2, 4, 8, 16, 30 с), пока приложение на экране или идёт звонок.
+        AppDelegate.connectInBackground(attempt: 0)
         Cache.tinode.addListener(self.callListener)
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + .seconds(10)) {
             let reachability = NWPathMonitor()
@@ -170,11 +186,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         self.appIsStarting = false
+        Linia2Storage.didEnterBackground()   // LINIA2: отложенный VACUUM после миграции базы
         application.applicationIconBadgeNumber = Cache.totalUnreadCount()
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
         self.appIsStarting = true
+        Linia2ConnectionNotice.quietPeriod(10)
+        if Cache.tinode.myUid != nil, !Cache.tinode.isConnectionAuthenticated { AppDelegate.connectInBackground(attempt: 0) }
         SharedUtils.syncUserDefaults()
     }
 
@@ -253,6 +272,36 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         } else {
             // App is active.
             completionHandler(.noData)
+        }
+    }
+
+    private static let connectQueue = DispatchQueue(label: "info.codix.liniya2.startup-connect", qos: .userInitiated)
+    private static var connectGeneration = 0
+
+    /// LINIA2: вход в фоне с повторами. Каждый шаг ограничен по времени (SharedUtils.connectTimeout);
+    /// «нет ответа» не выход из аккаунта — выход только при однозначном отказе сервера (connectAndLoginSync → false).
+    static func connectInBackground(attempt: Int) {
+        DispatchQueue.main.async {
+            if attempt == 0 { connectGeneration += 1 }
+            let gen = connectGeneration
+            connectQueue.async {
+                let tinode = Cache.tinode
+                if tinode.isConnectionAuthenticated { return }
+                let ok = SharedUtils.connectAndLoginSync(using: tinode, inBackground: false)
+                if !ok {
+                    UiUtils.logoutAndRouteToLoginVC()
+                    return
+                }
+                guard !tinode.isConnectionAuthenticated, attempt < 8 else { return }
+                let delays: [Double] = [2, 4, 8, 16, 30]
+                let delay = delays[min(attempt, delays.count - 1)]
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    guard gen == connectGeneration, !Cache.tinode.isConnectionAuthenticated,
+                          UIApplication.shared.applicationState != .background || Cache.callManager.callInProgress != nil else { return }
+                    Cache.log.info("Startup: not connected yet — retry #%d", attempt + 1)
+                    connectInBackground(attempt: attempt + 1)
+                }
+            }
         }
     }
 
@@ -393,9 +442,13 @@ extension AppDelegate: PKPushRegistryDelegate {
         let seq = Int(data["seq"] as? String ?? "") ?? (data["seq"] as? Int) ?? Int(data["replace"] as? String ?? "") ?? 0
         let audioOnly = (data["aonly"] as? Bool) ?? ((data["aonly"] as? String) == "true")
         let name = data["name"] as? String
+        // LINIA2: время отправки сервером (unix-секунды) — устаревший push (звонок уже кончился) не показывается.
+        let ts = Double(data["ts"] as? String ?? "") ?? (data["ts"] as? Double)
+        let sentAt = ts.map { Date(timeIntervalSince1970: $0) }
         L2Log.event("l2_voip_push", ["event": callState.isEmpty ? "none" : callState, "has_seq": seq > 0 ? 1 : 0])
         Cache.callManager.handleVoipPush(event: callState, topic: topicName, from: data["xfrom"] as? String, seq: seq,
-                                         audioOnly: audioOnly, callerName: (name?.isEmpty ?? true) ? nil : name, completion: completion)
+                                         audioOnly: audioOnly, callerName: (name?.isEmpty ?? true) ? nil : name,
+                                         sentAt: sentAt, completion: completion)
         // Подключиться к серверу (если приложение было закрыто) — дальше звонок идёт как обычно.
         if callState == MsgServerData.WebRTC.kStarted.rawValue {
             // При холодном старте подключение уже запускает didFinishLaunching; здесь — если приложение было в фоне.

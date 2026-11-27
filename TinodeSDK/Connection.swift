@@ -53,6 +53,8 @@ public class Connection: WebSocketConnectionDelegate {
         get { linia2BlockLock.lock(); defer { linia2BlockLock.unlock() }; return linia2BlockedUntilValue }
         set { linia2BlockLock.lock(); linia2BlockedUntilValue = newValue; linia2BlockLock.unlock() }
     }
+    /// LINIA2 (только автотесты): «сервер недоступен» с момента запуска — до этого времени подключение не идёт.
+    public static var linia2StartupBlockedUntil: Date?
     private var autoreconnect: Bool = false
     private var reconnecting: Bool = false
     private var backoffSteps = ExpBackoffSteps()
@@ -135,6 +137,7 @@ public class Connection: WebSocketConnectionDelegate {
     private func connectSocket() {
         guard !isConnected else { return }
         if let until = linia2BlockedUntil, until > Date() { return }
+        if let until = Connection.linia2StartupBlockedUntil, until > Date() { return }
         let request = try! createUrlRequest()
         self.openConnection(with: request)
     }

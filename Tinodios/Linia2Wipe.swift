@@ -426,4 +426,13 @@ enum Linia2PinGate {
 enum Linia2TestProbe {
     static var lastPinMs = -1
     static var wipes = 0
+    // Звонки (баг 1006): VoIP push всего / повторы того же звонка / отброшены (завершён, устарел) / показан входящий.
+    static var voipPushes = 0
+    static var voipDuplicates = 0
+    static var voipIgnored = 0
+    static var incomingShown = 0
+    // Запуск (баг 1006): время до интерфейса (мс от старта процесса), показанных «Связь потеряна», миграция базы.
+    static var uiReadyMs = -1
+    static var lostToasts = 0
+    static var migrated = -1
 }

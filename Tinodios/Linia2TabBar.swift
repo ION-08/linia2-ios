@@ -331,6 +331,9 @@ enum Linia2Root {
     /// Плавная смена корневого экрана.
     static func setRoot(_ vc: UIViewController) {
         guard let window = window else { return }
+        if vc is Linia2TabBarController, Linia2TestProbe.uiReadyMs < 0 {
+            Linia2TestProbe.uiReadyMs = Int(Date().timeIntervalSince(AppDelegate.launchedAt) * 1000)
+        }
         if window.rootViewController == nil {
             window.rootViewController = vc
             return

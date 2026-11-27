@@ -340,7 +340,11 @@ extension BaseDb {
     /// (сравнение со старым значением — параллельная запись Tinode не затирается), затем VACUUM
     /// убирает открытый текст из свободных страниц файла. Данные не теряются: незашифрованное читается
     /// как есть, пока миграция не дошла до этой строки. Возвращает true, если всё зашифровано.
-    public func encryptLegacyRows() -> Bool {
+    /// LINIA2 (баг 1006 «висит на логотипе»): частями по `batch` записей с паузой `pause` между частями —
+    /// каждая часть — короткая транзакция, между ними база свободна для главного потока и Tinode. VACUUM здесь
+    /// больше не выполняется (держал базу секундами при первом запуске после обновления) — его делает
+    /// приложение при уходе в фон (`vacuumPending`).
+    public func encryptLegacyRows(batch: Int = 50, pause: TimeInterval = 0.04) -> Bool {
         guard let db = self.db, L2Vault.metaKeyAvailable, L2Vault.contentKeyAvailable else { return false }
         let jobs: [(table: String, column: String, content: Bool)] = [
             (MessageDb.kTableName, "content", true), (MessageDb.kTableName, "head", false),
@@ -350,7 +354,7 @@ extension BaseDb {
         var total = 0
         for job in jobs {
             let select = "SELECT id, \(job.column) FROM \(job.table) WHERE \(job.column) IS NOT NULL AND " +
-                "substr(\(job.column),1,5) NOT IN ('l2c1:','l2p1:','l2m1:','l2m1w') LIMIT 200"
+                "substr(\(job.column),1,5) NOT IN ('l2c1:','l2p1:','l2m1:','l2m1w') LIMIT \(max(1, batch))"
             let update = "UPDATE \(job.table) SET \(job.column) = ? WHERE id = ? AND \(job.column) = ?"
             while true {
                 var batch: [(Int64, String)] = []
@@ -379,11 +383,48 @@ extension BaseDb {
                 // Ничего не зашифровалось (ключ стал недоступен) — не крутиться, повторим при следующем запуске.
                 if changed == 0 { return false }
                 total += changed
+                if pause > 0 { Thread.sleep(forTimeInterval: pause) }
             }
         }
-        if total > 0 { try? db.execute("VACUUM") }
+        if total > 0 { BaseDb.vacuumPending = true }
         BaseDb.log.info("BaseDb - migration: %d values encrypted", total)
         return true
+    }
+
+    /// После миграции: сжать файл (VACUUM) при ближайшем уходе приложения в фон.
+    public static var vacuumPending: Bool {
+        get { UserDefaults(suiteName: BaseDb.kAppGroupId)?.bool(forKey: "linia2.vault.vacuumPending") ?? false }
+        set { UserDefaults(suiteName: BaseDb.kAppGroupId)?.set(newValue, forKey: "linia2.vault.vacuumPending") }
+    }
+
+    /// Только автотесты: «база старой версии» — зашифрованные значения переписываются открытым текстом
+    /// (как до версии с шифрованием). Возвращает число изменённых значений.
+    public func l2DebugDowngradeToPlaintext() -> Int {
+        guard let db = self.db else { return 0 }
+        let jobs: [(table: String, column: String, content: Bool)] = [
+            (MessageDb.kTableName, "content", true), (MessageDb.kTableName, "head", false),
+            (TopicDb.kTableName, "pub", false), (TopicDb.kTableName, "priv", false),
+            (UserDb.kTableName, "pub", false), (SubscriberDb.kTableName, "priv", false),
+        ]
+        var total = 0
+        for job in jobs {
+            var rows: [(Int64, String)] = []
+            do {
+                for row in try db.prepare("SELECT id, \(job.column) FROM \(job.table) WHERE \(job.column) IS NOT NULL") {
+                    if let id = row[0] as? Int64, let v = row[1] as? String { rows.append((id, v)) }
+                }
+                try db.transaction {
+                    for (id, v) in rows {
+                        guard let plain = job.content ? L2Vault.openContent(v) : L2Vault.openMeta(v), plain != v else { continue }
+                        try db.run("UPDATE \(job.table) SET \(job.column) = ? WHERE id = ?", plain, id)
+                        total += db.changes
+                    }
+                }
+            } catch {
+                BaseDb.log.error("BaseDb - test downgrade failed: %@", error.localizedDescription)
+            }
+        }
+        return total
     }
 
     /// Сжать файл (после стирания/миграции): VACUUM переписывает базу без свободных страниц.

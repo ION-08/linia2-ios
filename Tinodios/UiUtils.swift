@@ -35,12 +35,45 @@ class UiTinodeEventListener: TinodeEventListener {
     }
     func onDisconnect(byServer: Bool, code: URLSessionWebSocketTask.CloseCode, reason: String) {
         if connected {
-            // If we just got disconnected, display the connection lost message.
-            DispatchQueue.main.async {
-                UiUtils.showToast(message: NSLocalizedString("Connection to server lost.", comment: "Toast notification"))
-            }
+            // LINIA2 (баг 1006): не сразу — см. Linia2ConnectionNotice.
+            Linia2ConnectionNotice.disconnected()
         }
         connected = false
+    }
+}
+
+/// LINIA2 (баг 1006): «Связь с сервером потеряна» показывалась сразу при любом обрыве — в т.ч. при запуске
+/// (ввод PIN, холодный старт из звонка), когда переподключение занимает секунды. Теперь: первые 10 с после
+/// запуска / возврата на экран — никаких ошибок (только тихое «Подключение…» вверху, Linia2Failover);
+/// потом — только если связь не вернулась за 8 с; не чаще раза в 30 с; один раз на обрыв (слушателей много).
+enum Linia2ConnectionNotice {
+    private static var quietUntil = Date().addingTimeInterval(10)
+    private static var lastShown = Date.distantPast
+    private static var pending = false
+
+    /// Запуск / возврат из фона.
+    static func quietPeriod(_ seconds: TimeInterval = 10) {
+        DispatchQueue.main.async { quietUntil = max(quietUntil, Date().addingTimeInterval(seconds)) }
+    }
+
+    static func disconnected() {
+        DispatchQueue.main.async {
+            guard !pending else { return }
+            pending = true
+            let wait = max(8, quietUntil.timeIntervalSinceNow)
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                pending = false
+                let tinode = Cache.tinode
+                guard !tinode.isConnected, tinode.myUid != nil,
+                      UIApplication.shared.applicationState == .active,
+                      Date() >= quietUntil, Date().timeIntervalSince(lastShown) > 30 else { return }
+                lastShown = Date()
+                Linia2TestProbe.lostToasts += 1
+                UiUtils.showToast(message: NSLocalizedString("Connection to server lost.", comment: "Toast notification"))
+                // Не ждать следующего шага backoff — попробовать сразу.
+                DispatchQueue.global(qos: .utility).async { tinode.reconnectNow(interactively: true, reset: false) }
+            }
+        }
     }
 }
 
@@ -387,6 +420,9 @@ class UiUtils {
             rootVC.pushViewController(messageVC, animated: false)
             if shouldReplaceRootVC {
                 keyWindow.rootViewController = newRoot ?? rootVC
+                if Linia2TestProbe.uiReadyMs < 0 {
+                    Linia2TestProbe.uiReadyMs = Int(Date().timeIntervalSince(AppDelegate.launchedAt) * 1000)
+                }
             }
             UiUtils.setUpPushNotifications()
             completion?(messageVC)

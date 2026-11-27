@@ -463,4 +463,14 @@ final class Linia2Voip {
         unregister()
         token = nil
     }
+
+    /// LINIA2: идёт ли ещё звонок `seq` в личном чате `topic` (usr…) — по базе сервера.
+    /// completion (главный поток): "ringing" | "accepted" | "ended" | "unknown"; nil — нет ответа / не вошли.
+    func checkCall(topic: String, seq: Int, completion: @escaping (String?) -> Void) {
+        let auth = Cache.tinode.authToken ?? SharedUtils.getAuthToken()
+        guard topic.hasPrefix("usr"), seq > 0, let token = auth, !token.isEmpty else { completion(nil); return }
+        Linia2API.post("voip-token", ["check_call": ["topic": topic, "seq": seq]], token: token) { status, json in
+            completion(status == 200 ? json?["state"] as? String : nil)
+        }
+    }
 }

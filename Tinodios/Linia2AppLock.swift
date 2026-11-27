@@ -77,6 +77,8 @@ final class Linia2AppLock {
     private var locked = false
 
     var isEnabled: Bool { UserDefaults.standard.bool(forKey: kEnabled) && Linia2PinStore.exists }
+    /// Экран PIN сейчас показан.
+    var isLocked: Bool { locked }
 
     func start() {
         UserDefaults.standard.removeObject(forKey: kBiometricsLegacy)
@@ -171,6 +173,21 @@ final class Linia2AppLock {
         let w = makeWindow(level: .alert + 2, root: vc)
         w.isHidden = false
         coverWindow = w
+        scheduleCoverCheck()
+    }
+
+    /// LINIA2 (баг 1006 «висит на логотипе»): заставка с логотипом закрывается по didBecomeActive; если это
+    /// уведомление потерялось (переходы CallKit / системных окон), а приложение уже на экране — убрать её.
+    private func scheduleCoverCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self = self, self.coverWindow != nil else { return }
+            if UIApplication.shared.applicationState == .active {
+                Cache.log.info("Linia2AppLock: app is active but cover is still shown — hiding")
+                self.hideCover()
+            } else {
+                self.scheduleCoverCheck()
+            }
+        }
     }
 
     private func hideCover() {
