@@ -247,8 +247,17 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
     private var listener: Linia2TinodeListener?
 
     /// Порядок и видимость пунктов — из удалённых настроек (menus.settings). «Выйти» показывается всегда.
-    static let kDefaultSettingsMenu = ["profile", "notifications", "privacy", "appearance", "about"]
-    private var settingsIds: [String] { Linia2Config.shared.menu("settings") ?? Self.kDefaultSettingsMenu }
+    static let kDefaultSettingsMenu = ["profile", "notifications", "privacy", "appearance", "storage", "about"]
+    /// «Данные» (очистка кэша) — и при меню с сервера без этого пункта (перед «О приложении»),
+    /// если не выключено features.clearCache=false.
+    private var settingsIds: [String] {
+        var ids = Linia2Config.shared.menu("settings") ?? Self.kDefaultSettingsMenu
+        if !ids.contains("storage"), Linia2Config.shared.feature("clearCache") {
+            ids.insert("storage", at: ids.firstIndex(of: "about") ?? ids.count)
+        }
+        if !Linia2Config.shared.feature("clearCache") { ids.removeAll { $0 == "storage" } }
+        return ids
+    }
     /// LINIA2: таблица работает со «снимком» пунктов, обновляемым только вместе с reloadData. Раньше меню
     /// вычислялось при каждом обращении: если удалённый конфиг менялся между numberOfRows и cellForRow
     /// (загрузка при старте + быстрая смена вкладок), menu[indexPath.row] выходил за границы → вылет.
@@ -279,6 +288,9 @@ final class Linia2SettingsViewController: UIViewController, UITableViewDataSourc
             case "appearance":
                 out.append(.init(symbol: "paintbrush.fill", color: L2.accentStrong, title: L2T("l2.settings.appearance", "Внешний вид")) { [weak self] in
                     self?.push(Linia2AppearanceViewController()) })
+            case "storage":
+                out.append(.init(symbol: "internaldrive.fill", color: L2.hex(0x8A92A3), title: L2T("l2.settings.storage", "Данные")) { [weak self] in
+                    self?.push(Linia2StorageViewController()) })
             case "about":
                 out.append(.init(symbol: "info.circle.fill", color: L2.hex(0x2FB39A), title: L2T("l2.settings.about", "О приложении")) { [weak self] in
                     self?.push(Linia2AboutViewController()) })
@@ -1239,5 +1251,36 @@ final class L2LegalTextView: UITextView, UITextViewDelegate {
             Linia2Links.open(URL, from: presenter)
         }
         return false
+    }
+}
+
+
+// MARK: - Данные: очистка кэша (без выхода из аккаунта, работает и без связи)
+
+final class Linia2StorageViewController: Linia2GroupedTableViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = L2T("l2.settings.storage", "Данные")
+        groups = [
+            Group(footer: "Удаляются сохранённые на устройстве сообщения, картинки, файлы и видео. Аккаунт, настройки и PIN-код остаются; переписка снова загрузится с сервера при подключении.",
+                  rows: [Row(symbol: "trash.fill", color: L2.danger, title: "Очистить кэш") { [weak self] in self?.confirm() }])
+        ]
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = super.tableView(tableView, cellForRowAt: indexPath)
+        cell.accessibilityIdentifier = "l2.storage.clear"
+        return cell
+    }
+
+    private func confirm() {
+        guard Cache.callManager.callInProgress == nil, Linia2CallCenter.shared.active == nil else {
+            UiUtils.showToast(message: "Нельзя очистить кэш во время звонка")
+            return
+        }
+        let a = UIAlertController(title: "Очистить кэш?", message: "Сообщения и файлы будут удалены с этого устройства и загрузятся заново с сервера.", preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        a.addAction(UIAlertAction(title: "Очистить", style: .destructive) { _ in Linia2Storage.clearCache() })
+        present(a, animated: true)
     }
 }

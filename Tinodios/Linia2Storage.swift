@@ -168,6 +168,31 @@ enum Linia2Storage {
         return (try? data.write(to: play, options: [.atomic, .completeFileProtection])) != nil ? play : nil
     }
 
+    // MARK: - Очистка кэша (Настройки → Данные)
+
+    /// LINIA2: база заменяется пустой (вход и ключи сохраняются), кэш картинок/файлов/кружков удаляется,
+    /// Tinode пересоздаётся и переподключается в фоне — переписка загрузится заново. Только с главного потока.
+    static func clearCache() {
+        guard Thread.isMainThread else { DispatchQueue.main.async { clearCache() }; return }
+        Cache.log.info("Linia2Storage: clearing local cache")
+        L2Log.event("l2_clear_cache")
+        BaseDb.wipeAndRecreate(keepAccount: true)
+        Cache.resetForWipe()
+        KingfisherManager.shared.cache.clearMemoryCache()
+        KingfisherManager.shared.cache.clearDiskCache()
+        URLCache.shared.removeAllCachedResponses()
+        DispatchQueue.global(qos: .utility).async {
+            removeContents(of: documents)
+            removeContents(of: tmp)
+            removeContents(of: caches.appendingPathComponent("l2round", isDirectory: true))
+            BaseDb.purgeTrash()
+            protect(documents, .completeUnlessOpen)
+        }
+        Linia2Root.window?.rootViewController = Linia2TabBarController.make()
+        AppDelegate.connectInBackground(attempt: 0)
+        UiUtils.showToast(message: "Кэш очищен")
+    }
+
     // MARK: - Стирание (код паники)
 
     /// Синхронная часть (быстро, на главном потоке): то, что видно сразу.
