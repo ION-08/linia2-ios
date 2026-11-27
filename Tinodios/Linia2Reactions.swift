@@ -459,9 +459,18 @@ final class Linia2MessageMenuViewController: UIViewController {
             all.addAction(UIAction { [weak self] _ in self?.openFullList() }, for: .touchUpInside)
             items.append(all)
         }
-        let sc = scrollRow(items, id: "l2.menu.row2")
-        sc.alpha = 0
-        inner.addArrangedSubview(sc)
+        // Дизайн: ряды не длиннее первого (8 эмодзи + «+») — раньше 10-й эмодзи срезался краем пилюли.
+        let perRow = max(1, primary.count + 1)
+        var rows: [UIScrollView] = []
+        var i = 0
+        while i < items.count {
+            let chunk = Array(items[i..<min(i + perRow, items.count)])
+            let sc = scrollRow(chunk, id: rows.isEmpty ? "l2.menu.row2" : "l2.menu.row\(rows.count + 2)")
+            sc.alpha = 0
+            inner.addArrangedSubview(sc)
+            rows.append(sc)
+            i += perRow
+        }
         moreRow.tag = 1
         inner.addSubview(moreRow)   // признак, что второй ряд уже показан
         // Дизайн: второй ряд делает меню выше — сдвигаем вверх, а если не хватает места, укорачиваем список
@@ -476,7 +485,7 @@ final class Linia2MessageMenuViewController: UIViewController {
         if overflow > 0, let lh = listHeight {
             lh.constant = max(140, lh.constant - overflow)
         }
-        UIView.animate(withDuration: 0.25) { sc.alpha = 1; self.view.layoutIfNeeded() }
+        UIView.animate(withDuration: 0.25) { rows.forEach { $0.alpha = 1 }; self.view.layoutIfNeeded() }
         for b in reactButtons.suffix(more.count) {
             b.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
             UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.55, initialSpringVelocity: 0.8, options: []) { b.transform = .identity }
