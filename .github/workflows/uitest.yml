@@ -16,6 +16,11 @@ on:
         description: "Дизайн-контроль: только снимки экранов (Linia2DesignShots) на SE / 16 / 16 Pro Max × тема × шрифт"
         type: boolean
         default: false
+      suite:
+        description: "Какие части запускать: all | main | e2e"
+        type: choice
+        options: [all, main, e2e]
+        default: all
   workflow_call:
     outputs:
       compiled:
@@ -47,13 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - device: pro
-            idx: 1
-            suite: main
-          - device: pro
-            idx: 2
-            suite: e2e
+        # Ручной запуск: suite=main|e2e — только эта часть (по умолчанию all — обе).
+        include: ${{ fromJSON(inputs.suite == 'e2e' && '[{"device":"pro","idx":2,"suite":"e2e"}]' || inputs.suite == 'main' && '[{"device":"pro","idx":1,"suite":"main"}]' || '[{"device":"pro","idx":1,"suite":"main"},{"device":"pro","idx":2,"suite":"e2e"}]') }}
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
@@ -239,6 +239,16 @@ jobs:
             XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          # Схема помечает UI-тесты parallelizable — xcodebuild тогда гоняет тесты на клонах
+          # («Clone 1 of …» в XCTestDevices), выключив исходный симулятор: push/privacy/install шли не туда,
+          # клоны умирали («No matching device … XCTestDevices», «server died»). Отключаем параллельность.
+          python3 -c "import plistlib,sys;p=sys.argv[1];d=plistlib.load(open(p,'rb'))
+          def f(o):
+              if isinstance(o,dict):
+                  if 'ParallelizationEnabled' in o: o['ParallelizationEnabled']=False
+                  [f(v) for v in o.values()]
+              elif isinstance(o,list): [f(v) for v in o]
+          f(d);plistlib.dump(d,open(p,'wb'))" "$XR" || true
           PUSHDIR="$HOME/Library/Caches/l2push"; rm -rf "$PUSHDIR"; mkdir -p "$PUSHDIR" "$RUNNER_TEMP/out/launch"
           ( while [ ! -f "$PUSHDIR/stop" ]; do
               for f in "$PUSHDIR"/*.apns; do
@@ -252,6 +262,7 @@ jobs:
           export TEST_RUNNER_L2_SYNC_DIR="$SYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
           export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
           xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -parallel-testing-enabled NO -disable-concurrent-destination-testing \
             -only-testing:TinodiosUITests/Linia2LaunchTests -resultBundlePath "$RUNNER_TEMP/launch.xcresult" \
             2>&1 | tee "$RUNNER_TEMP/out/launch/launch.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|push:|\*\* TEST' || true
           touch "$PUSHDIR/stop"
@@ -292,6 +303,16 @@ jobs:
             XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          # Схема помечает UI-тесты parallelizable — xcodebuild тогда гоняет тесты на клонах
+          # («Clone 1 of …» в XCTestDevices), выключив исходный симулятор: push/privacy/install шли не туда,
+          # клоны умирали («No matching device … XCTestDevices», «server died»). Отключаем параллельность.
+          python3 -c "import plistlib,sys;p=sys.argv[1];d=plistlib.load(open(p,'rb'))
+          def f(o):
+              if isinstance(o,dict):
+                  if 'ParallelizationEnabled' in o: o['ParallelizationEnabled']=False
+                  [f(v) for v in o.values()]
+              elif isinstance(o,list): [f(v) for v in o]
+          f(d);plistlib.dump(d,open(p,'wb'))" "$XR" || true
           # Разрешения на микрофон и камеру — без системных окон.
           RT=$(xcrun simctl list devices -j | python3 -c "import json,sys,os;d=json.load(sys.stdin)['devices'];print(next(k for k,v in d.items() for x in v if x['udid']==os.environ['UDID']))")
           UDID2=$(xcrun simctl create "L2 peer" "$(xcrun simctl list devices -j | python3 -c "import json,sys,os;d=json.load(sys.stdin)['devices'];print(next(x['deviceTypeIdentifier'] for v in d.values() for x in v if x['udid']==os.environ['UDID']))")" "$RT")
@@ -312,11 +333,13 @@ jobs:
           # Второй симулятор: пользователь C принимает звонок A.
           ( TEST_RUNNER_L2_C_LOGIN="$L2_C_LOGIN" TEST_RUNNER_L2_C_PASSWORD="$L2_C_PASSWORD" TEST_RUNNER_L2_A_NAME="Тест CI" \
             xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID2" \
+              -parallel-testing-enabled NO -disable-concurrent-destination-testing \
               -only-testing:TinodiosUITests/Linia2CallPeerTests/testAnswerIncomingCall -resultBundlePath "$RUNNER_TEMP/peer.xcresult" \
               > "$OUT/peer.log" 2>&1; echo $? > "$OUT/peer.rc" ) &
           sleep 75   # C входит и ждёт звонок
           export TEST_RUNNER_L2_SYNC_DIR="$SYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_C_NAME="Собеседник iOS"
           xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -parallel-testing-enabled NO -disable-concurrent-destination-testing \
             -only-testing:TinodiosUITests/Linia2CallTests -resultBundlePath "$RUNNER_TEMP/calls.xcresult" \
             2>&1 | tee "$OUT/main.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|\*\* TEST' || true
           for i in $(seq 1 60); do [ -f "$OUT/web/rc" ] && [ -f "$OUT/peer.rc" ] && break; sleep 5; done
@@ -352,12 +375,23 @@ jobs:
             XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          # Схема помечает UI-тесты parallelizable — xcodebuild тогда гоняет тесты на клонах
+          # («Clone 1 of …» в XCTestDevices), выключив исходный симулятор: push/privacy/install шли не туда,
+          # клоны умирали («No matching device … XCTestDevices», «server died»). Отключаем параллельность.
+          python3 -c "import plistlib,sys;p=sys.argv[1];d=plistlib.load(open(p,'rb'))
+          def f(o):
+              if isinstance(o,dict):
+                  if 'ParallelizationEnabled' in o: o['ParallelizationEnabled']=False
+                  [f(v) for v in o.values()]
+              elif isinstance(o,list): [f(v) for v in o]
+          f(d);plistlib.dump(d,open(p,'wb'))" "$XR" || true
           mkdir -p "$RUNNER_TEMP/out/panic"
           xcrun simctl terminate "$UDID" info.codix.liniya2 2>/dev/null || true
           export TEST_RUNNER_L2_SYNC_DIR="$SYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
           export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
           export TEST_RUNNER_L2_WIPE_SERVER="${L2_WIPE_SERVER:-0}" TEST_RUNNER_L2_WIPE_SERVER_LEVEL="${L2_WIPE_SERVER_LEVEL:-2}"
           xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -parallel-testing-enabled NO -disable-concurrent-destination-testing \
             -only-testing:TinodiosUITests/Linia2PanicTests -resultBundlePath "$RUNNER_TEMP/panic.xcresult" \
             2>&1 | tee "$RUNNER_TEMP/out/panic/panic.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|\*\* TEST' || true
           P=$(grep -c "Test Case .* passed" "$RUNNER_TEMP/out/panic/panic.log" || true)
