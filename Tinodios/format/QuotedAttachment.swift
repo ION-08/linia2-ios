@@ -19,7 +19,7 @@ class QuotedAttachment: NSTextAttachment {
         static let kVerticalTextOffset: CGFloat = 4
         static let kHorizontalTextOffset: CGFloat = 6
         static let kQuoteBackgroundColor = UIColor(fromHexCode: 0x18000000)
-        static let kStripeColor = UIColor.link
+        static var kStripeColor: UIColor { L2.accent }   // Дизайн: полоска цитаты цвета акцента (системный синий выбивался из палитры)
         static let kQuoteCornerRadius: CGFloat = 3.5
     }
 

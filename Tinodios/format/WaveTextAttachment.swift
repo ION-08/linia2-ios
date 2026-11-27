@@ -74,7 +74,7 @@ class WaveTextAttachment: EntityTextAttachment {
         waveImage.delegate = self
         waveImage.pastBarColor = CGColor.init(gray: 0.5, alpha: 1.0)
         waveImage.futureBarColor = CGColor.init(gray: 0.40, alpha: 1.0)
-        waveImage.thumbColor = UIColor.link.cgColor
+        waveImage.thumbColor = L2.accent.cgColor   // Дизайн: бегунок голосового цвета акцента, не системный синий
     }
 
     public override func image(forBounds imageBounds: CGRect, textContainer: NSTextContainer?, characterIndex charIndex: Int) -> UIImage? {
