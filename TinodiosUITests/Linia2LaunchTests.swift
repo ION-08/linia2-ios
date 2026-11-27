@@ -516,6 +516,28 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         app.launchEnvironment["L2_TEST_UNREACHABLE"] = nil
     }
 
+    /// Сборка 1007: «Подключение…» при живом сервере. Холодный старт с доступным сервером — вход (conn=1)
+    /// не позже 5 с после экрана PIN, плашка «Подключение…» исчезает, список чатов на месте.
+    func test8_StartOnlineWithin5s() throws {
+        loginA()
+        wait(app.cells.firstMatch, "в списке есть чат", timeout: 20)
+        app.terminate()
+        app.launch()
+        passPin(required: true, "онлайн-старт")
+        let t0 = Date()
+        let s = waitHook("онлайн", timeout: 15) { ($0["conn"] ?? 0) == 1 }
+        XCTAssertEqual(s["conn"], 1, "нет входа на сервер (статус не «онлайн»)")
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(t0), 5.5, "вход дольше 5 с после PIN")
+        let banner = any("l2.connection.status")
+        let gone = Date().addingTimeInterval(6)
+        while Date() < gone && banner.exists { usleep(300_000) }
+        XCTAssertFalse(banner.exists, "«Подключение…» не исчезло при живом сервере")
+        wait(app.cells.firstMatch, "список чатов после входа", timeout: 5)
+        XCTAssertEqual(s["lost"], 0, "показано «Связь с сервером потеряна»")
+        assertTabsRespond("онлайн-старт")
+        screenshot("online-start")
+    }
+
     func test7_RepeatedVoipPushForEndedCall() throws {
         loginA()
         app.terminate()
