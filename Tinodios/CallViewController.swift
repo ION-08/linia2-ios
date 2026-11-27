@@ -2759,7 +2759,7 @@ extension CallViewController {
             guard let self = self else { return }
             CallManager.setOutputPort(self.audioOutput)
             // Вариант Б: CallKit включил звук — странице: play() звука собеседника, проверить/перезапросить микрофон.
-            self.webRTCClient.web?.call("audioResume", ["reason": "activated"])
+            self.webRTCClient.web?.linia2AudioActivated()
             self.linia2UpdateRoute()
         })
         // Свернули приложение: своё видео на паузе (камера в фоне недоступна), вернулись — продолжить.

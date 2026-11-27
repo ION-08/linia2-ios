@@ -27,7 +27,7 @@ audio{display:none}
     q: Promise.resolve(), pc: null, dc: null, stream: null, cache: [], cfg: {}, closed: false,
     established: false, initialOfferSent: false, facing: 'user', wantVideo: false, audioOn: true,
     remoteLive: false, localRect: null, statsTimer: null, lastBytes: 0,
-    micGum: null
+    micGum: null, camGum: null, regrabs: 0
   };
   var $ = function (id) { return document.getElementById(id); };
 
@@ -113,6 +113,7 @@ audio{display:none}
       t.addEventListener(ev, function () {
         diag({ type: 'track-' + ev, side: side, kind: t.kind });
         if (side === 'local' && t.kind === 'audio' && ev === 'ended') resumeAudio('local-ended');
+        if (side === 'local' && ev === 'mute') checkMuted(t, 'mute-event');
       });
     });
   }
@@ -133,6 +134,40 @@ audio{display:none}
   // трек live/muted — ничего не перезапрашиваем (muted после прерывания WebKit снимает сам); новый захват — только если
   // трека нет или он ended; старый трек останавливаем ПОСЛЕ replaceTrack, и одновременно — только один захват.
   function micTrackState(t) { return t ? (t.readyState === 'ended' ? 'ended' : (t.muted ? 'muted' : 'live')) : 'none'; }
+  // LINIA2 (звук 1012, call_diag 766/769): WebKit заглушил захват (CallKit активировал AVAudioSession во время
+  // getUserMedia) — трек «live», но muted навсегда, RTP аудио/видео не уходит. Нативу — «снять mute захвата»
+  // (setMicrophoneCaptureState/setCameraCaptureState .active); трек всё ещё muted через 1,2 с — новый захват
+  // (getUserMedia + replaceTrack), не ждём WebKit. Не больше 3 перезахватов на звонок.
+  function checkMuted(t, why) {
+    if (!t || !t.muted || t.readyState !== 'live' || S.closed) return;
+    post({ t: 'capMuted', kind: t.kind, why: why });
+    setTimeout(function () {
+      if (S.closed || !t.muted || t.readyState !== 'live') { if (!S.closed) diag({ type: 'cap-unmuted', kind: t.kind, why: why }); return; }
+      if (S.regrabs >= 3) { diag({ type: 'cap-muted', kind: t.kind, why: why, action: 'give-up' }); return; }
+      S.regrabs++;
+      diag({ type: 'cap-muted', kind: t.kind, why: why, action: 'regrab', n: S.regrabs });
+      if (t.kind === 'audio') q('regrabMic', function () { var c = liveTrack('audio'); if (c && c !== t && !c.muted) return; return regrabMic('muted-' + why); });
+      else if (S.wantVideo) q('regrabCam', function () { var c = liveTrack('video'); if (c && c !== t && !c.muted) return; return regrabCam('muted-' + why); });
+    }, 1200);
+  }
+  function regrabCam(why) {
+    if (S.camGum) return S.camGum;
+    S.camGum = gum({ video: videoConstraints() }).then(function (st) {
+      var nt = st.getVideoTracks()[0]; if (!nt || S.closed) { if (nt) nt.stop(); return; }
+      watchTrack(nt, 'local');
+      var olds = S.stream ? S.stream.getVideoTracks() : [];
+      if (!S.stream) S.stream = new MediaStream();
+      var s = sender('video');
+      return (s ? s.replaceTrack(nt) : Promise.resolve()).then(function () {
+        olds.forEach(function (o) { try { S.stream.removeTrack(o); o.stop(); } catch (e) {} });
+        S.stream.addTrack(nt);
+        showLocal();
+        diag({ type: 'camera-regrab', state: 'replaced', why: why, sender: !!s });
+        post({ t: 'media', audio: !!liveTrack('audio'), video: true });
+      });
+    }).catch(function (e) { err('camera-regrab', e); }).then(function () { S.camGum = null; });
+    return S.camGum;
+  }
   function resumeAudio(why) {
     playRemoteAudio(why);
     // В очереди команд — после start (он ждёт первый getUserMedia), а не параллельно ему.
@@ -142,7 +177,7 @@ audio{display:none}
       diag({ type: 'audio-resume', why: why, mic: st, enabled: t ? !!t.enabled : false, pending: !!S.micGum });
       if (st === 'live') { syncSender('resume'); return; }
       // muted = захват прерван (CallKit/другое приложение) — WebKit снимет mute сам; новый захват тут прервал бы и этот.
-      if (st === 'muted') { syncSender('resume-muted'); return; }
+      if (st === 'muted') { checkMuted(t, why); syncSender('resume-muted'); return; }
       return regrabMic(why);
     });
   }
@@ -188,8 +223,12 @@ audio{display:none}
         S.stream = st;
         var a = st.getAudioTracks()[0];
         if (a) { a.enabled = S.audioOn; watchTrack(a, 'local'); }
-        post({ t: 'media', audio: !!a, video: st.getVideoTracks().length > 0 });
+        var v = st.getVideoTracks()[0];
+        if (v) watchTrack(v, 'local');
+        post({ t: 'media', audio: !!a, video: !!v, amuted: !!(a && a.muted), vmuted: !!(v && v.muted) });
         showLocal();
+        checkMuted(a, 'gum');
+        checkMuted(v, 'gum');
       });
   }
 
@@ -313,6 +352,8 @@ audio{display:none}
     start: function (cfg) {
       S.cfg = cfg || {};
       S.closed = false;
+      S.regrabs = 0;
+      if (S.cfg.established) S.established = true;   // переход «нативный → WKWebView» посреди соединённого звонка
       return q('start', startMedia);
     },
     createPC: function (o) { return q('createPC', function () { createPC(o.ice, o.policy, !!o.dc); }); },
@@ -436,7 +477,7 @@ audio{display:none}
     close: function () {
       S.closed = true;
       if (S.statsTimer) { clearInterval(S.statsTimer); S.statsTimer = null; }
-      S.micGum = null;
+      S.micGum = null; S.camGum = null;
       try { if (S.dc) S.dc.close(); } catch (e) {}
       try { if (S.pc) S.pc.close(); } catch (e) {}
       if (S.stream) S.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
@@ -482,6 +523,9 @@ audio{display:none}
         }
       });
       o.rtp = rtp.join(' ');
+      // Звук собеседника: <audio> играет (paused/readyState/currentTime) — проверка «приходит, но не слышно».
+      try { var ae = $('raudio'); o.ael = (ae.paused ? 'p' : 'r') + ae.readyState + (ae.muted ? 'm' : '') + ':' + Math.round(ae.currentTime); } catch (x) {}
+      var lt = liveTrack('audio'); o.mic = micTrackState(lt); var lv = liveTrack('video'); if (lv) o.cam = micTrackState(lv);
       S.lastBytes = o.aIn;
       post({ t: 'stats', s: o });
       last = o;

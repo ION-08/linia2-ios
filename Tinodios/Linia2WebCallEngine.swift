@@ -41,6 +41,9 @@ final class Linia2WebCallEngine: NSObject {
     private var audioObservers: [NSObjectProtocol] = []
     private var pending: [String] = []
     private var closed = false
+    /// LINIA2 (звук 1012): команды ждут, пока CallKit не активирует AVAudioSession (см. start).
+    private var gated = false
+    private var gateObserver: NSObjectProtocol?
     /// Последняя статистика JS (для call-diag и «Плохая связь»).
     private(set) var lastStats: [String: Any] = [:]
     private(set) var iceState: String = "none"
@@ -150,7 +153,7 @@ final class Linia2WebCallEngine: NSObject {
             }
         }
         let js = "window.L2Call&&L2Call.cmd(\(Self.jsString(name)),\(argJs))"
-        if loaded {
+        if loaded && (!gated || name == "close" || name == "muteAll") {
             webView.evaluateJavaScript(js, completionHandler: nil)
         } else {
             pending.append(js)
@@ -170,9 +173,77 @@ final class Linia2WebCallEngine: NSObject {
         return String(arr.dropFirst().dropLast())
     }
 
-    func start(audioOnly: Bool, caller: Bool, video: Bool) {
+    /// `established` — переход «нативный → WKWebView» посреди уже соединённого звонка (ошибки — ICE restart, не отбой).
+    func start(audioOnly: Bool, caller: Bool, video: Bool, established: Bool = false) {
         videoEnabled = video
-        call("start", ["audioOnly": audioOnly, "caller": caller, "video": video])
+        // LINIA2 (звук 1012, call_diag 766/769): getUserMedia шёл ДО активации AVAudioSession CallKit-ом; активация
+        // посреди захвата глушила трек (muted навсегда, 0 пакетов RTP). Теперь с CallKit — сначала «звук включён»
+        // (didActivate → .linia2CallAudioActivated), потом getUserMedia; не дождались за kGateTimeout — как раньше.
+        if CallManager.useCallKit && !CallManager.linia2AudioActive && gateObserver == nil {
+            gated = true
+            let t0 = Date()
+            client?.onDiagEvent?(["type": "web-gate", "state": "wait-audio", "app": Self.appState()])
+            gateObserver = NotificationCenter.default.addObserver(forName: .linia2CallAudioActivated, object: nil, queue: .main) { [weak self] _ in
+                self?.openGate("activated", t0)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.kGateTimeout) { [weak self] in self?.openGate("timeout", t0) }
+        }
+        var cfg: [String: Any] = ["audioOnly": audioOnly, "caller": caller, "video": video]
+        if established { cfg["established"] = true }
+        call("start", cfg)
+    }
+
+    static let kGateTimeout: TimeInterval = 2.5
+
+    private func openGate(_ why: String, _ t0: Date) {
+        if let o = gateObserver { NotificationCenter.default.removeObserver(o) }
+        gateObserver = nil
+        guard gated else { return }
+        gated = false
+        client?.onDiagEvent?(["type": "web-gate", "state": "open", "why": why, "ms": Int(Date().timeIntervalSince(t0) * 1000),
+                              "pending": pending.count, "loaded": loaded])
+        guard loaded, !closed else { return }
+        let list = pending
+        pending.removeAll()
+        list.forEach { webView.evaluateJavaScript($0, completionHandler: nil) }
+    }
+
+    /// CallKit включил звук (didActivate): снять «mute» захвата WebKit и сказать странице «звук есть».
+    func linia2AudioActivated() {
+        reactivateCapture("activated")
+        call("audioResume", ["reason": "activated"])
+    }
+
+    /// LINIA2 (звук 1012): WebKit глушит захват микрофона/камеры при прерывании AVAudioSession (активация CallKit,
+    /// GSM-звонок) и сам не всегда снимает — включаем захват явно (iOS 15+), состояние до/после — в диагностику.
+    func reactivateCapture(_ why: String) {
+        guard !closed else { return }
+        if #available(iOS 15.0, *) {
+            let wv = webView!
+            let mic0 = Self.captureName(wv.microphoneCaptureState), cam0 = Self.captureName(wv.cameraCaptureState)
+            let wantCam = videoEnabled && wv.cameraCaptureState == .muted
+            let wantMic = wv.microphoneCaptureState == .muted
+            client?.onDiagEvent?(["type": "web-capture-state", "why": why, "mic": mic0, "cam": cam0,
+                                  "action": wantMic || wantCam ? "activate" : "none", "app": Self.appState()])
+            let report: () -> Void = { [weak self, weak wv] in
+                guard let self = self, let wv = wv else { return }
+                self.client?.onDiagEvent?(["type": "web-capture-state", "why": why + "-after",
+                                           "mic": Self.captureName(wv.microphoneCaptureState),
+                                           "cam": Self.captureName(wv.cameraCaptureState)])
+            }
+            if wantMic { wv.setMicrophoneCaptureState(.active) { report() } }
+            if wantCam { wv.setCameraCaptureState(.active) { if !wantMic { report() } } }
+        }
+    }
+
+    @available(iOS 15.0, *)
+    private static func captureName(_ s: WKMediaCaptureState) -> String {
+        switch s {
+        case .none: return "none"
+        case .active: return "active"
+        case .muted: return "muted"
+        @unknown default: return "?"
+        }
     }
 
     func createPeerConnection(iceServers: [RTCIceServer], relayOnly: Bool, dataChannel: Bool) {
@@ -197,7 +268,10 @@ final class Linia2WebCallEngine: NSObject {
             let t = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap { AVAudioSession.InterruptionType(rawValue: $0) }
             let began = t == .began
             self.client?.onDiagEvent?(["type": "audio-interruption", "state": began ? "began" : "ended", "engine": "web", "app": Self.appState()])
-            if !began { self.call("audioResume", ["reason": "interruption-ended"]) }
+            if !began {
+                self.reactivateCapture("interruption-ended")
+                self.call("audioResume", ["reason": "interruption-ended"])
+            }
         })
         audioObservers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: s, queue: .main) { [weak self] n in
             let r = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
@@ -212,6 +286,9 @@ final class Linia2WebCallEngine: NSObject {
         guard !closed else { return }
         audioObservers.forEach { NotificationCenter.default.removeObserver($0) }
         audioObservers.removeAll()
+        if let o = gateObserver { NotificationCenter.default.removeObserver(o) }
+        gateObserver = nil
+        gated = false
         if !CallManager.linia2AudioActive { CallManager.linia2WebAudio = false }
         call("muteAll", nil)
         call("close", nil)
@@ -242,9 +319,11 @@ final class Linia2WebCallEngine: NSObject {
             loaded = true
             client.onDiagEvent?(["type": "web-ready", "engine": "web", "app": Self.appState(),
                                  "ms_load": Int(Date().timeIntervalSince(loadStarted) * 1000), "pending": pending.count])
-            let list = pending
-            pending.removeAll()
-            list.forEach { webView.evaluateJavaScript($0, completionHandler: nil) }
+            if !gated {
+                let list = pending
+                pending.removeAll()
+                list.forEach { webView.evaluateJavaScript($0, completionHandler: nil) }
+            }
             let r = onReady
             onReady = nil
             r?()
@@ -290,7 +369,11 @@ final class Linia2WebCallEngine: NSObject {
         case "media":
             hasAudio = (m["audio"] as? Bool) ?? false
             hasVideo = (m["video"] as? Bool) ?? false
-            client.onDiagEvent?(["type": "web-media", "audio": hasAudio, "video": hasVideo, "app": Self.appState()])
+            client.onDiagEvent?(["type": "web-media", "audio": hasAudio, "video": hasVideo, "app": Self.appState(),
+                                 "amuted": (m["amuted"] as? Bool) ?? false, "vmuted": (m["vmuted"] as? Bool) ?? false])
+        case "capMuted":
+            // Захват заглушён WebKit-ом (трек muted) — включить явно; страница через 1,2 с перезахватит сама.
+            reactivateCapture("track-muted-" + ((m["kind"] as? String) ?? "?") + "-" + ((m["why"] as? String) ?? ""))
         case "cameraFailed":
             client.onDiagEvent?(["type": "error", "where": "web-camera"])
         case "stats":
