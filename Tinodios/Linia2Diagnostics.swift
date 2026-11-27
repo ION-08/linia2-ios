@@ -162,7 +162,10 @@ final class Linia2CallDiag {
         events.append(e)
         let s = seqProvider()
         if s > 0 { seq = s }
-        if events.count >= 40 { flush() }
+        // LINIA2: ключевые шаги сигнализации — сразу на сервер: если поток звонка зависнет или приложение
+        // закроется, видно, до какого шага дошли (раньше уходили только «start», stats и «end»).
+        let key: Set<String> = ["pair", "pc", "accept-sent", "accepted", "offer", "answer", "offer-sent", "answer-sent", "error", "ice"]
+        if events.count >= 40 || key.contains((ev["type"] as? String) ?? "") { flush() }
     }
 
     func end(_ reason: String) {
