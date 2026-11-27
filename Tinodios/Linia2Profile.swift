@@ -37,7 +37,8 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
         // Низ области прокрутки — над плавающим нижним меню (безопасная зона снизу + меню). Отступ contentInset
         // не помогал: кнопка «Удалить аккаунт» оставалась в границах прокрутки, но под меню — прокрутка и
         // «scroll to visible» считали её видимой, а нажать было нельзя.
-        additionalSafeAreaInsets.bottom = Linia2TabBarController.reservedBottom
+        // Профиль — вложенный экран: нижнего меню здесь нет (27.11), запас снизу не нужен.
+        additionalSafeAreaInsets.bottom = 0
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(textViewBegan(_:)),
                                                name: UITextView.textDidBeginEditingNotification, object: aboutView)
