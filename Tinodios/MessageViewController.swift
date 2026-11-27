@@ -849,7 +849,8 @@ extension MessageViewController: UICollectionViewDataSource {
                 cell.deliveryMarker.accessibilityIdentifier = "l2.delivery.\(message.seqId)"
             }
         }
-        let markerTextColor = isFromCurrentSender(message: message) ? UIColor.white.withAlphaComponent(0.75) : L2.textSecondary
+        // Дизайн: на фото без подписи время белое (на тёмной плашке поверх снимка), иначе — серое по серому.
+        let markerTextColor = isFromCurrentSender(message: message) || linia2IsPureMedia(message) ? UIColor.white.withAlphaComponent(0.9) : L2.textSecondary
         if let ts = message.ts, !linia2IsServiceMessage(message) {
             // LINIA2: исчезающее сообщение — вместо времени таймер «⏱0:20» (после прочтения — обратный отсчёт).
             let burnStamp = topic.flatMap { Linia2Burn.stamp(topic: $0.name, message: message) }
