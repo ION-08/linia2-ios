@@ -260,11 +260,27 @@ final class Linia2AppLock {
         lockWindow?.isHidden = true
         lockWindow = nil
         (UIApplication.shared.delegate as? AppDelegate)?.window?.makeKey()
+        let actions = pendingAfterUnlock
+        pendingAfterUnlock.removeAll()
+        // Следующий цикл: окно PIN уже убрано, главное окно — ключевое.
+        if !actions.isEmpty { DispatchQueue.main.async { actions.forEach { $0() } } }
+    }
+
+    /// LINIA2: действие после ввода PIN (переход к чату из уведомления). Без блокировки — сразу.
+    private var pendingAfterUnlock: [() -> Void] = []
+    func afterUnlock(_ action: @escaping () -> Void) {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.afterUnlock(action) }; return }
+        if locked {
+            pendingAfterUnlock = [action]   // только последнее нажатие
+        } else {
+            action()
+        }
     }
 
     /// «Забыли PIN?» — выход из аккаунта и сброс блокировки.
     func forgotPin() {
         disable()
+        pendingAfterUnlock.removeAll()
         unlock()
         UiUtils.logoutAndRouteToLoginVC()
     }

@@ -450,18 +450,17 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         L2Log.event("l2_push_opened", ["what": (userInfo["what"] as? String) ?? "msg"])
         defer { completionHandler() }
         guard let topicName = userInfo["topic"] as? String, !topicName.isEmpty else { return }
-        let tinode = Cache.tinode
-        if tinode.isConnectionAuthenticated {
-            UiUtils.routeToMessageVC(forTopic: topicName)
-            return
+        // LINIA2 (вылет «уведомление → PIN → …», 1008): раньше без входа — второе параллельное подключение
+        // (connectAndLoginSync с глобальной очереди, одновременно с connectInBackground из willEnterForeground),
+        // и переход к чату — только после входа (до 20 с ожидания). Теперь: чат открывается сразу из кэша
+        // (после PIN-кода, если он показан), подключение — обычным путём, с повторами.
+        let open = { UiUtils.routeToMessageVC(forTopic: topicName) }
+        if Linia2AppLock.shared.isLocked {
+            Linia2AppLock.shared.afterUnlock(open)
+        } else {
+            open()
         }
-        DispatchQueue.global(qos: .userInitiated).async {
-            if !SharedUtils.connectAndLoginSync(using: tinode, inBackground: false) {
-                DispatchQueue.main.async { UiUtils.showToast(message: Linia2Texts.t("Failed to connect to server")) }
-            } else {
-                UiUtils.routeToMessageVC(forTopic: topicName)
-            }
-        }
+        if !Cache.tinode.isConnectionAuthenticated { AppDelegate.connectInBackground(attempt: 0) }
     }
 }
 
