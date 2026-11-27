@@ -256,7 +256,7 @@ extension MessageViewController {
     /// Пилюля под временем и галочками своих сообщений (#00000040).
     func linia2LayoutMetaPill(cell: MessageCell, message: Message) {
         let pill = cell.linia2MetaPill
-        guard isFromCurrentSender(message: message) || linia2IsRound(message), !message.isDeleted, !linia2IsServiceMessage(message),
+        guard isFromCurrentSender(message: message) || linia2IsRound(message) || linia2IsPureMedia(message), !message.isDeleted, !linia2IsServiceMessage(message),
               let text = cell.timestampLabel.text, !text.isEmpty else {
             pill.isHidden = true
             return

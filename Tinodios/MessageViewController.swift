@@ -118,6 +118,8 @@ class MessageViewController: UIViewController {
         static let kIncomingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
         static let kOutgoingMessageContentInset = UIEdgeInsets(top: 4, left: 12, bottom: 13, right: 12)
         static let kDeletedMessageContentInset = UIEdgeInsets(top: 4, left: 14, bottom: 0, right: 14)
+        // Дизайн: фото/видео без подписи — почти до края пузыря (как в Telegram), время — плашкой на снимке.
+        static let kL2MediaInset = UIEdgeInsets(top: 3, left: 3, bottom: 3, right: 3)
 
         // Carve out for timestamp and delivery marker in the bottom-right corner.
         static let kIncomingMetadataCarveout = "     "
@@ -775,6 +777,10 @@ extension MessageViewController: UICollectionViewDataSource {
         linia2RenderReactions(cell: cell, message: message)
         linia2LayoutMetaPill(cell: cell, message: message)
         linia2RenderRound(cell: cell, message: message)
+        // Дизайн: снимок со скруглением чуть меньше пузыря (поле 3 pt), без «квадратных» углов внутри.
+        let pureMedia = linia2IsPureMedia(message)
+        cell.content.layer.cornerRadius = pureMedia ? max(0, Linia2Config.shared.radius("bubble", 18) - 3) : 0
+        cell.content.layer.masksToBounds = pureMedia
         linia2LayoutVoicePlay(cell: cell, message: message)
 
         return cell
@@ -1071,6 +1077,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
         let contentInset =
             isService && !isDeleted ? Constants.kServiceContentInset :
             isCentered ? Constants.kDeletedMessageContentInset :
+            linia2IsPureMedia(message) ? Constants.kL2MediaInset :
             isOutgoing ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
         attr.contentFrame = CGRect(x: contentInset.left, y: contentInset.top, width: attr.containerFrame.width - contentInset.left - contentInset.right, height: attr.containerFrame.height - contentInset.top - contentInset.bottom - (showUploadProgress ? Constants.kProgressViewHeight : 0))
 
@@ -1163,7 +1170,8 @@ extension MessageViewController: MessageViewLayoutDelegate {
     // Calculate maximum width of content inside message bubble
     func calcMaxContentWidth(for message: Message, avatarsVisible: Bool) -> CGFloat {
 
-        let insets = isFromCurrentSender(message: message) ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
+        let insets = linia2IsPureMedia(message) ? Constants.kL2MediaInset :
+            isFromCurrentSender(message: message) ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
 
         let avatarWidth = avatarsVisible ? Constants.kAvatarSize : 0
 
@@ -1182,6 +1190,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
         let insets =
             isService ? Constants.kServiceContentInset :
             message.isDeleted ? Constants.kDeletedMessageContentInset :
+            linia2IsPureMedia(message) ? Constants.kL2MediaInset :
             isFromCurrentSender(message: message) ? Constants.kOutgoingMessageContentInset : Constants.kIncomingMessageContentInset
 
         var size = calcContentSize(for: message, maxWidth: maxWidth)
@@ -1319,5 +1328,13 @@ final class Linia2FadeEdgeView: UIView {
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         updateColors()
+    }
+}
+
+extension MessageViewController {
+    /// Фото/видео без подписи (не кружок): выводится почти до края пузыря.
+    func linia2IsPureMedia(_ message: Message) -> Bool {
+        guard !message.isDeleted, let m = message as? StoredMessage, m.isVisualMedia, !linia2IsRound(message) else { return false }
+        return (message.content?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
