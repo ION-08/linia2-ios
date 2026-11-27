@@ -22,10 +22,10 @@ import WebKit
 import WebRTC
 
 final class Linia2WebCallEngine: NSObject {
-    /// Флаг удалённого конфига. По умолчанию — включён (решение координатора; вернуть нативный — false в app-config).
+    /// Флаг удалённого конфига. По умолчанию — выключен (нативный движок); включить — features.webCallEngine=true в app-config.
     static var enabled: Bool {
         if #available(iOS 15.0, *) {
-            return Linia2Config.shared.feature("webCallEngine", default: true)
+            return Linia2Config.shared.feature("webCallEngine", default: false)
         }
         return false   // до iOS 15 нет requestMediaCapturePermissionFor — только нативный движок
     }
