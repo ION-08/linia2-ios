@@ -77,7 +77,7 @@ extension MessageViewController: SendMessageBarDelegate {
             Cache.mediaRecorder.stop(discard: true)
             currentAudioPlayer?.stop()
             currentAudioPlayer = nil
-            (self.inputAccessoryView as! SendMessageBar).audioPlaybackAction(.playbackReset)
+            self.sendMessageBar.audioPlaybackAction(.playbackReset)
         case .playbackStart:
             if let recordURL = Cache.mediaRecorder.recordFileURL {
                 Linia2Playback.shared.stopAll()   // LINIA2: прослушивание записи — остальное стоп
@@ -86,11 +86,11 @@ extension MessageViewController: SendMessageBarDelegate {
                 currentAudioPlayer!.delegate = self
                 currentAudioPlayer!.media = VLCMedia(url: recordURL)
                 currentAudioPlayer!.play()
-                (self.inputAccessoryView as! SendMessageBar).audioPlaybackAction(.playbackStart)
+                self.sendMessageBar.audioPlaybackAction(.playbackStart)
             }
         case .playbackPause:
             currentAudioPlayer?.pause()
-            (self.inputAccessoryView as! SendMessageBar).audioPlaybackAction(.playbackPause)
+            self.sendMessageBar.audioPlaybackAction(.playbackPause)
             break
         default:
             Cache.log.error("Unknown recording action")
@@ -110,14 +110,14 @@ extension MessageViewController: UIDocumentPickerDelegate {
         // to the user.
         // sendMessageBar.becomeFirstResponder() "fixes" the window stack.
         // This is UGLY because it pops the keyboard. Find a better solution.
-        (self.inputAccessoryView as? SendMessageBar)?.inputField.becomeFirstResponder()
+        self.sendMessageBar.inputField.becomeFirstResponder()
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         // Convert file to Data and attach to message
         do {
             // See comment in documentPickerWasCancelled().
-            (self.inputAccessoryView as? SendMessageBar)?.inputField.becomeFirstResponder()
+            self.sendMessageBar.inputField.becomeFirstResponder()
 
             let bits = try Data(contentsOf: urls[0], options: .mappedIfSafe)
             let fname = urls[0].lastPathComponent
@@ -134,7 +134,7 @@ extension MessageViewController: UIDocumentPickerDelegate {
                 return
             }
 
-            let pendingPreview = (self.inputAccessoryView as! SendMessageBar).pendingPreviewText
+            let pendingPreview = self.sendMessageBar.pendingPreviewText
             let content = FilePreviewContent(
                 data: bits,
                 refUrl: urls[0],
@@ -160,7 +160,7 @@ extension MessageViewController: ImagePickerDelegate {
             let width = Int(image.size.width * image.scale)
             let height = Int(image.size.height * image.scale)
 
-            let pendingPreview = (self.inputAccessoryView as! SendMessageBar).pendingPreviewText
+            let pendingPreview = self.sendMessageBar.pendingPreviewText
             let content = ImagePreviewContent(
                 imgContent: ImagePreviewContent.ImageContent.uiimage(image),
                 caption: nil,
@@ -174,7 +174,7 @@ extension MessageViewController: ImagePickerDelegate {
             performSegue(withIdentifier: "ShowImagePreview", sender: content)
         case .video(let videoUrl, let mime, let fname):
             guard let videoUrl = videoUrl else { return }
-            let pendingPreview = (self.inputAccessoryView as! SendMessageBar).pendingPreviewText
+            let pendingPreview = self.sendMessageBar.pendingPreviewText
             let content = VideoPreviewContent(
                 videoSrc: .local(videoUrl, nil),
                 duration: 0,
@@ -196,13 +196,13 @@ extension MessageViewController: MediaRecorderDelegate {
     }
 
     func didFinishRecording(recorder: MediaRecorder, url: URL?, duration: TimeInterval) {
-        (self.inputAccessoryView as! SendMessageBar).audioPlaybackPreview(recorder.preview, duration: duration)
+        self.sendMessageBar.audioPlaybackPreview(recorder.preview, duration: duration)
     }
 
     func didUpdateRecording(recorder: MediaRecorder, amplitude: Float, atTime: TimeInterval) {
-        let wave = (self.inputAccessoryView as! SendMessageBar).wavePreviewImageView
+        let wave = self.sendMessageBar.wavePreviewImageView
         wave?.put(amplitude: amplitude, atTime: atTime)
-        (self.inputAccessoryView as! SendMessageBar).audioDurationLabel.text = atTime.asDurationString
+        self.sendMessageBar.audioDurationLabel.text = atTime.asDurationString
     }
 
     func didFailRecording(recorder: MediaRecorder, _ error: Error) {
@@ -210,7 +210,7 @@ extension MessageViewController: MediaRecorderDelegate {
             Cache.log.error("Recording failed: %@", error.localizedDescription)
             UiUtils.showToast(message: String(format: NSLocalizedString("Recording failed", comment: "Error message")))
         }
-        (self.inputAccessoryView as! SendMessageBar).showAudioBar(.hidden)
+        self.sendMessageBar.showAudioBar(.hidden)
     }
 }
 
@@ -231,8 +231,8 @@ extension MessageViewController: VLCMediaPlayerDelegate {
         case .stopped:
             fallthrough
         case .ended:
-            (self.inputAccessoryView as! SendMessageBar).showAudioBar(.longPaused)
-            (self.inputAccessoryView as! SendMessageBar).audioPlaybackAction(.playbackReset)
+            self.sendMessageBar.showAudioBar(.longPaused)
+            self.sendMessageBar.audioPlaybackAction(.playbackReset)
         default:
             break
         }

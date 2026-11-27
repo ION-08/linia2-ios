@@ -479,8 +479,12 @@ class UiUtils {
             // UIRemoteKeyboardWindow is no longer available in iOS 16 so keyboard (if presented) may
             // cover the toast.
             // Show toast over the input accessory view if visible.
-            if let inputView = UiUtils.topViewController(rootViewController: (UIApplication.shared.delegate as! AppDelegate).window?.rootViewController)?.inputAccessoryView {
+            let topVC = UiUtils.topViewController(rootViewController: (UIApplication.shared.delegate as! AppDelegate).window?.rootViewController)
+            if let inputView = topVC?.inputAccessoryView {
                 parent = inputView
+            } else if let chat = topVC as? MessageViewController, chat.isViewLoaded, chat.view.window != nil {
+                // LINIA2_KBD_GUIDE: панель ввода чата — подвью над клавиатурой; тост — поверх неё, как раньше.
+                parent = chat.linia2ActiveInputBar
             }
         }
 

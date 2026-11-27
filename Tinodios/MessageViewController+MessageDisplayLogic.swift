@@ -258,6 +258,7 @@ extension MessageViewController: MessageDisplayLogic {
         } else {
             self.sendMessageBar.togglePendingPreviewBar(withMessage: preview, onAction: action)
         }
-        self.reloadInputViews()
+        // LINIA2_KBD_GUIDE: панель — подвью экрана; новая высота (цитата) — обычной перекладкой.
+        self.view.setNeedsLayout()
     }
 }
