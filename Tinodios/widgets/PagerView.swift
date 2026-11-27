@@ -53,6 +53,13 @@ public class PagerView: UIView, UICollectionViewDelegateFlowLayout, UICollection
         ])
     }
 
+    // Дизайн: внешний вид UICollectionView.appearance() (фон экрана) применяется при входе в окно и
+    // перетирает .clear из инициализатора — повторяем после.
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        collectionView.backgroundColor = .clear
+    }
+
     private lazy var collectionView: UICollectionView = {
         let layout = UICollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
