@@ -88,7 +88,7 @@ public class UserDb {
                     self.accountId <- baseDb.account?.id,
                     self.uid <- uid,
                     self.updated <- updated ?? Date(),
-                    self.pub <- serializedPub
+                    self.pub <- L2Vault.sealMeta(serializedPub)
             ))
             return rowid
         } catch SQLite.Result.error(message: let errMsg, code: let code, statement: _) {
@@ -119,7 +119,7 @@ public class UserDb {
             setters.append(self.updated <- u)
         }
         if let s = serializedPub {
-            setters.append(self.pub <- s)
+            setters.append(self.pub <- L2Vault.sealMeta(s))
         }
         guard setters.count > 0 else { return false }
         let record = self.table.filter(self.id == userId)
@@ -166,7 +166,7 @@ public class UserDb {
     private func rowToUser(r: Row) -> UserProto? {
         let id = r[self.id]
         let updated = r[self.updated]
-        let pub = r[self.pub]
+        let pub = L2Vault.openMeta(r[self.pub])
         guard let user = DefaultUser.createFromPublicData(uid: r[self.uid], updated: updated, data: pub) else { return nil }
         let storedUser = StoredUser(id: id)
         user.payload = storedUser

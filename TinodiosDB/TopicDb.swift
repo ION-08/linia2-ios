@@ -159,8 +159,8 @@ public class TopicDb {
 
         topic.accessMode = Acs.deserialize(from: row[self.accessMode])
         topic.defacs = Defacs.deserialize(from: row[self.defacs])
-        topic.deserializePub(from: row[self.pub])
-        topic.deserializePriv(from: row[self.priv])
+        topic.deserializePub(from: L2Vault.openMeta(row[self.pub]))
+        topic.deserializePriv(from: L2Vault.openMeta(row[self.priv]))
         topic.deserializeTrusted(from: row[self.trusted])
         topic.payload = st
     }
@@ -250,8 +250,8 @@ public class TopicDb {
 
                     tags <- topic.tags?.joined(separator: ","),
                     creds <- (topic as? MeTopicProto)?.serializeCreds(),
-                    pub <- topic.serializePub(),
-                    priv <- topic.serializePriv(),
+                    pub <- L2Vault.sealMeta(topic.serializePub()),
+                    priv <- L2Vault.sealMeta(topic.serializePriv()),
                     trusted <- topic.serializeTrusted()
                 ))
             if rowid > 0 {
@@ -295,8 +295,8 @@ public class TopicDb {
         if let topic = topic as? MeTopicProto {
             setters.append(self.creds <- topic.serializeCreds())
         }
-        setters.append(self.pub <- topic.serializePub())
-        setters.append(self.priv <- topic.serializePriv())
+        setters.append(self.pub <- L2Vault.sealMeta(topic.serializePub()))
+        setters.append(self.priv <- L2Vault.sealMeta(topic.serializePriv()))
         setters.append(self.trusted <- topic.serializeTrusted())
         if let touched = topic.touched {
             setters.append(self.lastUsed <- touched)

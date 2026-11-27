@@ -117,8 +117,9 @@ final class Linia2AppLock {
     // MARK: жизненный цикл
 
     @objc private func willResignActive() {
-        guard isEnabled, !locked else { return }
-        showCover()   // скрываем содержимое в переключателе приложений
+        // Снимок в переключателе приложений — без переписки (всегда, даже без PIN).
+        guard !locked else { return }
+        showCover()
     }
 
     @objc private func didEnterBackground() {

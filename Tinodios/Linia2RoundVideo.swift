@@ -103,11 +103,7 @@ enum Linia2Round {
         return max(0, Int(ceil(left / 86400)))
     }
 
-    static var cacheDir: URL {
-        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("l2round", isDirectory: true)
-        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        return d
-    }
+    static var cacheDir: URL { Linia2Storage.roundDir }
 }
 
 // MARK: - Кружок в ленте
@@ -214,13 +210,12 @@ final class Linia2RoundVideoView: UIView {
             return
         }
         guard loadedKey != key, !loading else { return }   // без автозапуска
-        let file = Linia2Round.cacheDir.appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".mp4")
-        if FileManager.default.fileExists(atPath: file.path) {
+        // LINIA2: кэш кружков зашифрован (Linia2Storage: .l2v в кэше, расшифровка во временную папку).
+        if let file = Linia2Storage.roundPlayableFile(key: key) {
             prepare(file, key: key)
             return
         }
-        if let bits = entity.data?["val"]?.asData(), !bits.isEmpty {
-            try? bits.write(to: file)
+        if let bits = entity.data?["val"]?.asData(), !bits.isEmpty, let file = Linia2Storage.storeRound(key: key, data: bits) {
             prepare(file, key: key)
             return
         }
@@ -229,10 +224,14 @@ final class Linia2RoundVideoView: UIView {
         loading = true
         URLSession.shared.downloadTask(with: Cache.tinode.addAuthQueryParams(url)) { [weak self] tmp, resp, _ in
             let ok = ((resp as? HTTPURLResponse)?.statusCode ?? 0) == 200
-            if ok, let tmp = tmp { try? FileManager.default.moveItem(at: tmp, to: file) }
+            var file: URL?
+            if ok, let tmp = tmp, let d = try? Data(contentsOf: tmp) {
+                file = Linia2Storage.storeRound(key: key, data: d)
+                try? FileManager.default.removeItem(at: tmp)
+            }
             DispatchQueue.main.async {
                 self?.loading = false
-                if FileManager.default.fileExists(atPath: file.path) {
+                if let file = file {
                     self?.prepare(file, key: key)
                 } else {
                     self?.accessibilityValue = "не загрузилось"

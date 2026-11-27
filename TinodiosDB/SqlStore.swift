@@ -204,6 +204,13 @@ public class SqlStore: Storage {
             BaseDb.log.error("SqlStore - msgReceived: either user or topic not available, quitting.")
             return nil
         }
+        // LINIA2: «горизонт» стирания (код паники). Сообщения не новее момента стирания не сохраняются:
+        // в базу пишется только отметка «удалено» (как синхронизированное удаление), чтобы Tinode
+        // не запрашивал этот seq снова, — после стирания уровня 1 (сервер не трогается) приложение остаётся пустым.
+        if let h = L2Vault.horizon(for: self.myUid), let seq = msg.seq, seq > 0, (msg.ts ?? Date()) <= h {
+            _ = self.dbh?.messageDb?.deleteOrMarkDeleted(topicId: topicId, delId: L2Vault.horizonDelId, from: seq, to: seq + 1, hard: false)
+            return nil
+        }
         let sm = StoredMessage(from: msg)
         sm.topicId = topicId
         sm.userId = userId

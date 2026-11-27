@@ -121,7 +121,7 @@ public class SubscriberDb {
                 setters.append(self.read <- sub.getRead)
                 setters.append(self.recv <- sub.getRecv)
                 setters.append(self.clear <- sub.getClear)
-                setters.append(self.priv <- sub.serializePriv())
+                setters.append(self.priv <- L2Vault.sealMeta(sub.serializePriv()))
                 if let seen = sub.seen {
                     setters.append(self.lastSeen <- seen.when)
                     setters.append(self.userAgent <- seen.ua)
@@ -160,7 +160,7 @@ public class SubscriberDb {
                 setters.append(self.read <- sub.getRead)
                 setters.append(self.recv <- sub.getRecv)
                 setters.append(self.clear <- sub.getClear)
-                setters.append(self.priv <- sub.serializePriv())
+                setters.append(self.priv <- L2Vault.sealMeta(sub.serializePriv()))
                 if let seen = sub.seen {
                     setters.append(self.lastSeen <- seen.when)
                     setters.append(self.userAgent <- seen.ua)
@@ -215,8 +215,8 @@ public class SubscriberDb {
         s.seen = LastSeen(when: r[self.lastSeen], ua: r[self.userAgent])
         s.user = r[udb.uid]
         s.topic = r[tdb.topic]
-        s.deserializePub(from: r[udb.pub])
-        s.deserializePriv(from: r[self.priv])
+        s.deserializePub(from: L2Vault.openMeta(r[udb.pub]))
+        s.deserializePriv(from: L2Vault.openMeta(r[self.priv]))
         s.payload = ss
         return s
     }

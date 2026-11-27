@@ -95,6 +95,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             SharedUtils.identifyAndConfigureBranding()
         }
         SharedUtils.registerUserDefaults()
+        // LINIA2: защита файлов, зашифрованный кэш картинок, HTTP-кэш только в памяти (до первого обращения к базе).
+        Linia2Storage.start()
         // LINIA2: удалённые настройки (цвета, тексты, функции) — до применения темы.
         Linia2Config.shared.start()
         DispatchQueue.main.async { Linia2Failover.shared.start() }   // LINIA2_FAILOVER: резервные адреса + «Подключение…»
@@ -173,6 +175,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        Linia2Storage.becameActive()   // LINIA2: ключи хранилища и шифрование старой базы
         Linia2Turn.shared.prefetch()
         // LINIA2: звонок, принятый на заблокированном экране / в фоне, — показать его экран.
         Linia2CallCenter.shared.applicationDidBecomeActive()

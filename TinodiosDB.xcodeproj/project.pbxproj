@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0ACD8F7824AC579700043871 /* SharedUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD8F7724AC579700043871 /* SharedUtils.swift */; };
+		4C32B0A1C0DE0000000000D2 /* L2Vault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C32B0A1C0DE0000000000D1 /* L2Vault.swift */; };
 		0ACE9E552381342B006BE575 /* TinodiosDB.h in Headers */ = {isa = PBXBuildFile; fileRef = 0ACE9E532381342B006BE575 /* TinodiosDB.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		0ACE9E662381356B006BE575 /* StoredMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACE9E632381356B006BE575 /* StoredMessage.swift */; };
 		0ACE9E672381356B006BE575 /* TopicDb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACE9E642381356B006BE575 /* TopicDb.swift */; };
@@ -23,6 +24,7 @@
 
 /* Begin PBXFileReference section */
 		0ACD8F7724AC579700043871 /* SharedUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUtils.swift; sourceTree = "<group>"; };
+		4C32B0A1C0DE0000000000D1 /* L2Vault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L2Vault.swift; sourceTree = "<group>"; };
 		0ACD8F7B24AC704C00043871 /* Pods_TinodeSDK.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = Pods_TinodeSDK.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ACE9E502381342B006BE575 /* TinodiosDB.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TinodiosDB.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ACE9E532381342B006BE575 /* TinodiosDB.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TinodiosDB.h; sourceTree = "<group>"; };
@@ -79,6 +81,7 @@
 				0ACE9E602381356B006BE575 /* BaseDb.swift */,
 				0ACE9E5F2381356B006BE575 /* MessageDb.swift */,
 				0ACD8F7724AC579700043871 /* SharedUtils.swift */,
+				4C32B0A1C0DE0000000000D1 /* L2Vault.swift */,
 				0ACE9E652381356B006BE575 /* SqlStore.swift */,
 				0ACE9E632381356B006BE575 /* StoredMessage.swift */,
 				0ACE9E622381356B006BE575 /* SubscriberDb.swift */,
@@ -240,6 +243,7 @@
 				0ACE9E6C2381356B006BE575 /* AccountDb.swift in Sources */,
 				0ACE9E6B2381356B006BE575 /* BaseDb.swift in Sources */,
 				0ACD8F7824AC579700043871 /* SharedUtils.swift in Sources */,
+				4C32B0A1C0DE0000000000D2 /* L2Vault.swift in Sources */,
 				0ACE9E662381356B006BE575 /* StoredMessage.swift in Sources */,
 				0ACE9E6A2381356B006BE575 /* UserDb.swift in Sources */,
 				0ACE9E692381356B006BE575 /* MessageDb.swift in Sources */,

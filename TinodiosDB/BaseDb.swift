@@ -81,10 +81,13 @@ public class BaseDb {
             // LINIA2: базу одновременно открывает расширение уведомлений (каждый push) — без ожидания
             // занятая база сразу давала SQLITE_BUSY, а try! ниже (создание таблиц) — вылет при запуске.
             self.db?.busyTimeout = 3
+            // LINIA2: удалённые записи затираются нулями (а не остаются в свободных страницах файла).
+            try self.db?.execute("PRAGMA secure_delete = ON")
         } catch {
             BaseDb.log.error("BaseDb - init failed: %@", error.localizedDescription)
         }
         assert(self.db != nil)
+        BaseDb.excludeFromBackup()
 
         self.sqlStore = SqlStore(dbh: self)
     }
@@ -132,6 +135,16 @@ public class BaseDb {
             self.accountDb!.saveDeviceToken(token: deviceToken)
         }
         self.account = self.accountDb!.getActiveAccount()
+
+        // LINIA2: ключи шифрования хранилища (создаёт только приложение). Ключи новые, а в базе уже есть
+        // зашифрованные записи (ключи пропали: восстановление на другом устройстве, сброс Keychain) — их не
+        // прочитать: очищаем кэш (вход сохраняется), Tinode заново загрузит чаты с сервера.
+        // Первый запуск версии с шифрованием (ключей не было никогда) — это миграция, кэш не трогаем.
+        let keysExistedBefore = L2Vault.everCreated
+        if L2Vault.isAppProcess, L2Vault.bootstrap() == .created, keysExistedBefore, self.hasEncryptedRows() {
+            BaseDb.log.info("BaseDb - encryption keys were recreated, dropping unreadable cache")
+            self.clearCacheKeepingAccount()
+        }
     }
 
     private func clearSequences() {
@@ -280,5 +293,159 @@ extension SQLite.Connection {
         } catch {
             BaseDb.log.error("BaseDb - failed to release savepoint %@: %@", savepointName, error.localizedDescription)
         }
+    }
+}
+
+// MARK: - LINIA2: шифрование, миграция, криптоудаление
+
+extension BaseDb {
+    static var containerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BaseDb.kAppGroupId)
+    }
+    static let kDbFileName = "database.sqlite"
+
+    /// Файлы базы — не в резервную копию iCloud/компьютера (ключи *ThisDeviceOnly туда всё равно не попадают).
+    static func excludeFromBackup() {
+        guard let dir = containerURL else { return }
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            var u = dir.appendingPathComponent(kDbFileName + suffix)
+            guard FileManager.default.fileExists(atPath: u.path) else { continue }
+            var v = URLResourceValues()
+            v.isExcludedFromBackup = true
+            try? u.setResourceValues(v)
+        }
+    }
+
+    private func hasEncryptedRows() -> Bool {
+        guard let db = self.db else { return false }
+        let sql = "SELECT (SELECT count(*) FROM \(MessageDb.kTableName) WHERE substr(content,1,5) IN ('l2c1:','l2p1:')" +
+            " OR substr(head,1,5) IN ('l2m1:','l2m1w')) + (SELECT count(*) FROM \(TopicDb.kTableName) WHERE substr(pub,1,5) = 'l2m1:')"
+        guard let v = try? db.scalar(sql), let n = v as? Int64 else { return false }
+        return n > 0
+    }
+
+    /// Очистить все таблицы, кроме учётной записи (вход и токен устройства сохраняются).
+    private func clearCacheKeepingAccount() {
+        let account = self.account
+        let deviceToken = self.accountDb?.getDeviceToken()
+        clearDb()
+        if let a = account {
+            _ = self.accountDb?.addOrActivateAccount(for: a.uid, withCredMethods: a.credMethods)
+            self.accountDb?.saveDeviceToken(token: deviceToken)
+        }
+        self.account = self.accountDb?.getActiveAccount()
+    }
+
+    /// Миграция при первом запуске версии с шифрованием: открытые значения зашифровываются на месте
+    /// (сравнение со старым значением — параллельная запись Tinode не затирается), затем VACUUM
+    /// убирает открытый текст из свободных страниц файла. Данные не теряются: незашифрованное читается
+    /// как есть, пока миграция не дошла до этой строки. Возвращает true, если всё зашифровано.
+    public func encryptLegacyRows() -> Bool {
+        guard let db = self.db, L2Vault.metaKeyAvailable, L2Vault.contentKeyAvailable else { return false }
+        let jobs: [(table: String, column: String, content: Bool)] = [
+            (MessageDb.kTableName, "content", true), (MessageDb.kTableName, "head", false),
+            (TopicDb.kTableName, "pub", false), (TopicDb.kTableName, "priv", false),
+            (UserDb.kTableName, "pub", false), (SubscriberDb.kTableName, "priv", false),
+        ]
+        var total = 0
+        for job in jobs {
+            let select = "SELECT id, \(job.column) FROM \(job.table) WHERE \(job.column) IS NOT NULL AND " +
+                "substr(\(job.column),1,5) NOT IN ('l2c1:','l2p1:','l2m1:','l2m1w') LIMIT 200"
+            let update = "UPDATE \(job.table) SET \(job.column) = ? WHERE id = ? AND \(job.column) = ?"
+            while true {
+                var batch: [(Int64, String)] = []
+                do {
+                    for row in try db.prepare(select) {
+                        if let id = row[0] as? Int64, let v = row[1] as? String { batch.append((id, v)) }
+                    }
+                } catch {
+                    BaseDb.log.error("BaseDb - migration select failed: %@", error.localizedDescription)
+                    return false
+                }
+                if batch.isEmpty { break }
+                var changed = 0
+                do {
+                    try db.transaction {
+                        for (id, v) in batch {
+                            guard let enc = job.content ? L2Vault.sealContent(v) : L2Vault.sealMeta(v), enc != v else { continue }
+                            try db.run(update, enc, id, v)
+                            changed += db.changes
+                        }
+                    }
+                } catch {
+                    BaseDb.log.error("BaseDb - migration update failed: %@", error.localizedDescription)
+                    return false
+                }
+                // Ничего не зашифровалось (ключ стал недоступен) — не крутиться, повторим при следующем запуске.
+                if changed == 0 { return false }
+                total += changed
+            }
+        }
+        if total > 0 { try? db.execute("VACUUM") }
+        BaseDb.log.info("BaseDb - migration: %d values encrypted", total)
+        return true
+    }
+
+    /// Сжать файл (после стирания/миграции): VACUUM переписывает базу без свободных страниц.
+    public func vacuum() {
+        try? self.db?.execute("VACUUM")
+    }
+
+    /// КОД ПАНИКИ: база заменяется новой пустой (учётная запись и токен устройства переносятся — вход
+    /// не теряется). Старые файлы сразу переименовываются (мгновенно, без долгого DELETE) и стираются
+    /// в фоне: ключи к ним к этому моменту уже уничтожены (L2Vault.destroyKeys), содержимое не прочитать.
+    /// keepAccount = false — без учётной записи (выход из аккаунта).
+    public static func wipeAndRecreate(keepAccount: Bool) {
+        var trash: URL?
+        accessQueue.sync {
+            let old = BaseDb.default
+            let account = keepAccount ? old?.account : nil
+            let deviceToken = keepAccount ? old?.accountDb?.getDeviceToken() : nil
+            BaseDb.default = nil
+            old?.db = nil
+            if let dir = containerURL {
+                let t = dir.appendingPathComponent("l2trash", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try? FileManager.default.createDirectory(at: t, withIntermediateDirectories: true)
+                for suffix in ["", "-journal", "-wal", "-shm"] {
+                    let src = dir.appendingPathComponent(kDbFileName + suffix)
+                    guard FileManager.default.fileExists(atPath: src.path) else { continue }
+                    if (try? FileManager.default.moveItem(at: src, to: t.appendingPathComponent(kDbFileName + suffix))) == nil {
+                        try? FileManager.default.removeItem(at: src)
+                    }
+                }
+                trash = t
+            }
+            let instance = BaseDb()
+            BaseDb.default = instance
+            instance.initDb()
+            if let a = account {
+                _ = instance.accountDb?.addOrActivateAccount(for: a.uid, withCredMethods: a.credMethods)
+                instance.accountDb?.saveDeviceToken(token: deviceToken)
+                instance.account = instance.accountDb?.getActiveAccount()
+            }
+        }
+        if trash != nil { DispatchQueue.global(qos: .utility).async { purgeTrash() } }
+    }
+
+    /// Стереть переименованные старые базы (в т.ч. оставшиеся от прерванного стирания).
+    public static func purgeTrash() {
+        guard let dir = containerURL?.appendingPathComponent("l2trash", isDirectory: true) else { return }
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Только для автотестов (-l2-uitest): сколько записей в базе.
+    public func l2DebugCounts() -> [String: Int] {
+        guard let db = self.db else { return [:] }
+        func n(_ sql: String) -> Int {
+            guard let v = try? db.scalar(sql), let i = v as? Int64 else { return -1 }
+            return Int(i)
+        }
+        return [
+            "msgs": n("SELECT count(*) FROM \(MessageDb.kTableName) WHERE content IS NOT NULL AND status <= \(BaseDb.Status.synced.rawValue)"),
+            "plain": n("SELECT count(*) FROM \(MessageDb.kTableName) WHERE content IS NOT NULL AND substr(content,1,5) NOT IN ('l2c1:','l2p1:')"),
+            "topics": n("SELECT count(*) FROM \(TopicDb.kTableName) WHERE topic NOT IN ('me','fnd','sys')"),
+            "users": n("SELECT count(*) FROM \(UserDb.kTableName)"),
+            "subs": n("SELECT count(*) FROM \(SubscriberDb.kTableName)"),
+        ]
     }
 }

@@ -148,9 +148,9 @@ public class MessageDb {
             setters.append(self.effectiveTs <- effTs)
         }
         if let h = msg.head {
-            setters.append(self.head <- Tinode.serializeObject(h))
+            setters.append(self.head <- L2Vault.sealMeta(Tinode.serializeObject(h)))   // LINIA2: шифрование
         }
-        setters.append(self.content <- msg.content?.serialize())
+        setters.append(self.content <- L2Vault.sealContent(msg.content?.serialize()))
         msg.msgId = try db.run(self.table.insert(setters))
         return msg.msgId
     }
@@ -246,7 +246,7 @@ public class MessageDb {
             setters.append(self.status <- status!.rawValue)
         }
         if content != nil {
-            setters.append(self.content <- content!.serialize())
+            setters.append(self.content <- L2Vault.sealContent(content!.serialize()))
         }
         if !setters.isEmpty {
             do {
@@ -455,8 +455,8 @@ public class MessageDb {
         sm.from = r[self.sender]
         sm.ts = r[self.effectiveTs] ?? r[self.ts]
         sm.seq = r[self.effectiveSeq] ?? r[self.seq]
-        sm.head = Tinode.deserializeObject(from: r[self.head])
-        sm.content = Drafty.deserialize(from: r[self.content])
+        sm.head = Tinode.deserializeObject(from: L2Vault.openMeta(r[self.head]))
+        sm.content = Drafty.deserialize(from: L2Vault.openContent(r[self.content]))
         if previewLen > 0, let content = sm.content {
             sm.content = content.preview(previewLen: previewLen)
         }
@@ -663,10 +663,11 @@ public class MessageDb {
         guard limit > 0, let topicDb = baseDb.topicDb else { return [] }
         let topics = topicDb.table
         // Заголовок хранится как "Dictionary<String, JSONValue>;{...json...}", поэтому ищем ключ "webrtc" подстрокой.
+        // LINIA2: зашифрованный заголовок звонка помечен префиксом l2m1w: (L2Vault.sealMeta).
         let query = self.table
             .select(self.table[*], topics[topicDb.topic])
             .join(.leftOuter, topics, on: self.table[self.topicId] == topics[topicDb.id])
-            .filter(self.table[self.delId] == nil && self.table[self.head].like("%\"webrtc\"%"))
+            .filter(self.table[self.delId] == nil && (self.table[self.head].like("%\"webrtc\"%") || self.table[self.head].like(L2Vault.pMetaCall + "%")))
             .order(self.table[self.ts].desc)
             .limit(limit * 4)
 
@@ -719,14 +720,14 @@ public class MessageDb {
             }
             sm.seq = g.callSeq
             var head: [String: JSONValue] = [:]
-            if let orig = g.original, let h: [String: JSONValue] = Tinode.deserializeObject(from: orig[self.head]) {
+            if let orig = g.original, let h: [String: JSONValue] = Tinode.deserializeObject(from: L2Vault.openMeta(orig[self.head])) {
                 head = h
             }
-            if let h: [String: JSONValue] = Tinode.deserializeObject(from: g.latest[self.head]) {
+            if let h: [String: JSONValue] = Tinode.deserializeObject(from: L2Vault.openMeta(g.latest[self.head])) {
                 head.merge(h) { (_, new) in new }
             }
             sm.head = head
-            sm.content = Drafty.deserialize(from: g.latest[self.content])
+            sm.content = Drafty.deserialize(from: L2Vault.openContent(g.latest[self.content]))
             sm.topic = base[topicDb.topic]
             result.append(sm)
         }
