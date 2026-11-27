@@ -34,8 +34,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             switch info.event {
             case  "accept":
                 // We have just accepted this call in another client.
+                // LINIA2 (несколько устройств): сервер шлёт accept от «себя» всем НАШИМ сессиям, кроме ответившей
+                // (infoCallSubsOffline, skipSid). Пришёл — значит, ответило другое устройство, даже если мы тоже
+                // успели нажать «Принять» (наш accept сервер отбросил — участников уже двое): снять у себя.
+                let fromMe = info.from == nil || Cache.tinode.isMe(uid: info.from)
                 if !Cache.callManager.currentCallIsOutgoing {
-                    Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq, reason: .answeredElsewhere)
+                    DispatchQueue.main.async {
+                        let cm = Cache.callManager
+                        if fromMe, let cur = cm.callInProgress, cur.topic == topic, cur.seq == seq, cur.accepted {
+                            cm.endCallInProgressRemotely(topic: topic, seq: seq, why: "accepted-elsewhere", reason: .answeredElsewhere)
+                        } else {
+                            cm.dismissIncomingCall(onTopic: topic, withSeqId: seq, reason: .answeredElsewhere)
+                        }
+                    }
                 } else if let cur = Cache.callManager.callInProgress, cur.topic == topic, cur.seq == seq {
                     // LINIA2: собеседник ответил на наш звонок — с этого момента 30 с на соединение.
                     Cache.callManager.startConnectWatchdog()
@@ -47,7 +58,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                     if let cur = cm.callInProgress, cur.topic == topic, cur.seq == seq, cur.accepted || cm.currentCallIsOutgoing {
                         cm.endCallInProgressRemotely(topic: topic, seq: seq, why: "info-hang-up")
                     } else {
-                        cm.dismissIncomingCall(onTopic: topic, withSeqId: seq)
+                        // Отбой входящего нашей же другой сессией («Отклонить» на другом устройстве).
+                        let byMe = info.from != nil && Cache.tinode.isMe(uid: info.from)
+                        cm.dismissIncomingCall(onTopic: topic, withSeqId: seq, reason: byMe ? .declinedElsewhere : .remoteEnded)
                     }
                 }
             default:
