@@ -54,6 +54,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 break
             }
         }
+        func onLogin(code: Int, text: String) {
+            if code < 300 { Cache.callManager.linia2SignalingLoggedIn() }
+        }
         func onDataMessage(data: MsgServerData?) {
             let tinode = Cache.tinode
             // The message is from a peer.
@@ -154,6 +157,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2Firebase.configureIfNeeded()
         UNUserNotificationCenter.current().delegate = self
         if Linia2Firebase.configured { Messaging.messaging().delegate = self }
+        // LINIA2: PushKit — как можно раньше (VoIP push при холодном старте ждёт делегата; отчёт CallKit — сразу).
+        registerForVoip()
         L2Log.event("l2_app_start", ["push_launch": launchOptions?[.remoteNotification] != nil ? 1 : 0])
         if SharedUtils.isFirstLaunch {
             Cache.log.info("First time launch. Setting up...")
@@ -187,8 +192,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // LINIA2: не вошли — «Добро пожаловать».
             window?.rootViewController = Linia2WelcomeViewController.makeRoot()
         }
-
-        registerForVoip()
 
         // Try to connect and login in the background.
         // LINIA2 (баг 1006): подключение не держит интерфейс (список чатов — из базы, сразу); не удалось —
@@ -506,10 +509,11 @@ extension AppDelegate: PKPushRegistryDelegate {
         // LINIA2: время отправки сервером (unix-секунды) — устаревший push (звонок уже кончился) не показывается.
         let ts = Double(data["ts"] as? String ?? "") ?? (data["ts"] as? Double)
         let sentAt = ts.map { Date(timeIntervalSince1970: $0) }
-        L2Log.event("l2_voip_push", ["event": callState.isEmpty ? "none" : callState, "has_seq": seq > 0 ? 1 : 0])
+        // LINIA2: отчёт CallKit — первым (внутри handleVoipPush), журнал и всё остальное — после.
         Cache.callManager.handleVoipPush(event: callState, topic: topicName, from: data["xfrom"] as? String, seq: seq,
                                          audioOnly: audioOnly, callerName: (name?.isEmpty ?? true) ? nil : name,
                                          sentAt: sentAt, completion: completion)
+        L2Log.event("l2_voip_push", ["event": callState.isEmpty ? "none" : callState, "has_seq": seq > 0 ? 1 : 0])
         // Подключиться к серверу (если приложение было закрыто) — дальше звонок идёт как обычно.
         if callState == MsgServerData.WebRTC.kStarted.rawValue {
             // При холодном старте подключение уже запускает didFinishLaunching; здесь — если приложение было в фоне.

@@ -223,7 +223,8 @@ class CallManager {
 
     // Report incoming call to the operating system (which displays incoming call UI).
     func displayIncomingCall(uuid: UUID, onTopic topicName: String, originatingFrom fromUid: String, withSeqId seq: Int, audioOnly: Bool,
-                             callerName: String? = nil, guest: (name: String, link: String)? = nil, completion: ((Error?) -> Void)?) {
+                             callerName: String? = nil, guest: (name: String, link: String)? = nil, alreadyReported: Bool = false,
+                             completion: ((Error?) -> Void)?) {
         guard self.callInProgress == nil else {
             if seq == self.callInProgress!.seq && self.callInProgress!.topic == topicName {
                 // Дубликат (VoIP push + сообщение по websocket): звонок уже показан.
@@ -286,7 +287,7 @@ class CallManager {
             completion?(nil)
             return
         }
-        callDelegate.reportIncomingCall(uuid: uuid, topic: topicName, handle: senderName, audioOnly: audioOnly) { err in
+        let onReported: (Error?) -> Void = { err in
             if err == nil {
                 Cache.log.info("Reporting incoming call (uuid: %@) on topic: %@, seq: %d", self.callInProgress?.uuid.uuidString ?? "missing", topicName, seq)
                 L2Log.event("l2_call_start", ["dir": "in", "kind": audioOnly ? "audio" : "video", "chat": L2Log.topicKind(topicName)])
@@ -308,6 +309,13 @@ class CallManager {
             }
             completion?(err)
         }
+        if alreadyReported {
+            // LINIA2: VoIP push — звонок уже показан CallKit (с именем из push); уточнить имя из базы.
+            callDelegate.updateCall(uuid: uuid, name: senderName, video: !audioOnly)
+            onReported(nil)
+        } else {
+            callDelegate.reportIncomingCall(uuid: uuid, topic: topicName, handle: senderName, audioOnly: audioOnly, completion: onReported)
+        }
     }
 
     /// VoIP push (PushKit). iOS требует СРАЗУ сообщить CallKit о звонке — иначе приложение будет закрыто
@@ -319,38 +327,28 @@ class CallManager {
                         sentAt: Date? = nil, completion: @escaping () -> Void) {
         let name = callerName ?? "Линия 2.0"
         Linia2TestProbe.voipPushes += 1
-        if event == MsgServerData.WebRTC.kStarted.rawValue, let from = from, !Cache.tinode.isMe(uid: from), seq > 0 {
-            if let cur = callInProgress {
-                if cur.topic == topic && cur.seq == seq {
-                    // Уже показан (пришёл по websocket или повторный push) — повторный отчёт с тем же UUID безвреден.
-                    Linia2TestProbe.voipDuplicates += 1
-                    reportToSystem(uuid: cur.uuid, topic: topic, handle: name, audioOnly: audioOnly) { _ in completion() }
-                } else {
-                    // Заняты другим звонком: показать и сразу снять, собеседнику — «занято».
-                    Cache.tinode.videoCall(topic: topic, seq: seq, event: "hang-up")
-                    Linia2EndedCalls.mark(topic, seq)
-                    endImmediately(topic: topic, handle: name, why: "busy", completion: completion)
-                }
+        if event == MsgServerData.WebRTC.kStarted.rawValue, seq > 0 {
+            if let cur = callInProgress, cur.topic == topic, cur.seq == seq {
+                // Уже показан (пришёл по websocket или повторный push) — повторный отчёт с тем же UUID безвреден.
+                Linia2TestProbe.voipDuplicates += 1
+                reportToSystem(uuid: cur.uuid, topic: topic, handle: name, audioOnly: audioOnly) { _ in completion() }
                 return
             }
-            if Linia2EndedCalls.contains(topic, seq) {
-                endImmediately(topic: topic, handle: name, why: "ended", completion: completion)
-                return
-            }
-            if CallManager.isStale(sentAt: sentAt) {
-                Linia2EndedCalls.mark(topic, seq)
-                endImmediately(topic: topic, handle: name, why: "stale", completion: completion)
-                return
-            }
+            // LINIA2 (правило Apple PushKit): reportNewIncomingCall — ПЕРВЫМ, в том же цикле, до любых проверок
+            // (база, Tinode, Keychain, список завершённых). Проверки — после отчёта; не прошли — reportCall(ended).
             let uuid = UUID()
-            displayIncomingCall(uuid: uuid, onTopic: topic, originatingFrom: from, withSeqId: seq, audioOnly: audioOnly, callerName: callerName) { err in
-                if err != nil {
-                    self.endImmediately(topic: topic, handle: name, why: "error", completion: completion)
-                } else {
-                    completion()
-                    // Звонок мог закончиться, пока push шёл (или это повтор старого): спросить сервер.
-                    self.verifyStillRinging(uuid: uuid, topic: topic, seq: seq, attempt: 0)
+            reportToSystem(uuid: uuid, topic: topic, handle: name, audioOnly: audioOnly) { err in
+                let next = {
+                    if err != nil {
+                        Cache.log.error("CallManager: VoIP push %@:%d — CallKit refused report", topic, seq)
+                        L2Log.event("l2_voip_ignored", ["why": "report-error"])
+                        completion()
+                        return
+                    }
+                    self.voipCallReported(uuid: uuid, topic: topic, from: from, seq: seq, audioOnly: audioOnly,
+                                          callerName: callerName, sentAt: sentAt, completion: completion)
                 }
+                if Thread.isMainThread { next() } else { DispatchQueue.main.async(execute: next) }
             }
             return
         }
@@ -368,8 +366,51 @@ class CallManager {
             }
             return
         }
+        endImmediately(topic: topic, handle: name, why: event.isEmpty ? "no-event" : event, completion: completion)
         if seq > 0 { Linia2EndedCalls.mark(topic, seq) }
-        endImmediately(topic: topic, handle: name, why: "hang-up", completion: completion)
+    }
+
+    /// VoIP push «started» уже показан в CallKit (uuid). Теперь — проверки; звонок не нужен — reportCall(ended).
+    private func voipCallReported(uuid: UUID, topic: String, from: String?, seq: Int, audioOnly: Bool, callerName: String?,
+                                  sentAt: Date?, completion: @escaping () -> Void) {
+        func drop(_ why: String, reason: CXCallEndedReason = .remoteEnded) {
+            Cache.log.info("CallManager: VoIP push for %@ (%@) — reported and ended", topic, why)
+            L2Log.event("l2_voip_ignored", ["why": why])
+            Linia2TestProbe.voipIgnored += 1
+            if CallManager.useCallKit { callDelegate.reportEnded(uuid: uuid, reason: reason) }
+            completion()
+        }
+        if let cur = callInProgress {
+            if cur.topic == topic && cur.seq == seq {
+                // Пока шёл отчёт, тот же звонок пришёл по websocket и показан со своим UUID — наш снять.
+                Linia2TestProbe.voipDuplicates += 1
+                drop("dup")
+            } else {
+                // Заняты другим звонком: собеседнику — «занято».
+                Cache.tinode.videoCall(topic: topic, seq: seq, event: "hang-up")
+                Linia2EndedCalls.mark(topic, seq)
+                drop("busy", reason: .unanswered)
+            }
+            return
+        }
+        guard let from = from, !from.isEmpty else { drop("no-from"); return }
+        if Cache.tinode.isMe(uid: from) { drop("self"); return }
+        if Linia2EndedCalls.contains(topic, seq) { drop("ended"); return }
+        if CallManager.isStale(sentAt: sentAt) {
+            Linia2EndedCalls.mark(topic, seq)
+            drop("stale")
+            return
+        }
+        displayIncomingCall(uuid: uuid, onTopic: topic, originatingFrom: from, withSeqId: seq, audioOnly: audioOnly,
+                            callerName: callerName, alreadyReported: true) { err in
+            if err != nil {
+                drop("error")
+            } else {
+                completion()
+                // Звонок мог закончиться, пока push шёл (или это повтор старого): спросить сервер.
+                self.verifyStillRinging(uuid: uuid, topic: topic, seq: seq, attempt: 0)
+            }
+        }
     }
 
     /// Push / сообщение отправлены сервером давно (дольше таймаута звонка) — звонок уже не идёт.
@@ -678,7 +719,52 @@ extension CallManager: CallManagerImpl {
         // LINIA2: экран звонка создаётся сразу (даже на заблокированном экране / в фоне) — звонок
         // соединяется без открытия приложения; экран виден, когда пользователь его откроет.
         Linia2CallCenter.shared.openIncoming(call)
+        watchForOffer(call.uuid, attempt: 0)
         return true
+    }
+
+    /// LINIA2 («ответил, а у звонящего „Вызов…“»): accept отправлен, а offer собеседника не пришёл — accept,
+    /// вероятно, ушёл в «мёртвый» сокет (приложение разбужено push-ем). Переподключить сокет; после входа и
+    /// подписки — повторить accept (один раз на переподключение, пока не придёт offer).
+    private var acceptResendFor: UUID?
+    private func watchForOffer(_ uuid: UUID, attempt: Int) {
+        guard attempt < 3 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            guard let cur = self.callInProgress, cur.uuid == uuid, cur.accepted,
+                  let vc = Linia2CallCenter.shared.active, !vc.closed, vc.connectedAt == nil,
+                  let diag = vc.diag, diag.has("accept-sent"), !diag.has("offer") else { return }
+            Cache.log.info("CallManager: no offer %d s after accept — reconnecting signaling", 6 * (attempt + 1))
+            L2Log.event("l2_call_no_offer", ["attempt": attempt])
+            diag.add(["type": "no-offer", "attempt": attempt])
+            self.acceptResendFor = uuid
+            let tinode = Cache.tinode
+            DispatchQueue.global(qos: .userInitiated).async { _ = tinode.reconnectNow(interactively: true, reset: true) }
+            self.watchForOffer(uuid, attempt: attempt + 1)
+        }
+    }
+
+    /// Вход после переподключения (CallEventListener.onLogin): повторить accept, если ждём offer.
+    func linia2SignalingLoggedIn() {
+        DispatchQueue.main.async {
+            guard let uuid = self.acceptResendFor else { return }
+            self.acceptResendFor = nil
+            self.resendAccept(uuid, attempts: 25)
+        }
+    }
+
+    private func resendAccept(_ uuid: UUID, attempts: Int) {
+        guard let cur = callInProgress, cur.uuid == uuid, cur.accepted,
+              let vc = Linia2CallCenter.shared.active, !vc.closed, vc.connectedAt == nil,
+              let diag = vc.diag, !diag.has("offer") else { return }
+        // Подписка на топик восстанавливается экраном звонка — note без подписки сервер не примет.
+        guard let t = Cache.tinode.getTopic(topicName: cur.topic), t.attached, Cache.tinode.isConnectionAuthenticated else {
+            if attempts > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.resendAccept(uuid, attempts: attempts - 1) }
+            }
+            return
+        }
+        diag.add(["type": "accept-resent"])
+        Cache.tinode.videoCall(topic: cur.topic, seq: cur.seq, event: "accept")
     }
 
     func completeCallInProgress(reportToSystem: Bool, reportToPeer: Bool) {

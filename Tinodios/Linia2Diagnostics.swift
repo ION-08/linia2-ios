@@ -149,6 +149,9 @@ final class Linia2CallDiag {
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.sample() }
     }
 
+    /// LINIA2: было ли событие такого типа (главный поток), напр. «offer» — accept дошёл до звонящего.
+    func has(_ type: String) -> Bool { events.contains { ($0["type"] as? String) == type } }
+
     /// Событие (с любого потока).
     func add(_ ev: [String: Any]) {
         guard Thread.isMainThread else {

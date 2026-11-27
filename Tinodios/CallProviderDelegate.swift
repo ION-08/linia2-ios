@@ -115,11 +115,30 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         // User tapped "Accept".
-        if let cm = callManager, cm.acceptPendingCall() {
-            action.fulfill()
-        } else {
-            action.fail()
+        // LINIA2: «accept» уходит только по вошедшему веб-сокету (иначе теряется, у звонящего — «Вызов…»).
+        // Разбудили push-ем / сокет ещё входит — ждём вход до 10 с, затем принимаем и только потом fulfill.
+        let started = Date()
+        let tinode = Cache.tinode
+        if !tinode.isConnectionAuthenticated {
+            DispatchQueue.global(qos: .userInitiated).async { _ = tinode.reconnectNow(interactively: true, reset: false) }
         }
+        func attempt() {
+            guard let cur = Cache.callManager.callInProgress, cur.uuid == action.callUUID else { action.fail(); return }
+            let waited = Date().timeIntervalSince(started)
+            if !Cache.tinode.isConnectionAuthenticated && waited < 10 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { attempt() }
+                return
+            }
+            if waited > 0.1 {
+                L2Log.event("l2_call_answer_wait", ["ms": Int(waited * 1000), "ok": Cache.tinode.isConnectionAuthenticated ? 1 : 0])
+            }
+            if let cm = self.callManager, cm.acceptPendingCall() {
+                action.fulfill()
+            } else {
+                action.fail()
+            }
+        }
+        if Thread.isMainThread { attempt() } else { DispatchQueue.main.async { attempt() } }
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
