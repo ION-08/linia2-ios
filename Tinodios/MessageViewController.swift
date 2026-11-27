@@ -1204,6 +1204,7 @@ extension MessageViewController: MessageViewLayoutDelegate {
     /// Calculate size of the view which holds message content.
     func calcContainerSize(for message: Message, avatarsVisible: Bool, progressVisible: Bool) -> CGSize {
         let maxWidth = calcMaxContentWidth(for: message, avatarsVisible: avatarsVisible)
+        textSizeHelper.lastTimeInline = false
         if !message.isDeleted && linia2IsRound(message) {   // LINIA2: видео-кружок
             return linia2RoundContainerSize(maxWidth: maxWidth, progressVisible: progressVisible)
         }
