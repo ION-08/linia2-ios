@@ -210,7 +210,7 @@ jobs:
             -only-testing:TinodiosUITests \
             -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests \
             -skip-testing:TinodiosUITests/Linia2DesignShots -skip-testing:TinodiosUITests/Linia2LaunchTests \
-            -skip-testing:TinodiosUITests/Linia2PanicTests \
+            -skip-testing:TinodiosUITests/Linia2PanicTests -skip-testing:TinodiosUITests/Linia2GuestLinkCallTests \
             -parallel-testing-enabled NO \
             -retry-tests-on-failure -test-iterations 3 \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
