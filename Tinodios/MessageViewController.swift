@@ -1228,11 +1228,17 @@ extension MessageViewController: MessageViewLayoutDelegate {
 
         // FIXME: storedMessage may contain an image surrounded by text. In such cases,
         // size calculations may be wrong. Handle it.
-        return storedMessage.isVisualMedia ?
-            attributedText.boundingRect(with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-                                        options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                        context: nil).integral.size :
-            textSizeHelper.computeSize(for: attributedText, within: maxWidth)
+        if storedMessage.isVisualMedia {
+            return attributedText.boundingRect(with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+                                               options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                               context: nil).integral.size
+        }
+        // Дизайн: время (и галочки) — справа внизу без наложения на текст. Пробелы-«вырез» в конце строки
+        // не переносятся, поэтому место считаем по последней строке: влезает — время на ней, иначе — своя строка.
+        if message.isDeleted { return textSizeHelper.computeSize(for: attributedText, within: maxWidth) }
+        let timeW = ("00:00" as NSString).size(withAttributes: [.font: Constants.kTimestampFont]).width
+        let reserve = isFromCurrentSender(message: message) ? timeW + 30 : timeW + 8
+        return textSizeHelper.computeSize(for: attributedText, within: maxWidth, trailingReserve: reserve, extraLine: 8)
     }
 }
 

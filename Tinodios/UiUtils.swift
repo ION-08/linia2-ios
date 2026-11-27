@@ -67,6 +67,35 @@ class TextSizeHelper {
         textContainer.size = CGSize(width: maxWidth, height: .greatestFiniteMagnitude)
         return layoutManager.usedRect(for: textContainer).integral.size
     }
+
+    /// Размер с местом под метаданные (время/галочки) в конце последней строки: если не помещаются —
+    /// добавляется высота `extraLine` (время на отдельной строке).
+    public func computeSize(for attributedText: NSAttributedString, within maxWidth: CGFloat,
+                            trailingReserve: CGFloat, extraLine: CGFloat) -> CGSize {
+        textStorage.setAttributedString(attributedText)
+        textContainer.size = CGSize(width: maxWidth, height: .greatestFiniteMagnitude)
+        var size = layoutManager.usedRect(for: textContainer).integral.size
+        let glyphs = layoutManager.numberOfGlyphs
+        guard glyphs > 0 else { return size }
+        // Последняя строка без хвостовых пробелов-«выреза».
+        var lastGlyph = glyphs - 1
+        let text = attributedText.string as NSString
+        while lastGlyph > 0 {
+            let ci = layoutManager.characterIndexForGlyph(at: lastGlyph)
+            guard ci < text.length, let scalar = UnicodeScalar(text.character(at: ci)),
+                  CharacterSet.whitespaces.contains(scalar) else { break }
+            lastGlyph -= 1
+        }
+        let lineRect = layoutManager.lineFragmentUsedRect(forGlyphAt: lastGlyph, effectiveRange: nil)
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: lastGlyph, length: 1), in: textContainer)
+        let lastLineEnd = min(lineRect.maxX, glyphRect.maxX)
+        if lastLineEnd + trailingReserve <= maxWidth {
+            size.width = max(size.width, ceil(lastLineEnd + trailingReserve))
+        } else {
+            size.height += extraLine
+        }
+        return size
+    }
 }
 
 enum ToastLevel {
