@@ -217,13 +217,13 @@ jobs:
           # с ним были «No matching device … in XCTestDevices» и «server died»). Собирается один раз на оба шага.
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           DD="$RUNNER_TEMP/dd-steps"
-          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           if [ -z "$XR" ]; then
             xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
               -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
               CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
               > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -30 "$RUNNER_TEMP/bft-$$.log"
-            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
           PUSHDIR="$HOME/Library/Caches/l2push"; rm -rf "$PUSHDIR"; mkdir -p "$PUSHDIR" "$RUNNER_TEMP/out/launch"
@@ -270,13 +270,13 @@ jobs:
           # с ним были «No matching device … in XCTestDevices» и «server died»). Собирается один раз на оба шага.
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           DD="$RUNNER_TEMP/dd-steps"
-          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           if [ -z "$XR" ]; then
             xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
               -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
               CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
               > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -30 "$RUNNER_TEMP/bft-$$.log"
-            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
           # Разрешения на микрофон и камеру — без системных окон.
@@ -329,13 +329,13 @@ jobs:
           set -o pipefail
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
           DD="$RUNNER_TEMP/dd-steps"
-          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           if [ -z "$XR" ]; then
             xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
               -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
               CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
               > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -30 "$RUNNER_TEMP/bft-$$.log"
-            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1)
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
           fi
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
           mkdir -p "$RUNNER_TEMP/out/panic"
