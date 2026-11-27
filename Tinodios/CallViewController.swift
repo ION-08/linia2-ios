@@ -245,6 +245,83 @@ class WebRTCClient: NSObject {
     private let diagLock = NSLock()
     private var diagLocalCands: [String: Int] = [:]
     private var diagRemoteCands: [String: Int] = [:]
+    /// Отправлено собеседнику локальных кандидатов по типу (host/srflx/relay/prflx) и не отправлено (нет seq/топика).
+    private var diagLocalSent: [String: Int] = [:]
+    private var diagLocalDropped = 0
+    /// Удалённые кандидаты: добавлено в соединение / ошибка addIceCandidate (последняя ошибка — текстом).
+    private var diagRemoteAddOk = 0
+    private var diagRemoteAddFail = 0
+    private var diagLastAddErr = ""
+    /// ufrag (4 символа) последнего своего и чужого описания.
+    var diagLocalUfrag = "-"
+    var diagRemoteUfrag = "-"
+
+    func diagNoteLocalSent(_ c: RTCIceCandidate, sent: Bool) {
+        let type = Self.candKind(c.sdp).components(separatedBy: "/").first ?? "?"
+        diagLock.lock()
+        if sent { diagLocalSent[type, default: 0] += 1 } else { diagLocalDropped += 1 }
+        diagLock.unlock()
+    }
+
+    /// Добавить удалённый кандидат в соединение с учётом результата (счётчики для диагностики).
+    private func addRemoteToPeer(_ candidate: RTCIceCandidate) {
+        guard let pc = localPeer else {
+            diagLock.lock(); diagRemoteAddFail += 1; diagLastAddErr = "no-pc"; diagLock.unlock()
+            return
+        }
+        pc.add(candidate) { [weak self] err in
+            guard let self = self else { return }
+            self.diagLock.lock()
+            if let err = err {
+                self.diagRemoteAddFail += 1
+                self.diagLastAddErr = String(err.localizedDescription.prefix(80))
+            } else {
+                self.diagRemoteAddOk += 1
+            }
+            self.diagLock.unlock()
+            if let err = err {
+                // LINIA2: кандидат прошлого поколения (после ICE restart) или с уже недоступного адреса — не повод
+                // завершать звонок: остальные кандидаты/TURN продолжают работать.
+                Cache.log.error("WebRTCClient: could not add ICE candidate: %@", err.localizedDescription)
+                self.onDiagEvent?(["type": "error", "where": "addIceCandidate", "err": String(err.localizedDescription.prefix(80)),
+                                   "mid": candidate.sdpMid ?? "nil", "idx": Int(candidate.sdpMLineIndex)])
+            }
+        }
+    }
+
+    /// LINIA2: поля для периодических stats (только скаляры — сервер диагностики отбрасывает вложенные объекты).
+    /// Сводка по парам кандидатов и STUN-проверкам: если запросы уходят, а ответов нет — видно сразу.
+    func diagStatsFields(_ report: RTCStatisticsReport) -> [String: Any] {
+        var f: [String: Any] = [:]
+        diagLock.lock()
+        for (k, v) in diagLocalSent { f["ls_" + k] = v }
+        for (k, v) in diagRemoteCands { f["rc_" + k.replacingOccurrences(of: "/", with: "_")] = v }
+        f["ls_drop"] = diagLocalDropped
+        f["ra_ok"] = diagRemoteAddOk
+        f["ra_fail"] = diagRemoteAddFail
+        if !diagLastAddErr.isEmpty { f["ra_err"] = diagLastAddErr }
+        diagLock.unlock()
+        f["lu"] = diagLocalUfrag
+        f["ru"] = diagRemoteUfrag
+        var reqS = 0, respR = 0, reqR = 0, respS = 0
+        var states: [String: Int] = [:]
+        var lcTypes: [String: Int] = [:]
+        for (_, st) in report.statistics {
+            let v = st.values
+            func n(_ k: String) -> Int { (v[k] as? NSNumber)?.intValue ?? 0 }
+            if st.type == "candidate-pair" {
+                states[(v["state"] as? String) ?? "?", default: 0] += 1
+                reqS += n("requestsSent"); respR += n("responsesReceived")
+                reqR += n("requestsReceived"); respS += n("responsesSent")
+            } else if st.type == "local-candidate" {
+                lcTypes[((v["candidateType"] as? String) ?? "?") + "_" + ((v["protocol"] as? String) ?? "?"), default: 0] += 1
+            }
+        }
+        for (k, v) in states { f["p_" + k.replacingOccurrences(of: "-", with: "")] = v }
+        for (k, v) in lcTypes { f["lc_" + k] = v }
+        f["stun_reqS"] = reqS; f["stun_respR"] = respR; f["stun_reqR"] = reqR; f["stun_respS"] = respS
+        return f
+    }
 
     /// "candidate:… 1 udp 2122… 10.0.0.1 5000 typ host …" → "host/udp".
     static func candKind(_ sdp: String) -> String {
@@ -280,7 +357,10 @@ class WebRTCClient: NSObject {
             }
             var states: [String: Int] = [:]
             for p in pairs { states[(p["state"] as? String) ?? "?", default: 0] += 1 }
-            var ev: [String: Any] = ["type": "pair", "reason": reason, "lc": lc, "rc": rc, "pairs": states]
+            // Только скаляры: сервер диагностики отбрасывает вложенные словари.
+            func flat(_ d: [String: Int]) -> String { d.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",") }
+            var ev: [String: Any] = ["type": "pair", "reason": reason, "lc": flat(lc), "rc": flat(rc), "pairs": flat(states)]
+            if let self = self { for (k, v) in self.diagStatsFields(report) { ev[k] = v } }
             let sel = pairs.first { ($0["nominated"] as? NSNumber)?.boolValue == true && ($0["state"] as? String) == "succeeded" }
                 ?? pairs.first { ($0["state"] as? String) == "succeeded" }
             if let p = sel {
@@ -369,14 +449,7 @@ class WebRTCClient: NSObject {
             return
         }
         if !saveInCache {
-            self.localPeer?.add(candidate) { err in
-                if let err = err {
-                    // LINIA2: кандидат прошлого поколения (после ICE restart) или с уже недоступного адреса — не повод
-                    // завершать звонок: остальные кандидаты/TURN продолжают работать.
-                    Cache.log.error("WebRTCClient: could not add ICE candidate: %@", err.localizedDescription)
-                    self.onDiagEvent?(["type": "error", "where": "addIceCandidate"])
-                }
-            }
+            addRemoteToPeer(candidate)
         } else {
             // LINIA2: гонка «буфер уже разгружен, а флаг ещё не виден на главном потоке» — кандидат попадал в буфер
             // ПОСЛЕ разгрузки и не применялся никогда (iOS не знал адресов собеседника: ICE «checking» 30+ с,
@@ -399,7 +472,6 @@ class WebRTCClient: NSObject {
     func drainIceCandidatesCache() {
         if web != nil { return }   // JS разгружает свой буфер сам после setRemoteDescription
         Cache.log.info("Draining iceCandidateCache: %d items", self.remoteIceCandidatesCache.count)
-        var success = true
         var pending: [RTCIceCandidate] = []
         self.remoteIceCandidatesCacheQueue.sync {
             self.remoteCandidatesDrained = true
@@ -407,17 +479,9 @@ class WebRTCClient: NSObject {
             self.remoteIceCandidatesCache.removeAll()
         }
         onDiagEvent?(["type": "candidates", "drained": pending.count])
-        pending.forEach { candidate in
-            self.localPeer?.add(candidate) { err in
-                if let err = err {
-                    Cache.log.error("WebRTCClient.drainIceCandidatesCache - could not add ICE candidate: %@", err.localizedDescription)
-                    success = false
-                }
-            }
-        }
-        if !success {
-            onDiagEvent?(["type": "error", "where": "drainIceCandidates"])
-        }
+        // LINIA2: результат каждого добавления — в счётчиках ra_ok/ra_fail (раньше флаг success проверялся
+        // до асинхронных completion — ошибка не видна никогда).
+        pending.forEach { addRemoteToPeer($0) }
     }
 
     var hasPeerConnection: Bool { web != nil ? webPC : localPeer != nil }
@@ -443,7 +507,10 @@ class WebRTCClient: NSObject {
             remoteDescriptionApplied = false
             remoteIceCandidatesCache.removeAll()
         }
-        diagLock.lock(); diagLocalCands = [:]; diagRemoteCands = [:]; diagLock.unlock()
+        diagLock.lock()
+        diagLocalCands = [:]; diagRemoteCands = [:]; diagLocalSent = [:]; diagLocalDropped = 0
+        diagRemoteAddOk = 0; diagRemoteAddFail = 0; diagLastAddErr = ""
+        diagLock.unlock()
         // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
         guard let audioTrack = self.localAudioTrack, let videoTrack = self.localVideoTrack else {
             Cache.log.error("WebRTCClient - no local tracks (call already closed?)")
@@ -1886,16 +1953,19 @@ extension CallViewController: CameraCaptureDelegate {
 
 extension CallViewController: WebRTCClientDelegate {
     func sendOffer(withDescription sdp: RTCSessionDescription) {
+        webRTCClient.diagLocalUfrag = WebRTCClient.ufrag4(sdp.sdp)
         diag?.add(["type": "offer-sent", "seq": self.callSeqId, "ufrag": WebRTCClient.ufrag4(sdp.sdp)])
         self.topic?.videoCall(event: "offer", seq: self.callSeqId, payload: sdp.serialize())
     }
 
     func sendAnswer(withDescription sdp: RTCSessionDescription) {
+        webRTCClient.diagLocalUfrag = WebRTCClient.ufrag4(sdp.sdp)
         diag?.add(["type": "answer-sent", "seq": self.callSeqId, "ufrag": WebRTCClient.ufrag4(sdp.sdp)])
         self.topic?.videoCall(event: "answer", seq: self.callSeqId, payload: sdp.serialize())
     }
 
     func sendIceCandidate(_ candidate: RTCIceCandidate) {
+        webRTCClient.diagNoteLocalSent(candidate, sent: self.topic != nil && self.callSeqId > 0)
         self.topic?.videoCall(event: "ice-candidate", seq: self.callSeqId, payload: candidate.serialize())
     }
 
@@ -2036,6 +2106,7 @@ extension CallViewController: TinodeVideoCallDelegate {
             return
         }
         guard !closed else { return }
+        webRTCClient.diagRemoteUfrag = WebRTCClient.ufrag4(desc.sdp)
         diag?.add(["type": "offer", "ufrag": WebRTCClient.ufrag4(desc.sdp)])
         // Data channel should be created by the peer. Not creating one.
         // LINIA2: обычно соединение уже создано при «Принять» (handleCallInvite) — тогда ответ мгновенный.
@@ -2054,6 +2125,7 @@ extension CallViewController: TinodeVideoCallDelegate {
             self.handleCallClose()
             return
         }
+        webRTCClient.diagRemoteUfrag = WebRTCClient.ufrag4(desc.sdp)
         diag?.add(["type": "answer", "ufrag": WebRTCClient.ufrag4(desc.sdp)])
         self.webRTCClient.handleRemoteAnswerDescription(desc)
     }

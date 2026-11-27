@@ -225,6 +225,8 @@ final class Linia2CallDiag {
                 }
             }
             ev["arx"] = Int(arx); ev["atx"] = Int(atx); ev["vrx"] = Int(vrx); ev["vtx"] = Int(vtx)
+            // LINIA2: кандидаты, ошибки addIceCandidate, ufrag, пары и STUN-проверки — в каждом stats (не только в конце).
+            for (k, v) in client.diagStatsFields(report) { ev[k] = v }
             if let p = pair {
                 let l = cands[(p["localCandidateId"] as? String) ?? ""] ?? [:]
                 let r = cands[(p["remoteCandidateId"] as? String) ?? ""] ?? [:]
@@ -244,7 +246,13 @@ final class Linia2CallDiag {
         }
     }
 
+    /// LINIA2: не больше одной отправки одновременно. Сервер дописывает события чтением-записью строки (SELECT, затем
+    /// UPDATE) — параллельные POST одного звонка затирали друг друга: в call_diag пропадали offer/ice/pair
+    /// (звонок 27.11 15:36, id 574/575), а другие события дублировались.
+    private var flushInFlight = false
+
     private func flush() {
+        guard !flushInFlight else { return }   // уйдёт после завершения текущей отправки
         guard !events.isEmpty, let token = Cache.tinode.authToken, !token.isEmpty,
               let url = URL(string: Linia2API.base + "call-diag") else { return }
         let batch = Array(events.prefix(60))
@@ -256,13 +264,19 @@ final class Linia2CallDiag {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         req.httpBody = data
+        flushInFlight = true
         URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
-            // Нет сети (обрыв во время звонка) — вернуть пачку в очередь, уйдёт со следующей отправкой.
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard err != nil || status >= 500 else { return }
+            let failed = err != nil || status >= 500
             DispatchQueue.main.async {
-                guard let self = self, self.events.count < 300 else { return }
-                self.events.insert(contentsOf: batch, at: 0)
+                guard let self = self else { return }
+                self.flushInFlight = false
+                if failed {
+                    // Нет сети (обрыв во время звонка) — вернуть пачку в очередь, уйдёт со следующей отправкой.
+                    if self.events.count < 300 { self.events.insert(contentsOf: batch, at: 0) }
+                } else if !self.events.isEmpty {
+                    self.flush()
+                }
             }
         }.resume()
     }
