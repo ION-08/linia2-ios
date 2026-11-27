@@ -125,8 +125,9 @@ class CallProviderDelegate: NSObject, CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         // User tapped "Decline/End call" in the incoming call view,
         // or end call action was requested programmatically.
-        callManager?.completeCallInProgress(reportToSystem: false, reportToPeer: true)
+        // LINIA2: fulfill — сразу (CallKit снимает звонок мгновенно); остальное — без ожидания сервера.
         action.fulfill()
+        callManager?.completeCallInProgress(reportToSystem: false, reportToPeer: true)
     }
 
     /// Входящий GSM-звонок / «Удержать» на системном экране: пауза отправки аудио и видео.

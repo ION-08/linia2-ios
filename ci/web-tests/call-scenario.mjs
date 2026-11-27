@@ -3,7 +3,8 @@
 //   1) ждёт входящий от iOS (аудио) → принимает → проверяет ICE и растущий bytesReceived → ждёт, пока трубку положит iOS;
 //   2) то же для видео;
 //   3) звонит iOS (аудио) через window.L2Call.start (повтор, пока iOS не примет) → держит → ждёт, пока iOS положит трубку;
-//   4) то же для видео;
+//   4) то же для видео, но трубку кладёт веб (через WEB_HANGUP_S, 90 с) — iOS проверяет, что закрылся < 2 с;
+//   В звонках, где кладёт iOS: у веба звонок закрывается < 2 с после «Завершить» (L2_SYNC_DIR — метки времени).
 //   5) веб → iOS (аудио) сразу после перезапуска приложения на iOS (Linia2CallTests.test6): звук в обе стороны ≤ 5 с после ответа.
 //   6–8) переподключение (RECONNECT_CALLS, по умолчанию 3; 0 — пропустить): подряд три входящих АУДИО от iOS, каждый принять;
 //        iOS посреди разговора обрывает себе сеть. Звонки 6 и 7: bytesReceived у веба останавливается (пауза ≥ PAUSE_S, 3 с),
@@ -25,6 +26,10 @@ import { spawn } from 'node:child_process';
 const BASE = (process.env.BASE || 'https://v2.chat-linia.site').replace(/\/$/, '');
 const OUT = process.env.OUT_DIR || path.resolve('call-scenario-out');
 const FIRST_WAIT_S = +(process.env.FIRST_WAIT_S || 1800), MIN_HOLD_S = +(process.env.MIN_HOLD_S || 60), END_WAIT_S = +(process.env.END_WAIT_S || 240), DIAL_TRIES = +(process.env.DIAL_TRIES || 8);
+const WEB_HANGUP_S = +(process.env.WEB_HANGUP_S || 90), SYNC_DIR = process.env.L2_SYNC_DIR || '';
+// Метки времени завершения — общий каталог с iOS-тестом (симулятор и Chrome на одном Mac).
+function syncWrite(name, ms) { if (!SYNC_DIR) return; try { fs.mkdirSync(SYNC_DIR, { recursive: true }); fs.writeFileSync(path.join(SYNC_DIR, name + '.txt'), String(ms)); } catch {} }
+function syncRead(name) { try { const v = +fs.readFileSync(path.join(SYNC_DIR, name + '.txt'), 'utf8').trim(); return v > 0 ? v : null; } catch { return null; } }
 const LOGIN = process.env.L2_PEER_LOGIN, PASS = process.env.L2_PEER_PASSWORD;
 fs.mkdirSync(OUT, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -123,10 +128,11 @@ async function main() {
 
 
   // ---- сценарий ----
-  const kinds = [['iOS → веб (аудио)', 'in', false], ['iOS → веб (видео)', 'in', true], ['веб → iOS (аудио)', 'out', false], ['веб → iOS (видео)', 'out', true],
+  // 5-й элемент — трубку кладёт веб (через WEB_HANGUP_S с соединения; iOS проверяет закрытие у себя < 2 с).
+  const kinds = [['iOS → веб (аудио)', 'in', false], ['iOS → веб (видео)', 'in', true], ['веб → iOS (аудио)', 'out', false], ['веб → iOS (видео)', 'out', true, false, true],
                  ['веб → iOS (аудио, холодный старт)', 'out', false, true]];
   for (let i = 0; i < kinds.length; i++) {
-    const [name, dir, video, cold] = kinds[i];
+    const [name, dir, video, cold, webEnds] = kinds[i];
     let answeredAt = 0;
     const c = { name, ok: false, ice: null, heldS: 0, grew: 0, endedBy: null, note: '' };
     result.calls.push(c);
@@ -178,15 +184,34 @@ async function main() {
         const st = await ev(statsJs).catch(() => []), b = st.reduce((s, x) => s + x.bytes, 0);
         if (prev >= 0 && b > prev) c.grew++; prev = b;
         const cs = await ev(stateJs).catch(() => ({ state: 'idle' }));
-        if (cs.state === 'idle') { c.endedBy = 'ios'; break; }
+        if (cs.state === 'idle') { c.endedBy = 'ios'; c.idleAt = Date.now(); break; }
+        if (webEnds && Date.now() - t0 > WEB_HANGUP_S * 1000) {
+          // Веб кладёт трубку: метка времени — для iOS (Linia2CallTests.test5 проверяет закрытие у себя < 2 с).
+          syncWrite('web-hangup', Date.now());
+          await ev(`window.L2Call.hangup()`).catch(() => {});
+          c.endedBy = 'web'; break;
+        }
         if (Date.now() - t0 > (MIN_HOLD_S + END_WAIT_S) * 1000) { c.endedBy = 'timeout'; await ev(`window.L2Call.hangup()`).catch(() => {}); break; }
-        await sleep(1000);
+        await sleep(200);
       }
       c.heldS = Math.round((Date.now() - t0) / 1000);
       await shot(i + '-ended');
       const okHold = step(name + ': держался ≥ ' + MIN_HOLD_S + ' с', c.heldS >= MIN_HOLD_S - 3, c.heldS + ' с');
       const okBytes = step(name + ': медиатрафик идёт', c.grew >= 10, 'приростов bytesReceived: ' + c.grew);
-      const okEnd = step(name + ': трубку положил iOS, у веба завершилось', c.endedBy === 'ios', c.endedBy || '');
+      let okEnd;
+      if (webEnds) {
+        okEnd = step(name + ': трубку положил веб', c.endedBy === 'web', c.endedBy || '');
+      } else {
+        okEnd = step(name + ': трубку положил iOS, у веба завершилось', c.endedBy === 'ios', c.endedBy || '');
+        // «Завершить» на iPhone → у веба звонок закрыт < 2 с (метка нажатия от iOS-теста, общие часы Mac).
+        if (okEnd && SYNC_DIR) {
+          await sleep(300);
+          const tap = syncRead('ios-hangup');
+          c.endMs = tap && tap > t0 - 5000 ? c.idleAt - tap : null;
+          okEnd = step(name + ': у веба закрылся < 2 с после «Завершить» на iOS', c.endMs != null && c.endMs < 2000,
+                       c.endMs == null ? 'нет метки нажатия от iOS' : c.endMs + ' мс') && okEnd;
+        }
+      }
       c.ok = okHold && okBytes && okEnd && (!cold || (c.firstMediaS != null && c.firstMediaS <= 6));
     } catch (e) {
       await shot(i + '-fail');

@@ -38,7 +38,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                     Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq, reason: .answeredElsewhere)
                 }
             case "hang-up":
-                Cache.callManager.dismissIncomingCall(onTopic: topic, withSeqId: seq)
+                // LINIA2: и идущий (принятый / исходящий) звонок — сразу, даже если экран звонка не получил «hang-up».
+                DispatchQueue.main.async {
+                    let cm = Cache.callManager
+                    if let cur = cm.callInProgress, cur.topic == topic, cur.seq == seq, cur.accepted || cm.currentCallIsOutgoing {
+                        cm.endCallInProgressRemotely(topic: topic, seq: seq, why: "info-hang-up")
+                    } else {
+                        cm.dismissIncomingCall(onTopic: topic, withSeqId: seq)
+                    }
+                }
             default:
                 break
             }
@@ -83,6 +91,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 }
             case .kAccepted, .kBusy, .kDeclined, .kMissed, .kDisconnected, .kFinished:
                 if callState != .kAccepted { Linia2EndedCalls.mark(topicName, seqId) }
+                // LINIA2: идущий (принятый или исходящий) звонок завершён — закрыть сразу, не ждать «hang-up»/ICE.
+                if callState != .kAccepted, let cur = Cache.callManager.callInProgress, cur.topic == topic.name,
+                   cur.seq == seqId, cur.accepted || Cache.callManager.currentCallIsOutgoing {
+                    DispatchQueue.main.async {
+                        Cache.callManager.endCallInProgressRemotely(topic: topic.name, seq: seqId, why: "msg-" + callState.rawValue)
+                    }
+                    return
+                }
                 if !Cache.callManager.currentCallIsOutgoing {
                     Cache.log.info("Dismissing incoming call: topic=%@, seq=%d", topic.name, seqId)
                     Cache.callManager.dismissIncomingCall(onTopic: topic.name, withSeqId: seqId)

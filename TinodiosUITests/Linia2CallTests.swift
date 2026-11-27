@@ -282,9 +282,78 @@ class Linia2CallTestBase: XCTestCase {
         screenshot("toggled")
     }
 
+    /// «Положить трубку» — экран звонка должен исчезнуть мгновенно (< 300 мс):
+    ///  • в приложении — hupms (от «Завершить» до закрытия экрана, тестовый крючок l2.test.state);
+    ///  • в тесте — от возврата tap() до первого «экрана нет» (опрос каждые 20 мс).
+    /// Время нажатия (мс с 1970) — в $L2_SYNC_DIR/ios-hangup.txt: веб (call-scenario.mjs) проверяет, что у него
+    /// звонок закрылся < 2 с после нажатия (симулятор и браузер на одном Mac — общие часы).
     func hangUp(_ what: String) {
-        wait(any("l2.call.hangup"), "«Положить трубку»").tap()
+        let button = wait(any("l2.call.hangup"), "«Положить трубку»")
+        let tapAt = Date()
+        button.tap()
+        let tapped = Date()
+        syncWrite("ios-hangup", tapAt)
+        while any("l2.call.hangup").exists && Date().timeIntervalSince(tapped) < 15 { usleep(20_000) }
+        let goneMs = Int(Date().timeIntervalSince(tapped) * 1000)
+        let totalMs = Int(Date().timeIntervalSince(tapAt) * 1000)
+        let appMs = callHook("hangup")["hupms"] ?? -1
+        note("\(what): «Завершить» → экран закрыт: в приложении \(appMs) мс, в тесте \(goneMs) мс после tap (всего с tap \(totalMs) мс)")
+        XCTAssertTrue(appMs >= 0 && appMs < 300, "\(what): экран звонка закрывается \(appMs) мс после «Завершить» (нужно < 300)")
+        XCTAssertLessThan(goneMs, 300, "\(what): экран звонка исчез через \(goneMs) мс после нажатия (нужно < 300)")
         assertCallClosed(what, timeout: 15)
+    }
+
+    /// Звонок завершил собеседник (веб): экран звонка у iOS закрывается < 2 с после его «Завершить»
+    /// (метка времени веба — $L2_SYNC_DIR/web-hangup.txt, пишет call-scenario.mjs).
+    func waitRemoteHangup(_ what: String, timeout: TimeInterval) {
+        let start = Date()
+        while any("l2.call.hangup").exists && Date().timeIntervalSince(start) < timeout { usleep(20_000) }
+        let closedAt = Date()
+        XCTAssertFalse(any("l2.call.hangup").exists, "\(what): собеседник не завершил / экран звонка не закрылся за \(Int(timeout)) с")
+        if let web = syncRead("web-hangup"), web > start.addingTimeInterval(-120) {
+            let ms = Int(closedAt.timeIntervalSince(web) * 1000)
+            note("\(what): веб завершил → экран iOS закрыт через \(ms) мс")
+            XCTAssertLessThan(ms, 2000, "\(what): после завершения у веба экран iOS закрылся через \(ms) мс (нужно < 2 с)")
+        } else {
+            XCTFail("\(what): нет метки времени завершения от веба (L2_SYNC_DIR)")
+        }
+        assertCallClosed(what, timeout: 5)
+    }
+
+    // MARK: Обмен метками времени с веб-собеседником (общий каталог на Mac)
+
+    private var syncDir: String? { env["L2_SYNC_DIR"].flatMap { $0.isEmpty ? nil : $0 } }
+
+    func syncWrite(_ name: String, _ t: Date) {
+        guard let d = syncDir else { return }
+        try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
+        try? String(Int64(t.timeIntervalSince1970 * 1000)).write(toFile: d + "/" + name + ".txt", atomically: true, encoding: .utf8)
+    }
+
+    func syncRead(_ name: String) -> Date? {
+        guard let d = syncDir, let s = try? String(contentsOfFile: d + "/" + name + ".txt", encoding: .utf8),
+              let ms = Double(s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
+    }
+
+    func note(_ text: String) {
+        let a = XCTAttachment(string: text)
+        a.name = "timing"
+        a.lifetime = .keepAlways
+        add(a)
+        print("L2TIMING " + text)
+    }
+
+    /// Значения тестового крючка l2.test.state (hupms, rend, …).
+    func callHook(_ step: String) -> [String: Int] {
+        let e = any("l2.test.state")
+        guard e.waitForExistence(timeout: 5), let v = e.value as? String else { return [:] }
+        var out: [String: Int] = [:]
+        for part in v.split(separator: " ") {
+            let kv = part.split(separator: "=")
+            if kv.count == 2, let n = Int(kv[1]) { out[String(kv[0])] = n }
+        }
+        return out
     }
 
     func assertCallClosed(_ what: String, timeout: TimeInterval) {
@@ -354,7 +423,17 @@ final class Linia2CallTests: Linia2CallTestBase {
     func test2_IOSToWebAudio() { outgoing(to: peerName, video: false, "iOS → веб (аудио)") }
     func test3_IOSToWebVideo() { outgoing(to: peerName, video: true, "iOS → веб (видео)") }
     func test4_WebToIOSAudio() { incoming(from: peerName, video: false, "веб → iOS (аудио)") }
-    func test5_WebToIOSVideo() { incoming(from: peerName, video: true, "веб → iOS (видео)") }
+    /// Веб → iOS (видео); трубку кладёт ВЕБ (call-scenario.mjs, звонок 4, через ~90 с): экран iOS закрывается < 2 с.
+    func test5_WebToIOSVideo() {
+        let what = "веб → iOS (видео, завершает веб)"
+        login()
+        tab("l2.tab.chats").tap()
+        acceptIncoming(timeout: 600)
+        holdConnected(what)
+        toggleMicAndCamera(what)
+        waitRemoteHangup(what, timeout: 90)
+        assertInCallLog(name: peerName, video: true, what)
+    }
 
     /// Звонок веб → iOS сразу после перезапуска приложения (вход, загрузка и звонок одновременно):
     /// ответ — и уже через ≤ 5 с соединение и звук в обе стороны (байты аудио растут на приём и на передачу).

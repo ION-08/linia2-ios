@@ -144,6 +144,7 @@ enum Linia2TestHook {
             ("vign", Linia2TestProbe.voipIgnored), ("vshown", Linia2TestProbe.incomingShown), ("vstep", voipStep),
             ("ui", Linia2TestProbe.uiReadyMs), ("lost", Linia2TestProbe.lostToasts),
             ("conn", Cache.tinode.isConnectionAuthenticated ? 1 : 0), ("mig", Linia2TestProbe.migrated),
+            ("hupms", Linia2TestProbe.lastHangupCloseMs), ("rend", Linia2TestProbe.remoteEnds),
         ]
         return parts.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
     }

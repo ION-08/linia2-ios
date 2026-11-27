@@ -387,6 +387,29 @@ class CallManager {
         }
     }
 
+    /// LINIA2: звонок (в т.ч. уже принятый / исходящий) завершён другой стороной — «hang-up» или сообщение
+    /// звонка в топике (finished / disconnected / missed / declined / busy). Сразу: CallKit reportCall(.remoteEnded),
+    /// звук выключен, экран звонка закрывается (.linia2CallEnded с remote=true). Повторный вызов — без действий.
+    func endCallInProgressRemotely(topic: String, seq: Int = 0, why: String) {
+        guard let call = callInProgress, call.topic == topic, seq <= 0 || call.seq <= 0 || call.seq == seq else { return }
+        Cache.log.info("CallManager: call %@:%d ended by peer (%@)", topic, call.seq, why)
+        L2Log.event("l2_call_remote_end", ["why": why, "accepted": call.accepted ? 1 : 0])
+        Linia2TestProbe.remoteEnds += 1
+        callInProgress = nil
+        timer?.invalidate()
+        timer = nil
+        if call.seq > 0 { Linia2EndedCalls.mark(call.topic, call.seq) }
+        CallManager.deactivateAudioSession()
+        dismissTestAlert()
+        if CallManager.useCallKit {
+            callDelegate.reportEnded(uuid: call.uuid, reason: .remoteEnded)
+        }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .linia2CallEnded, object: nil,
+                                            userInfo: ["topic": call.topic, "seq": call.seq, "remote": true])
+        }
+    }
+
     private func remember(_ topic: String, _ seq: Int) {
         Linia2EndedCalls.mark(topic, seq)
     }
@@ -476,17 +499,19 @@ extension CallManager: CallManagerImpl {
         Cache.log.info("Completing call: topic=%@, seq=%d", call.topic, call.seq)
         L2Log.event("l2_call_end", ["kind": call.audioOnly ? "audio" : "video", "accepted": call.accepted ? 1 : 0,
                                     "dir": call.from == Cache.tinode.myUid ? "out" : "in", "by_me": reportToPeer ? 1 : 0])
+        if reportToPeer {
+            // Tell the peer the call is over/declined. LINIA2: первым делом, ответа сервера не ждём.
+            Cache.tinode.videoCall(topic: call.topic, seq: call.seq, event: "hang-up")
+        }
         self.callInProgress = nil
         self.timer?.invalidate()
         self.timer = nil
         if call.seq > 0 { remember(call.topic, call.seq) }
+        // LINIA2: микрофон выключается сразу (не дожидаясь, пока CallKit деактивирует аудиосессию).
+        let rtc = RTCAudioSession.sharedInstance()
+        if rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
         CallManager.deactivateAudioSession()
         dismissTestAlert()
-
-        if reportToPeer {
-            // Tell the peer the call is over/declined.
-            Cache.tinode.videoCall(topic: call.topic, seq: call.seq, event: "hang-up")
-        }
         if reportToSystem && CallManager.useCallKit {
             // Tell the OS that the call is over/declined.
             let endCallAction = CXEndCallAction(call: call.uuid)

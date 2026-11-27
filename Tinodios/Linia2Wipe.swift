@@ -435,4 +435,7 @@ enum Linia2TestProbe {
     static var uiReadyMs = -1
     static var lostToasts = 0
     static var migrated = -1
+    // Завершение звонка: мс от «Завершить» до закрытия экрана; число завершений собеседником.
+    static var lastHangupCloseMs = -1
+    static var remoteEnds = 0
 }

@@ -236,7 +236,7 @@ jobs:
               done; sleep 0.5
             done ) &
           export TEST_RUNNER_L2_PUSH_DIR="$PUSHDIR"
-          export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
+          export TEST_RUNNER_L2_SYNC_DIR="$SYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
           export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
           xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests/Linia2LaunchTests -resultBundlePath "$RUNNER_TEMP/launch.xcresult" \
@@ -293,7 +293,8 @@ jobs:
           for U in "$UDID" "$UDID2"; do for k in microphone camera; do xcrun simctl privacy "$U" grant $k info.codix.liniya2 || true; done; done
           # Веб-собеседник B (Chrome с поддельными камерой/микрофоном).
           cp ci/web-tests/call-scenario.mjs "$RUNNER_TEMP/"
-          ( L2_PEER_LOGIN="$L2_PEER_LOGIN" L2_PEER_PASSWORD="$L2_PEER_PASSWORD" L2_IOS_UID="$L2_IOS_UID" OUT_DIR="$OUT/web" \
+          SYNC="$RUNNER_TEMP/l2-sync"; rm -rf "$SYNC"; mkdir -p "$SYNC"
+          ( L2_PEER_LOGIN="$L2_PEER_LOGIN" L2_PEER_PASSWORD="$L2_PEER_PASSWORD" L2_IOS_UID="$L2_IOS_UID" OUT_DIR="$OUT/web" L2_SYNC_DIR="$SYNC" \
             node "$RUNNER_TEMP/call-scenario.mjs" > "$OUT/web/result.json" 2> "$OUT/web/log.txt"; echo $? > "$OUT/web/rc" ) &
           # Второй симулятор: пользователь C принимает звонок A.
           ( TEST_RUNNER_L2_C_LOGIN="$L2_C_LOGIN" TEST_RUNNER_L2_C_PASSWORD="$L2_C_PASSWORD" TEST_RUNNER_L2_A_NAME="Тест CI" \
@@ -301,7 +302,7 @@ jobs:
               -only-testing:TinodiosUITests/Linia2CallPeerTests/testAnswerIncomingCall -resultBundlePath "$RUNNER_TEMP/peer.xcresult" \
               > "$OUT/peer.log" 2>&1; echo $? > "$OUT/peer.rc" ) &
           sleep 75   # C входит и ждёт звонок
-          export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_C_NAME="Собеседник iOS"
+          export TEST_RUNNER_L2_SYNC_DIR="$SYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI" TEST_RUNNER_L2_C_NAME="Собеседник iOS"
           xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
             -only-testing:TinodiosUITests/Linia2CallTests -resultBundlePath "$RUNNER_TEMP/calls.xcresult" \
             2>&1 | tee "$OUT/main.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|\*\* TEST' || true
@@ -340,7 +341,7 @@ jobs:
           [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
           mkdir -p "$RUNNER_TEMP/out/panic"
           xcrun simctl terminate "$UDID" info.codix.liniya2 2>/dev/null || true
-          export TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
+          export TEST_RUNNER_L2_SYNC_DIR="$SYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_PEER_NAME="Собеседник CI"
           export TEST_RUNNER_L2_PEER_LOGIN="$L2_PEER_LOGIN" TEST_RUNNER_L2_PEER_PASSWORD="$L2_PEER_PASSWORD" TEST_RUNNER_L2_IOS_UID="${L2_IOS_UID:-}"
           export TEST_RUNNER_L2_WIPE_SERVER="${L2_WIPE_SERVER:-0}" TEST_RUNNER_L2_WIPE_SERVER_LEVEL="${L2_WIPE_SERVER_LEVEL:-2}"
           xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \

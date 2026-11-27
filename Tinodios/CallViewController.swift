@@ -180,6 +180,9 @@ protocol TinodeVideoCallDelegate: AnyObject {
 }
 
 class WebRTCClient: NSObject {
+    /// LINIA2: закрытие соединений (pc.close() блокирует на секунды) — не на главном потоке.
+    static let closeQueue = DispatchQueue(label: "linia2.webrtc.close", qos: .userInitiated)
+
     static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         let videoEncoderFactory = RTCDefaultVideoEncoderFactory()
@@ -487,6 +490,13 @@ class WebRTCClient: NSObject {
         onDiagEvent?(["type": "uitest-media", "paused": paused])
     }
 
+    /// LINIA2: при завершении — сразу перестать передавать звук и видео (до закрытия соединения).
+    func linia2MuteAllForClose() {
+        localAudioTrack?.isEnabled = false
+        localVideoTrack?.isEnabled = false
+        localPeer?.senders.forEach { $0.track?.isEnabled = false }
+    }
+
     func sendOverDataChannel(event: String) {
         self.localDataChannel?.sendData(RTCDataBuffer(data: Data(event.utf8), isBinary: false))
     }
@@ -495,8 +505,18 @@ class WebRTCClient: NSObject {
         initialOfferSent = false
         remoteAnswerApplied = false
         linia2Established = false
-        localPeer?.close()
-        localPeer = nil
+        // LINIA2 (баг «Завершить» срабатывает через ~5 с): RTCPeerConnection.close() синхронный и на iPhone
+        // занимает секунды (освобождение TURN-выделений, остановка аудиоблока VPIO, потоки WebRTC) — раньше он
+        // шёл на главном потоке ДО закрытия экрана. Теперь: треки выключаются сразу (микрофон/камера не
+        // передаются), а close() — в фоновой очереди; события старого соединения экрану больше не приходят.
+        if let pc = localPeer {
+            localPeer = nil
+            for sender in pc.senders { sender.track?.isEnabled = false }
+            localAudioTrack?.isEnabled = false
+            localVideoTrack?.isEnabled = false
+            pc.delegate = nil
+            WebRTCClient.closeQueue.async { pc.close() }
+        }
 
         // Clean up audio.
         localAudioTrack = nil
@@ -1460,13 +1480,35 @@ class CallViewController: UIViewController {
     }
 
     /// Завершить звонок и закрыть экран (в том числе свёрнутый). Повторные вызовы игнорируются.
-    func handleCallClose() {
+    /// LINIA2: всё локально и мгновенно — сигнал «hang-up» серверу уходит первым (без ожидания ответа),
+    /// экран закрывается без анимации, звук выключается, CallKit завершается, pc.close() — в фоне.
+    /// `remoteEnded` — завершила другая сторона: серверу ничего не шлём, CallKit — reportCall(.remoteEnded).
+    func handleCallClose(remoteEnded: Bool = false) {
         guard Thread.isMainThread else {
-            DispatchQueue.main.async { self.handleCallClose() }
+            DispatchQueue.main.async { self.handleCallClose(remoteEnded: remoteEnded) }
             return
         }
         guard !closed else { return }
         closed = true
+        let closeStarted = Date()
+        // 1. Сигнал собеседнику — сразу (note по веб-сокету, ответа не ждём).
+        if ownsCall && !remoteEnded && self.callSeqId > 0 {
+            self.topic?.videoCall(event: "hang-up", seq: self.callSeqId)
+        }
+        // 2. Микрофон/камера — выключить сейчас же.
+        webRTCClient.linia2MuteAllForClose()
+        let rtc = RTCAudioSession.sharedInstance()
+        if rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
+        // 3. Экран — закрыть немедленно (без анимации).
+        Linia2CallCenter.shared.callDidEnd(self)
+        if let presenter = self.presentingViewController {
+            // Через presenter — закрывается и экран звонка, и то, что поверх него (алерт, меню выхода звука).
+            presenter.dismiss(animated: false)
+        } else if let nav = self.navigationController {
+            nav.popViewController(animated: false)
+        }
+        Linia2TestProbe.lastHangupCloseMs = Int(Date().timeIntervalSince(closeStarted) * 1000)
+        diag?.add(["type": "close", "ms": Linia2TestProbe.lastHangupCloseMs, "remote": remoteEnded ? 1 : 0])
         diag?.end(connectionLost ? "connection-lost" : (connectedAt != nil ? "connected" : "not-connected"))
         reconnectTimer?.invalidate()
         reconnectTimer = nil
@@ -1479,20 +1521,17 @@ class CallViewController: UIViewController {
         observers.removeAll()
 
         if ownsCall {
-            Cache.callManager.completeCallInProgress(reportToSystem: true, reportToPeer: false)
-            if self.callSeqId > 0 {
-                self.topic?.videoCall(event: "hang-up", seq: self.callSeqId)
+            // 4. CallKit: наш отбой — CXEndCallAction (fulfill сразу); отбой собеседника — reportCall(.remoteEnded).
+            if remoteEnded, let name = self.topic?.name {
+                Cache.callManager.endCallInProgressRemotely(topic: name, why: "vc-remote")
             }
+            // Запасной путь (или наш отбой): звонок не должен остаться «идущим».
+            Cache.callManager.completeCallInProgress(reportToSystem: true, reportToPeer: false)
         }
         self.callSeqId = -1
         Cache.tinode.removeListener(self.listener)
+        // 5. Медиа: остановка захвата, pc.close() — в фоне (WebRTCClient.disconnect).
         stopMedia()
-        Linia2CallCenter.shared.callDidEnd(self)
-        if self.presentingViewController != nil {
-            self.dismiss(animated: true)
-        } else if let nav = self.navigationController {
-            nav.popViewController(animated: true)
-        }
     }
 
     func handleCallInvite() {
@@ -1785,7 +1824,7 @@ extension CallViewController: TinodeVideoCallDelegate {
     func handleRemoteHangup() {
         assert(Thread.isMainThread)
         self.playSoundEffect("call-end")
-        self.handleCallClose()
+        self.handleCallClose(remoteEnded: true)
     }
 
     func handleRinging() {
@@ -2365,7 +2404,7 @@ extension CallViewController {
             guard let self = self, self.ownsCall else { return }
             // Звонок завершён системой (экран блокировки, CallKit, другой звонок) — закрыть экран.
             if let topic = n.userInfo?["topic"] as? String, topic != self.topic?.name { return }
-            self.handleCallClose()
+            self.handleCallClose(remoteEnded: (n.userInfo?["remote"] as? Bool) ?? false)
         })
         observers.append(nc.addObserver(forName: .linia2CallHeld, object: nil, queue: .main) { [weak self] n in
             self?.setHeld((n.userInfo?["held"] as? Bool) ?? false)
