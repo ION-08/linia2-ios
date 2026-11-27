@@ -434,7 +434,8 @@ private final class Linia2CallCell: UITableViewCell {
         timeLabel.text = timeText
 
         // Аватар: фото из pub.photo (через RoundImageView), иначе — буквы на цветном круге в стиле Линии 2.0.
-        if pub?.photo != nil {
+        // Дизайн: как в чатах и контактах — та же плитка (цвет и одна буква), а не своя «ДС» другого цвета.
+        if pub?.photo != nil || (item.guest == nil && pub != nil) {
             avatarHasPhoto = true
             lettersLabel.isHidden = true
             avatar.set(pub: pub, id: item.topicName, deleted: false)
