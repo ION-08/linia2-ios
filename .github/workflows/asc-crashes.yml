@@ -38,7 +38,21 @@ jobs:
           console.log('crash submissions HTTP', r.s, r.s >= 300 ? r.t.slice(0, 300) : '');
           const list = (r.j?.data || []).filter(x => Date.parse(x.attributes.createdDate) >= since);
           console.log('всего отчётов:', (r.j?.data || []).length, 'последний:', r.j?.data?.[0]?.attributes?.createdDate || '-');
-          const fb = await api(`/v1/apps/${app.id}/betaFeedbackScreenshotSubmissions?limit=5`); console.log('screenshot feedback HTTP', fb.s, (fb.j?.data || []).length);
+          // Отзывы TestFlight со скриншотами: JSON (текст, устройство, сборка) + сами снимки.
+          const fb = await api(`/v1/apps/${app.id}/betaFeedbackScreenshotSubmissions?limit=50&sort=-createdDate`);
+          console.log('screenshot feedback HTTP', fb.s, (fb.j?.data || []).length, fb.s >= 300 ? fb.t.slice(0, 300) : '');
+          const fbList = (fb.j?.data || []).filter(x => Date.parse(x.attributes.createdDate) >= since);
+          console.log('отзывов со скриншотами за период:', fbList.length);
+          for (const x of fbList) {
+            const a = x.attributes, base = `${out}/feedback-${a.createdDate.replace(/[:.]/g, '-')}`;
+            fs.writeFileSync(`${base}.json`, JSON.stringify(x, null, 1));
+            let i = 0;
+            for (const sh of (a.screenshots || [])) {
+              try { const r = await fetch(sh.url); if (r.ok) fs.writeFileSync(`${base}-${i++}.jpg`, Buffer.from(await r.arrayBuffer())); } catch {}
+            }
+          }
+          // Текстовые комментарии к отчётам о сбоях — тоже в JSON (attributes.comment).
+          fs.writeFileSync(`${out}/crash-submissions.json`, JSON.stringify(list, null, 1));
           console.log('за период:', list.length);
           for (const x of list) {
             const a = x.attributes; console.log(a.createdDate, 'build', a.buildBundleId || '', a.appVersion || '', a.deviceModel || '', a.osVersion || '');
