@@ -11,6 +11,10 @@
 //  Баг 1006: vpush/vdup/vign/vshown/vstep — VoIP push (всего / повтор того же звонка / отброшен / показан входящий /
 //    шаг сценария L2_TEST_VOIP_REPLAY); ui — мс от запуска до интерфейса; lost — показов «Связь потеряна»;
 //    conn — вошли на сервер; mig — миграция базы (−1 не нужна, 0 идёт, 1 готово).
+//  Код паники: queued — неотправленных (outbox) в базе; oldf — файлов, оставшихся от состояния до стирания;
+//    copyrows/copyplain/copyread — копия базы, снятая перед стиранием: значений / открытых / прочитанных новым ключом.
+//    «l2.test.tree» — дерево файлов (Documents, Library, Caches, tmp, App Group) до и после.
+//  L2_TEST_OUTBOX=текст — перед стиранием положить в очередь отправки неотправленное сообщение (не должно уйти).
 //  L2_TEST_UNREACHABLE=N — «сервер недоступен» первые N с после запуска (подключение не идёт), затем — как обычно.
 //  L2_TEST_VOIP_REPLAY=1 — после входа (PIN пройден): payload VoIP push «started» по звонку topic+seq → повтор →
 //    «hang-up» → снова «started» с тем же topic+seq (повтор после завершения) → «started» устаревший (ts −120 с).
@@ -27,6 +31,14 @@ import TinodiosDB
 final class Linia2TestHookView: UIView {
     override var accessibilityValue: String? {
         get { Linia2TestHook.state() }
+        set {}
+    }
+}
+
+/// «l2.test.tree» — дерево файлов контейнера до и после стирания (для вложения в отчёт теста).
+final class Linia2TestTreeView: UIView {
+    override var accessibilityValue: String? {
+        get { Linia2TestHook.treeReport() }
         set {}
     }
 }
@@ -60,7 +72,16 @@ enum Linia2TestHook {
         v.accessibilityIdentifier = "l2.test.state"
         v.accessibilityLabel = "test-state"
         v.backgroundColor = .clear
-        vc.view = v
+        let tv = Linia2TestTreeView(frame: w.bounds)
+        tv.isAccessibilityElement = true
+        tv.accessibilityIdentifier = "l2.test.tree"
+        tv.accessibilityLabel = "test-tree"
+        tv.backgroundColor = .clear
+        let box = UIView(frame: w.bounds)
+        box.backgroundColor = .clear
+        box.addSubview(v)
+        box.addSubview(tv)
+        vc.view = box
         w.rootViewController = vc
         w.isHidden = false
         window = w
@@ -130,8 +151,94 @@ enum Linia2TestHook {
         }
     }
 
+    // MARK: - Код паники: дерево файлов, копия базы, неотправленное
+
+    private struct FileRec { let path: String; let created: Date; let size: Int }
+    private static var treeBefore: [String: FileRec]?
+    private static var wipeAt: Date?
+    private static var copyDir: URL {
+        Linia2Storage.library.appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("l2test-dbcopy", isDirectory: true)
+    }
+
+    /// Корни: контейнер приложения (Documents, Library с Caches, tmp) и общий контейнер (App Group).
+    private static func roots() -> [(String, URL)] {
+        var r: [(String, URL)] = [("Documents", Linia2Storage.documents), ("Library", Linia2Storage.library),
+                                  ("tmp", Linia2Storage.tmp)]
+        if let g = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BaseDb.kAppGroupId) {
+            r.append(("Group", g))
+        }
+        return r
+    }
+
+    private static func tree() -> [String: FileRec] {
+        var out: [String: FileRec] = [:]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .creationDateKey, .fileSizeKey]
+        for (name, root) in roots() {
+            let base = root.resolvingSymlinksInPath().path
+            guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: nil) else { continue }
+            for case let f as URL in e {
+                guard let v = try? f.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
+                var rel = f.resolvingSymlinksInPath().path
+                if rel.hasPrefix(base) { rel = String(rel.dropFirst(base.count)) }
+                let p = name + rel
+                out[p] = FileRec(path: p, created: v.creationDate ?? .distantPast, size: v.fileSize ?? 0)
+            }
+        }
+        return out
+    }
+
+    /// Не данные переписки: настройки (UserDefaults; ключи чатов из них удаляются), Application Support
+    /// (публичный конфиг, служебные файлы Firebase, копия базы этого теста), системные метаданные контейнера.
+    private static func allowed(_ p: String) -> Bool {
+        if p.contains("/.com.apple.") { return true }
+        for pre in ["Library/Preferences/", "Library/Application Support/", "Group/Library/Preferences/"] where p.hasPrefix(pre) { return true }
+        return false
+    }
+
+    /// Вызывается исполнителем стирания (до уничтожения ключей).
+    static func beforeWipe() {
+        guard enabled else { return }
+        // «Неотправленное» сообщение в очереди (outbox) последнего личного чата — не должно уйти после стирания.
+        if let text = ProcessInfo.processInfo.environment["L2_TEST_OUTBOX"], !text.isEmpty,
+           let t = Cache.tinode.getFilteredTopics(filter: { $0.topicType == .p2p })?
+            .max(by: { ($0.touched ?? .distantPast) < ($1.touched ?? .distantPast) }) {
+            _ = BaseDb.sharedInstance.sqlStore?.msgSend(topic: t, data: Drafty(plainText: text), head: nil)
+        }
+        _ = BaseDb.l2DebugCopyDbFiles(to: copyDir)
+        treeBefore = tree()
+        wipeAt = Date()
+    }
+
+    /// Файлы, оставшиеся от состояния до стирания, кроме разрешённых: созданные ДО стирания (переименование
+    /// дату создания сохраняет — так ловится и база, перенесённая в l2trash, но не стёртая) или с тем же путём
+    /// и той же датой создания, что в снимке «до».
+    private static func oldFiles() -> [String] {
+        guard let before = treeBefore, let at = wipeAt else { return [] }
+        return tree().values.filter { r in
+            guard !allowed(r.path) else { return false }
+            if r.created < at { return true }
+            if let b = before[r.path], abs(b.created.timeIntervalSince(r.created)) < 0.001 { return true }
+            return false
+        }.map { $0.path }.sorted()
+    }
+
+    static func treeReport() -> String {
+        guard let before = treeBefore else { return "no-wipe" }
+        func list(_ t: [String: FileRec]) -> String {
+            t.values.sorted { $0.path < $1.path }.map { "\($0.path) \($0.size)" + (allowed($0.path) ? " [allowed]" : "") }
+                .joined(separator: "\n")
+        }
+        return "BEFORE (\(before.count)):\n" + list(before) + "\n\nAFTER:\n" + list(tree()) +
+            "\n\nOLD (left from before):\n" + oldFiles().joined(separator: "\n")
+    }
+
     static func state() -> String {
         let c = BaseDb.sharedInstance.l2DebugCounts()
+        // После стирания: oldf — файлов старого состояния; copyrows/copyplain/copyread — копия старой базы:
+        // значений / открытым текстом / прочитано новыми ключами (−1 — стирания не было).
+        let wiped = treeBefore != nil
+        let copy = wiped ? BaseDb.l2DebugReadCopy(at: copyDir) : [:]
         let chats = Utils.fetchTopics(archived: false)?.count ?? -1
         let cfg = Linia2WipeStore.config
         let parts: [(String, Int)] = [
@@ -145,6 +252,8 @@ enum Linia2TestHook {
             ("ui", Linia2TestProbe.uiReadyMs), ("lost", Linia2TestProbe.lostToasts),
             ("conn", Cache.tinode.isConnectionAuthenticated ? 1 : 0), ("mig", Linia2TestProbe.migrated),
             ("hupms", Linia2TestProbe.lastHangupCloseMs), ("rend", Linia2TestProbe.remoteEnds),
+            ("queued", c["queued"] ?? -1), ("oldf", wiped ? oldFiles().count : -1),
+            ("copyrows", copy["rows"] ?? -1), ("copyplain", copy["plain"] ?? -1), ("copyread", copy["read"] ?? -1),
         ]
         return parts.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
     }

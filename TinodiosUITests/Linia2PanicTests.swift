@@ -11,6 +11,9 @@
 //        нет ни чата, ни сообщения, ни файла, уведомления очищены, код больше не хранится, обычный PIN
 //        работает как раньше (1–2); время ответа экрана на код и на PIN совпадает (±150 мс).
 //  P5 — 10 неверных PIN подряд (флаг wipe_on_fail) → стирание.
+//  Во всех стираниях (assertNothingOld): дерево файлов Documents/Library/Caches/tmp/App Group до и после
+//  (вложение tree-*), ни одного файла старого состояния; копия базы, снятая до стирания, новыми ключами
+//  не читается; неотправленное сообщение из очереди (L2_TEST_OUTBOX) не досылается собеседнику.
 //  Настройка — L2_WIPE_OVERRIDE (как ответ сервера; поле "code" — открытый код для теста).
 //  Серверная проверка (L2_WIPE_SERVER=1; уровень — L2_WIPE_SERVER_LEVEL, по умолчанию 2): код задаётся
 //  через POST /invite/api/panic/settings (пароль A), приложение берёт настройку с сервера, после
@@ -139,6 +142,8 @@ final class Linia2PanicTests: Linia2CallTestBase {
         allowNotifications()
         if server { try enableOnServer(level: level) }
         let tag = "W\(level)-" + Self.stamp
+        // Неотправленное сообщение: крючок кладёт его в очередь отправки прямо перед стиранием.
+        app.launchEnvironment["L2_TEST_OUTBOX"] = "Неотправленное \(tag)"
         XCTAssertNotNil(c.publish(topic, content: "Перед стиранием \(tag)", head: [:]), "B не отправил сообщение")
         openChat(with: peerName)
         // Своё сообщение — чтобы проверить удаление у собеседника.
@@ -196,6 +201,34 @@ final class Linia2PanicTests: Linia2CallTestBase {
         if pinTitle.waitForExistence(timeout: 3) { enterPin() }
     }
 
+    /// У собеседника B есть сообщение с этим текстом.
+    private func peerHas(_ c: L2PeerClient, _ topic: String, _ text: String) -> Bool {
+        c.fetchLatest(topic)
+        return c.datas.contains { d in
+            (d["content"] as? String)?.contains(text) == true ||
+                ((d["content"] as? [String: Any])?["txt"] as? String)?.contains(text) == true
+        }
+    }
+
+    /// После стирания: в контейнере (Documents, Library, Caches, tmp, App Group) не осталось ни одного файла
+    /// старой базы/кэша; копия базы, снятая до стирания, есть, но новыми ключами не читается; очередь пуста.
+    private func assertNothingOld(_ s: [String: Int], _ step: String) {
+        let tree = any("l2.test.tree")
+        if tree.waitForExistence(timeout: 5), let v = tree.value as? String {
+            let a = XCTAttachment(string: v)
+            a.name = "tree-" + step
+            a.lifetime = .keepAlways
+            add(a)
+        } else {
+            XCTFail("нет крючка l2.test.tree — \(step)")
+        }
+        XCTAssertEqual(s["oldf"], 0, "после стирания остались файлы старого состояния (см. вложение tree-\(step))")
+        XCTAssertGreaterThan(s["copyrows"] ?? 0, 0, "копия базы до стирания пуста — проверка не имеет смысла")
+        XCTAssertEqual(s["copyplain"], 0, "в копии базы есть незашифрованные значения")
+        XCTAssertEqual(s["copyread"], 0, "копия старой базы читается новыми ключами")
+        XCTAssertEqual(s["queued"], 0, "в новой базе остались неотправленные сообщения")
+    }
+
     /// У собеседника B больше нет сообщения A с меткой.
     private func assertPeerDeleted(_ c: L2PeerClient, _ topic: String, _ tag: String) {
         let end = Date().addingTimeInterval(120)
@@ -245,13 +278,14 @@ final class Linia2PanicTests: Linia2CallTestBase {
             app.alerts.buttons.firstMatch.tap()
             UserDefaults.standard.removeObject(forKey: "l2.calltests.login")
         }
-        let after = waitState("после-кода-\(level)", timeout: 25) { ($0["files"] ?? 1) == 0 && ($0["msgs"] ?? 1) == 0 }
+        let after = waitState("после-кода-\(level)", timeout: 25) { ($0["files"] ?? 1) == 0 && ($0["msgs"] ?? 1) == 0 && ($0["oldf"] ?? 1) == 0 }
         XCTAssertEqual(after["wipes"], 1, "стирание не выполнено")
         XCTAssertEqual(after["msgs"], 0, "остались сообщения")
         XCTAssertEqual(after["chats"], 0, "остались чаты в списке")
         XCTAssertEqual(after["files"], 0, "остались файлы")
         XCTAssertEqual(after["notif"], 0, "остались уведомления")
         XCTAssertEqual(after["cfg"], 0, "код всё ещё хранится")
+        assertNothingOld(after, "после-кода-\(level)")
         if level >= 3 {
             XCTAssertEqual(after["topics"], 0, "после выхода в базе остались чаты")
             XCTAssertEqual(after["users"], 0, "после выхода в базе остались пользователи")
@@ -276,6 +310,9 @@ final class Linia2PanicTests: Linia2CallTestBase {
             XCTAssertEqual(s["files"], 0)
             XCTAssertEqual(s["notif"], 0)
             XCTAssertEqual(s["keys"], 1, "нет нового ключа хранилища")
+            XCTAssertEqual(s["queued"], 0, "после переподключения в очереди отправки что-то есть")
+            // Сообщение, стоявшее в очереди отправки в момент стирания, после переподключения НЕ досылается.
+            XCTAssertFalse(peerHas(c, topic, "Неотправленное \(tag)"), "неотправленное сообщение дослано после стирания")
             // Новое сообщение после стирания показывается как обычно.
             XCTAssertNotNil(c.publish(topic, content: "После стирания \(tag)", head: [:]))
             let row = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", peerName)).firstMatch
@@ -340,6 +377,7 @@ final class Linia2PanicTests: Linia2CallTestBase {
         XCTAssertEqual(s["msgs"], 0)
         XCTAssertEqual(s["chats"], 0)
         XCTAssertEqual(s["files"], 0)
+        assertNothingOld(waitState("после-10-файлы", timeout: 15) { ($0["oldf"] ?? 1) == 0 }, "после-10")
         app.launchEnvironment["L2_PIN_COOLDOWN"] = nil
         app.launchEnvironment["L2_WIPE_OVERRIDE"] = nil
     }

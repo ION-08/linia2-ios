@@ -304,15 +304,29 @@ extension BaseDb {
     }
     static let kDbFileName = "database.sqlite"
 
-    /// Файлы базы — не в резервную копию iCloud/компьютера (ключи *ThisDeviceOnly туда всё равно не попадают).
+    /// Файлы базы — не в резервную копию iCloud/компьютера (ключи *ThisDeviceOnly туда всё равно не попадают)
+    /// и с защитой iOS CompleteUntilFirstUserAuthentication: базу открывают на ЗАБЛОКИРОВАННОМ телефоне
+    /// расширение уведомлений (каждый push — запись сообщения, имя отправителя) и приложение при входящем
+    /// звонке (CallKit/PushKit: имя звонящего, запись о звонке). С классом Complete эти записи падали бы
+    /// (SQLITE_IOERR / «файл недоступен»), а уведомления и звонки — без имени. Содержимое строк при этом
+    /// зашифровано L2Vault (содержимое сообщений — ключом WhenUnlockedThisDeviceOnly либо на открытый ключ),
+    /// так что «после первой разблокировки» открыт только шифротекст. Общий контейнер целиком — тоже не в копию.
     static func excludeFromBackup() {
         guard let dir = containerURL else { return }
-        for suffix in ["", "-journal", "-wal", "-shm"] {
-            var u = dir.appendingPathComponent(kDbFileName + suffix)
-            guard FileManager.default.fileExists(atPath: u.path) else { continue }
+        let fm = FileManager.default
+        func exclude(_ url: URL) {
+            var u = url
             var v = URLResourceValues()
             v.isExcludedFromBackup = true
             try? u.setResourceValues(v)
+        }
+        exclude(dir)
+        try? fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: dir.path)
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let u = dir.appendingPathComponent(kDbFileName + suffix)
+            guard fm.fileExists(atPath: u.path) else { continue }
+            exclude(u)
+            try? fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: u.path)
         }
     }
 
@@ -443,6 +457,15 @@ extension BaseDb {
             let account = keepAccount ? old?.account : nil
             let deviceToken = keepAccount ? old?.accountDb?.getDeviceToken() : nil
             BaseDb.default = nil
+            // Старый экземпляр больше ничего не читает и не пишет: SqlStore старого Tinode обращается к таблицам
+            // через dbh?.messageDb? — после обнуления getQueuedMessages и т.п. возвращают nil, т.е. неотправленные
+            // сообщения (outbox) старой базы не будут отправлены, даже если старый Tinode ещё успеет подключиться.
+            // Соединение SQLite закрывается вместе с последней ссылкой на него.
+            old?.messageDb = nil
+            old?.subscriberDb = nil
+            old?.topicDb = nil
+            old?.userDb = nil
+            old?.accountDb = nil
             old?.db = nil
             if let dir = containerURL {
                 let t = dir.appendingPathComponent("l2trash", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -487,6 +510,52 @@ extension BaseDb {
             "topics": n("SELECT count(*) FROM \(TopicDb.kTableName) WHERE topic NOT IN ('me','fnd','sys')"),
             "users": n("SELECT count(*) FROM \(UserDb.kTableName)"),
             "subs": n("SELECT count(*) FROM \(SubscriberDb.kTableName)"),
+            // Неотправленные (outbox): черновик / в очереди / отправляется / ошибка.
+            "queued": n("SELECT count(*) FROM \(MessageDb.kTableName) WHERE status IN (\(Status.draft.rawValue),\(Status.queued.rawValue),\(Status.sending.rawValue),\(Status.failed.rawValue))"),
         ]
+    }
+
+    /// Только для автотестов: скопировать файлы базы (как это сделал бы злоумышленник до стирания).
+    public static func l2DebugCopyDbFiles(to dir: URL) -> Int {
+        guard let src = containerURL else { return 0 }
+        let fm = FileManager.default
+        try? fm.removeItem(at: dir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        var n = 0
+        accessQueue.sync {
+            for suffix in ["", "-journal", "-wal", "-shm"] {
+                let u = src.appendingPathComponent(kDbFileName + suffix)
+                guard fm.fileExists(atPath: u.path) else { continue }
+                if (try? fm.copyItem(at: u, to: dir.appendingPathComponent(kDbFileName + suffix))) != nil { n += 1 }
+            }
+        }
+        return n
+    }
+
+    /// Только для автотестов: открыть сохранённую копию базы и попытаться прочитать её ТЕКУЩИМИ ключами.
+    /// rows — значений (содержимое/заголовки сообщений, pub/priv чатов и пользователей) в копии;
+    /// plain — из них без шифрования; read — расшифровано текущими ключами (после стирания должно быть 0).
+    public static func l2DebugReadCopy(at dir: URL) -> [String: Int] {
+        let path = dir.appendingPathComponent(kDbFileName).path
+        guard FileManager.default.fileExists(atPath: path),
+              let db = try? SQLite.Connection(path, readonly: true) else { return ["rows": -1, "plain": -1, "read": -1] }
+        var rows = 0, plain = 0, read = 0
+        let jobs: [(String, String, Bool)] = [
+            (MessageDb.kTableName, "content", true), (MessageDb.kTableName, "head", false),
+            (TopicDb.kTableName, "pub", false), (TopicDb.kTableName, "priv", false),
+            (UserDb.kTableName, "pub", false), (SubscriberDb.kTableName, "priv", false),
+        ]
+        for (table, col, content) in jobs {
+            guard let stmt = try? db.prepare("SELECT \(col) FROM \(table) WHERE \(col) IS NOT NULL") else { continue }
+            for row in stmt {
+                guard let v = row[0] as? String, !v.isEmpty else { continue }
+                rows += 1
+                let enc = v.hasPrefix(L2Vault.pContent) || v.hasPrefix(L2Vault.pPub) || v.hasPrefix(L2Vault.pMeta) || v.hasPrefix(L2Vault.pMetaCall)
+                if !enc { plain += 1; continue }
+                let out = content ? L2Vault.openContent(v) : L2Vault.openMeta(v)
+                if let o = out, o != v { read += 1 }
+            }
+        }
+        return ["rows": rows, "plain": plain, "read": read]
     }
 }
