@@ -32,21 +32,13 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
         title = "Профиль"
         navigationItem.largeTitleDisplayMode = .never
         stack.spacing = 12
+        // Низ области прокрутки — над плавающим нижним меню (безопасная зона снизу + меню). Отступ contentInset
+        // не помогал: кнопка «Удалить аккаунт» оставалась в границах прокрутки, но под меню — прокрутка и
+        // «scroll to visible» считали её видимой, а нажать было нельзя.
+        additionalSafeAreaInsets.bottom = Linia2TabBarController.reservedBottom
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(textViewBegan(_:)),
                                                name: UITextView.textDidBeginEditingNotification, object: aboutView)
-    }
-
-    /// Запас снизу под плавающее нижнее меню. Низ прокрутки — верх клавиатуры, а без клавиатуры это низ экрана
-    /// (не безопасной зоны), поэтому к высоте меню добавляется нижняя безопасная зона. Раньше «Удалить аккаунт»
-    /// даже при прокрутке до конца оставалась под меню и не нажималась.
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        let reserve = Linia2TabBarController.reservedBottom + view.safeAreaInsets.bottom + 8
-        if abs(scroll.contentInset.bottom - reserve) > 0.5 {
-            scroll.contentInset.bottom = reserve
-            scroll.verticalScrollIndicatorInsets.bottom = reserve
-        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
