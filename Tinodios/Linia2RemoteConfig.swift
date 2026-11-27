@@ -567,7 +567,25 @@ extension Linia2Config {
 /// раз в минуту проверяет основной и возвращается на него. Пользователь видит только «Подключение…».
 final class Linia2Failover: TinodeEventListener {
     static let shared = Linia2Failover()
-    private var failures: [Date] = []
+    /// LINIA2 (сборка 1011, цикл переподключения): резервный адрес — только после стольких подряд неудачных
+    /// подключений (не отмен нами); после смены адреса счёт начинается заново, смены не чаще раза в 30 с.
+    private static let kFailsBeforeSwitch = 3
+    private static let kMinSwitchInterval: TimeInterval = 30
+    private var consecutiveFails = 0
+    private var lastFailAt = Date.distantPast
+    private var lastSwitchAt = Date.distantPast
+
+    // Приложение на экране — читается с очередей соединения, поэтому под замком.
+    private static let stateLock = NSLock()
+    private static var appActiveValue = true
+    static var appActive: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return appActiveValue }
+        set { stateLock.lock(); appActiveValue = newValue; stateLock.unlock() }
+    }
+    /// Переподключаться можно: приложение на экране или идёт звонок (CallKit / VoIP).
+    static var reconnectAllowed: Bool {
+        appActive || CallManager.state.uuid != nil || CallManager.state.inConversation
+    }
     private var attemptStarted: Date?
     private var connected = false
     private var timer: Timer?
@@ -577,10 +595,28 @@ final class Linia2Failover: TinodeEventListener {
 
     func start() {
         Cache.tinode.addListener(self)
+        Linia2Failover.appActive = UIApplication.shared.applicationState != .background
+        Connection.linia2ReconnectAllowed = { Linia2Failover.reconnectAllowed }
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Linia2Failover.appActive = true
+            // Возврат в приложение — мгновенная попытка (пауза сброшена), вне главного потока.
+            DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2ResumeNow(reason: "active") }
+        }
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            Linia2Failover.appActive = false
+        }
         monitor.pathUpdateHandler = { [weak self] path in
+            let ok = path.status == .satisfied
+            // Сеть появилась / сменилась — мгновенная попытка (если можно переподключаться).
+            if ok, Linia2Failover.reconnectAllowed, Cache.tinode.myUid != nil {
+                Cache.tinode.linia2ResumeNow(reason: "network")
+            }
             DispatchQueue.main.async {
-                self?.networkOK = path.status == .satisfied
-                self?.updateBanner()
+                guard let self = self else { return }
+                if ok && !self.networkOK { self.consecutiveFails = 0 }   // новая сеть — счёт неудач заново
+                self.networkOK = ok
+                self.updateBanner()
             }
         }
         monitor.start(queue: DispatchQueue(label: "linia2.net"))
@@ -593,7 +629,7 @@ final class Linia2Failover: TinodeEventListener {
         DispatchQueue.main.async {
             self.connected = true
             self.connectedAt = Date()
-            self.failures.removeAll()
+            self.consecutiveFails = 0
             self.attemptStarted = nil
             self.updateBanner()
         }
@@ -604,11 +640,24 @@ final class Linia2Failover: TinodeEventListener {
             self.connected = false
             let now = Date()
             if self.attemptStarted == nil { self.attemptStarted = now }
-            self.failures.append(now)
-            self.failures = self.failures.filter { now.timeIntervalSince($0) < 60 }
-            if self.failures.count >= 3 { self.switchToNext("3 обрыва за минуту") }
-            self.updateBanner()
+            defer { self.updateBanner() }
+            // Сокет закрыли мы (отмена / смена адреса / выход) — не обрыв.
+            guard reason != Tinode.linia2ClientCancelReason else { return }
+            // В фоне без звонка обрыв нормален (iOS рвёт сокет) — адрес не меняем, ждём возврата.
+            guard Linia2Failover.reconnectAllowed else { return }
+            self.countFailure(now, why: "обрыв")
         }
+    }
+
+    /// Неудачное подключение (обрыв до/после входа или таймаут). Повторы одной и той же неудачи в пределах 1 с
+    /// считаются одной. Смена адреса — после kFailsBeforeSwitch подряд, не чаще kMinSwitchInterval.
+    private func countFailure(_ now: Date, why: String) {
+        guard now.timeIntervalSince(lastFailAt) >= 1 else { return }
+        lastFailAt = now
+        consecutiveFails += 1
+        guard consecutiveFails >= Linia2Failover.kFailsBeforeSwitch,
+              now.timeIntervalSince(lastSwitchAt) >= Linia2Failover.kMinSwitchInterval else { return }
+        switchToNext("\(consecutiveFails) неудачных подключений подряд (\(why))")
     }
 
     private var lastProbe = Date.distantPast
@@ -645,13 +694,16 @@ final class Linia2Failover: TinodeEventListener {
             L2Log.event("l2_login_heal")
             AppDelegate.connectInBackground(attempt: 0)
         }
-        // Нет ответа дольше 8 с при живой сети — следующий адрес.
+        guard Linia2Failover.reconnectAllowed else { return }
+        // Нет ответа дольше 8 с при живой сети — одна неудачная попытка (адрес меняет countFailure).
         if !connected, networkOK, let t = attemptStarted, Date().timeIntervalSince(t) > 8, Cache.tinode.myUid != nil {
-            switchToNext("таймаут подключения")
+            attemptStarted = Date()
+            countFailure(Date(), why: "таймаут")
         }
-        // На резервном — раз в минуту проверяем основной.
+        // На резервном и без связи — раз в минуту проверяем основной. Рабочее соединение на резервном НЕ рвём
+        // (сборка 1011: возврат на основной через 4 с после входа рвал живой сокет и запускал цикл).
         let primary = SharedUtils.linia2Hosts[0]
-        if SharedUtils.linia2ActiveHost != primary, Date().timeIntervalSince(lastProbe) > 60 {
+        if !connected, !Cache.tinode.isConnected, SharedUtils.linia2ActiveHost != primary, Date().timeIntervalSince(lastProbe) > 60 {
             lastProbe = Date()
             probe(primary) { [weak self] ok in if ok { self?.use(primary, why: "основной снова доступен") } }
         }
@@ -679,9 +731,12 @@ final class Linia2Failover: TinodeEventListener {
         guard host != SharedUtils.linia2ActiveHost || !connected else { return }
         Cache.log.info("Linia2: адрес сервера → %@ (%@)", host, why)
         SharedUtils.linia2ActiveHost = host
-        failures.removeAll()
         attemptStarted = Date()
-        Cache.tinode.linia2SwitchHost(to: host)
+        lastSwitchAt = Date()
+        consecutiveFails = 0
+        L2Log.event("l2_switch_host", ["why": why])
+        // linia2SwitchHost синхронно ждёт очередь операций Tinode — не на главном потоке.
+        DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2SwitchHost(to: host) }
     }
 
     /// Плашка сверху: «Нет соединения» (нет сети) или «Подключение…» (сеть есть, сервер ещё не ответил).

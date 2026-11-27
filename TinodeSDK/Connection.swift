@@ -9,20 +9,15 @@ import Foundation
 
 public class Connection: WebSocketConnectionDelegate {
     private class ExpBackoffSteps {
-        private let kBaseSleepMs = 500
-        private let kMaxShift = 11
+        // LINIA2 (сборка 1011, цикл переподключения): паузы 1 → 2 → 4 → 8 → 16 → 30 с (+ до 10 % разброса),
+        // дальше — каждые 30 с. Мгновенная попытка — только при смене сети и возврате в приложение (reset).
+        private let kStepsMs = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
         private var attempt: Int = 0
 
         func getNextDelay() -> Int {
-            if attempt > kMaxShift {
-                attempt = kMaxShift
-            }
-            let half = UInt32(kBaseSleepMs * (1 << attempt))
-            let delay = half + arc4random_uniform(half)
+            let base = kStepsMs[min(attempt, kStepsMs.count - 1)]
             attempt += 1
-            // LINIA2: пауза не больше 15 с (было до ~17 мин после нескольких неудач — приложение на экране
-            // «не подключалось», пока его не свернуть и открыть снова). 1 → 2 → 4 → 8 → 15 с.
-            return Int(min(delay, 15_000))
+            return base + Int(arc4random_uniform(UInt32(base / 10)))
         }
         func reset() {
             attempt = 0
@@ -63,6 +58,16 @@ public class Connection: WebSocketConnectionDelegate {
     }
     /// LINIA2 (только автотесты): «сервер недоступен» с момента запуска — до этого времени подключение не идёт.
     public static var linia2StartupBlockedUntil: Date?
+    /// LINIA2: можно ли переподключаться автоматически (приложение на экране или идёт звонок / VoIP).
+    /// Нет — попытка откладывается до linia2ResumeNow() (didBecomeActive / смена сети).
+    public static var linia2ReconnectAllowed: (() -> Bool)?
+    /// LINIA2: не чаще одной попытки подключения в секунду (защита от любых циклов).
+    private static let kMinAttemptInterval: TimeInterval = 1.0
+    private let attemptLock = NSLock()
+    private var lastAttemptAt = Date.distantPast
+    private var deferredWhileInactive = false
+    /// Растёт при disconnect(): отложенная ограничителем попытка после отключения не выполняется.
+    private var closeGeneration = 0
     private var autoreconnect: Bool = false
     private var reconnecting: Bool = false
     private var backoffSteps = ExpBackoffSteps()
@@ -123,6 +128,8 @@ public class Connection: WebSocketConnectionDelegate {
 
     func onDisconnected(connection: WebSocket, isServerOriginated clean: Bool, closeCode: URLSessionWebSocketTask.CloseCode, reason: String) {
         enqueue { self.connectionListener?.onDisconnect(isServerOriginated: clean, code: closeCode, reason: reason) }
+        // LINIA2: закрыли мы сами — переподключение решает тот, кто закрыл (не запускаем цикл).
+        guard reason != Tinode.linia2ClientCancelReason else { return }
         guard !self.reconnecting else {
             return
         }
@@ -133,7 +140,9 @@ public class Connection: WebSocketConnectionDelegate {
     }
 
     func onError(connection: WebSocket, error: Error) {
-        enqueue { self.connectionListener?.onError(error: error) }
+        // LINIA2: обрыв сообщается один раз — через onDisconnected (раньше onError + onDisconnected давали
+        // два handleDisconnect подряд: двойной сброс тем/обещаний и двойной счёт обрывов в Linia2Failover).
+        Tinode.log.error("Connection error: %@", error.localizedDescription)
     }
 
     func onMessage(connection: WebSocket, text: String) {
@@ -154,6 +163,12 @@ public class Connection: WebSocketConnectionDelegate {
     private func maybeInitReconnectClosure() {
         if reconnectClosure?.isCancelled ?? true {
             reconnectClosure = DispatchWorkItem {
+                if let allowed = Connection.linia2ReconnectAllowed, !allowed() {
+                    // В фоне без звонка — ждём возврата в приложение (не жжём батарею и главный поток).
+                    self.deferredWhileInactive = true
+                    Tinode.linia2Event?("reconnect-deferred", [:])
+                    return
+                }
                 self.connectSocket()
                 if self.isConnected {
                     self.reconnecting = false
@@ -175,8 +190,23 @@ public class Connection: WebSocketConnectionDelegate {
     }
     private func connectSocket() {
         guard !isConnected else { return }
+        // LINIA2: идущее подключение не перебиваем (новое закрыло бы начатое).
+        guard !isFreshlyConnecting else { return }
         if let until = linia2BlockedUntil, until > Date() { return }
         if let until = Connection.linia2StartupBlockedUntil, until > Date() { return }
+        attemptLock.lock()
+        let since = Date().timeIntervalSince(lastAttemptAt)
+        if since < Connection.kMinAttemptInterval {
+            let gen = closeGeneration
+            attemptLock.unlock()
+            connectQueue.asyncAfter(deadline: .now() + (Connection.kMinAttemptInterval - since)) { [weak self] in
+                guard let self = self, self.closeGeneration == gen else { return }
+                self.connectSocket()
+            }
+            return
+        }
+        lastAttemptAt = Date()
+        attemptLock.unlock()
         let request = try! createUrlRequest()
         self.openConnection(with: request)
     }
@@ -196,14 +226,24 @@ public class Connection: WebSocketConnectionDelegate {
             // (we simply reset the exp backoff steps).
             reconnectClosure!.cancel()
             backoffSteps.reset()
-            connectWithBackoffAsync()
+            // LINIA2: «сейчас» — значит сейчас (ограничитель 1 с в connectSocket), а не через первую паузу.
+            deferredWhileInactive = false
+            maybeInitReconnectClosure()
+            connectQueue.async(execute: reconnectClosure!)
         } else {
             connectSocket()
         }
         return true
     }
 
+    /// LINIA2: соединение заменяется другим (смена адреса) — его события больше никому не нужны.
+    func linia2Detach() {
+        connectionListener = nil
+        disconnect()
+    }
+
     func disconnect() {
+        attemptLock.lock(); closeGeneration += 1; attemptLock.unlock()
         webSocketConnection?.close()
         if autoreconnect {
             autoreconnect = false
@@ -213,7 +253,7 @@ public class Connection: WebSocketConnectionDelegate {
 
     /// LINIA2 (автотесты): закрыть сокет, не выключая автопереподключение (как при пропаже сети).
     func linia2DropSocket() {
-        webSocketConnection?.close()
+        webSocketConnection?.close(byUs: false)
     }
 
     func send(payload data: Data) {

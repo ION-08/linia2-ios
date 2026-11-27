@@ -216,7 +216,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             reachability.pathUpdateHandler = { path in
                 let tinode = Cache.tinode
                 if path.status == .satisfied { Linia2WipeExecutor.flush() }   // LINIA2: неотправленные отчёты
-                if path.status == .satisfied, !tinode.isConnected {
+                // LINIA2: в фоне без звонка не переподключаемся (мгновенная попытка — Linia2Failover / didBecomeActive).
+                if path.status == .satisfied, !tinode.isConnected, Linia2Failover.reconnectAllowed {
                     Cache.log.info("NWPathMonitor: network available - reconnecting")
                     tinode.reconnectNow(interactively: false, reset: false)
                 }

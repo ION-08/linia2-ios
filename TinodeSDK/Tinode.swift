@@ -123,6 +123,8 @@ public extension TinodeEventListener {
 
 public class Tinode {
     public static let kTopicNew = "new"
+    /// LINIA2: причина «сокет закрыли мы сами» (cancel / смена адреса) — это не обрыв связи.
+    public static let linia2ClientCancelReason = "l2-client-cancel"
     public static let kUserNew = "new"
     public static let kChannelNew = "nch"
     public static let kTopicMe = "me"
@@ -1051,11 +1053,16 @@ public class Tinode {
             guard host != hostName else { return false }
             Tinode.linia2Event?("switch-host", [:])
             hostName = host
-            connection?.disconnect()
+            // LINIA2 (сборка 1011): события старого соединения (отмена, -999) больше не доходят до Tinode —
+            // раньше они считались обрывами нового и запускали следующую смену адреса (цикл 45 раз).
+            connection?.linia2Detach()
             connection = nil
             return true
         }
-        if changed { _ = reconnectNow(interactively: true, reset: false) }
+        guard changed else { return }
+        // Один раз сбросить состояние «подключены/вошли» — с причиной «закрыли мы», без счёта обрыва.
+        handleDisconnect(isServerOriginated: false, code: .goingAway, reason: Tinode.linia2ClientCancelReason)
+        _ = reconnectNow(interactively: true, reset: false)
     }
 
     /// LINIA2 (только автотесты, -l2-uitest): эмуляция обрыва сети на `seconds` с — веб-сокет закрывается,
@@ -1259,6 +1266,15 @@ public class Tinode {
     //
     // |interactively| is true if user directly requested a reconnect.
     // If |reset| is true, drop connection and reconnect. Happens when cluster is reconfigured.
+    /// LINIA2: автопереподключение было отложено (фон) или соединения нет — подключиться сейчас.
+    /// Вызывается при возврате в приложение и при смене сети.
+    public func linia2ResumeNow(reason: String) {
+        let need: Bool = operationsQueue.sync { connection == nil || !(connection!.isConnected) }
+        guard need else { return }
+        Tinode.linia2Event?("reconnect-resume", ["why": reason])
+        _ = reconnectNow(interactively: true, reset: false)
+    }
+
     @discardableResult
     public func reconnectNow(interactively: Bool, reset: Bool) -> Bool {
         operationsQueue.sync {

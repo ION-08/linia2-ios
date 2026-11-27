@@ -25,6 +25,11 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
     private var opened: Date?
     private var bytesIn = 0
     private var maxMsg = 0
+    /// LINIA2 (сборка 1011, цикл переподключения): сокет закрыли мы сами (cancel) — это не обрыв.
+    private var closedByUs = false
+    /// LINIA2: об окончании текущей задачи уже сообщили (receive-ошибка и didCompleteWithError приходят оба —
+    /// раньше одна отмена давала 2 ошибки и 4 «обрыва»).
+    private var finishReported = false
     enum State: CustomDebugStringConvertible {
         case unopened
         case connecting
@@ -83,8 +88,14 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        guard webSocketTask === socket else { return }
+        guard webSocketTask === socket, !finishReported else { return }
+        finishReported = true
         self.state = .closed
+        if closedByUs {
+            Tinode.linia2Event?("ws-close", ["code": closeCode.rawValue, "by": "client"])
+            self.delegate?.onDisconnected(connection: self, isServerOriginated: false, closeCode: .goingAway, reason: Tinode.linia2ClientCancelReason)
+            return
+        }
         Tinode.linia2Event?("ws-close", ["code": closeCode.rawValue, "by": "server", "reason": String(decoding: reason ?? Data(), as: UTF8.self),
                                          "open_s": Int(Date().timeIntervalSince(opened ?? Date())), "in_kb": bytesIn / 1024, "max_kb": maxMsg / 1024])
         self.delegate?.onDisconnected(connection: self, isServerOriginated: true, closeCode: closeCode, reason: String(decoding: reason ?? Data(), as: UTF8.self))
@@ -120,14 +131,23 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
         bytesIn = 0
         maxMsg = 0
         state = .connecting
+        closedByUs = false
+        finishReported = false
         task.resume()
 
         listen(on: task)
     }
 
     // LINIA2: до первого connect() socket — nil (раньше «!» и падение).
-    func close() {
+    /// byUs = false — только автотесты (эмуляция пропажи сети): закрытие считается обрывом.
+    func close(byUs: Bool = true) {
         Tinode.linia2Event?("ws-cancel", ["prev": state.debugDescription, "open_s": Int(Date().timeIntervalSince(opened ?? Date()))])
+        if state == .closed || state == .unopened {
+            // Уже закрыт — повторная отмена ничего не даёт (и не должна порождать «обрыв»).
+            if socket != nil { finishReported = true }
+            return
+        }
+        closedByUs = byUs
         state = .closing
         socket?.cancel(with: .goingAway, reason: nil)
     }
@@ -178,9 +198,18 @@ class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
     }
 
     private func errorHandler(_ error: Error?) {
-        guard let error = error else { return }
+        guard let error = error, !finishReported else { return }
+        finishReported = true
 
         let ns = error as NSError
+        // LINIA2: отмена нами (cancel / замена адреса / -999) — не обрыв: без onError, один onDisconnected
+        // с особой причиной, по которой ни переподключение, ни смена адреса не запускаются.
+        if closedByUs || (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled && state == .closing) {
+            Tinode.linia2Event?("ws-cancelled", ["prev": state.debugDescription, "code": ns.code])
+            self.state = .closed
+            self.delegate?.onDisconnected(connection: self, isServerOriginated: false, closeCode: .goingAway, reason: Tinode.linia2ClientCancelReason)
+            return
+        }
         Tinode.linia2Event?("ws-error", ["prev": state.debugDescription, "domain": ns.domain, "code": ns.code,
                                          "desc": String(ns.localizedDescription.prefix(120)),
                                          "open_s": Int(Date().timeIntervalSince(opened ?? Date())),
