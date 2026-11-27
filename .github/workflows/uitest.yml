@@ -16,6 +16,10 @@ on:
         description: "Дизайн-контроль: только снимки экранов (Linia2DesignShots) на SE / 16 / 16 Pro Max × тема × шрифт"
         type: boolean
         default: false
+      guest_only:
+        description: "Только «гость по ссылке → iOS» (e2e-часть, Linia2GuestLinkCallTests + guest-to-ios.mjs)"
+        type: boolean
+        default: false
   workflow_call:
     outputs:
       compiled:
@@ -47,13 +51,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - device: pro
-            idx: 1
-            suite: main
-          - device: pro
-            idx: 2
-            suite: e2e
+        # guest_only — только e2e-часть и только шаг «гость по ссылке → iOS».
+        include: ${{ fromJSON(inputs.guest_only && '[{"device":"pro","idx":2,"suite":"e2e"}]' || '[{"device":"pro","idx":1,"suite":"main"},{"device":"pro","idx":2,"suite":"e2e"}]') }}
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
@@ -222,7 +221,7 @@ jobs:
       # Тест кладёт payload в $L2_PUSH_DIR/<имя>.apns, фоновый цикл ниже делает `simctl push` и отвечает <имя>.apns.sent.
       - name: Запуск приложения из уведомления (Linia2LaunchTests)
         id: launch
-        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only }}
         run: |
           set -o pipefail
           # После XCUITest (повторы) симулятор бывает выключен — включаем и ждём загрузки.
@@ -272,7 +271,7 @@ jobs:
 
       - name: Звонки iOS ↔ iOS и iOS ↔ веб (аудио и видео, 60+ с)
         id: calls
-        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only }}
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
@@ -333,12 +332,56 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && [ "$PRC" = 0 ] && [ "$WRC" = 0 ] && [ "$SK" = 0 ]
 
+      # Гость по ссылке → приложение iOS: на экране, в фоне (ответ сразу, нативный движок), в фоне → переход на WKWebView.
+      # Владелец ссылки — A (L2_LOGIN); гость — Chrome (guest-to-ios.mjs), синхронизация через общий каталог.
+      - name: Гость по ссылке → iOS (на экране, в фоне, переход на WKWebView)
+        id: guestios
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
+        timeout-minutes: 40
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          set -o pipefail
+          OUT="$RUNNER_TEMP/out/guest-ios"; mkdir -p "$OUT/web"
+          xcrun simctl boot "$UDID" 2>/dev/null || true; xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
+          DD="$RUNNER_TEMP/dd-steps"
+          XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
+          if [ -z "$XR" ]; then
+            xcodebuild build-for-testing -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
+              -derivedDataPath "$DD" -destination "platform=iOS Simulator,id=$UDID" ENABLE_TESTABILITY=YES \
+              CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+              > "$RUNNER_TEMP/bft-$$.log" 2>&1 || tail -40 "$RUNNER_TEMP/bft-$$.log"
+            XR=$(find "$DD" -name '*.xctestrun' -print 2>/dev/null | head -1 || true)
+          fi
+          [ -n "$XR" ] || { echo "::error::нет .xctestrun — приложение не собрано"; exit 1; }
+          xcrun simctl terminate "$UDID" info.codix.liniya2 2>/dev/null || true
+          for k in microphone camera; do xcrun simctl privacy "$UDID" grant $k info.codix.liniya2 || true; done
+          GSYNC="$RUNNER_TEMP/l2-gsync"; rm -rf "$GSYNC"; mkdir -p "$GSYNC"
+          cp ci/web-tests/guest-to-ios.mjs "$RUNNER_TEMP/"
+          ( L2_LOGIN="$L2_LOGIN" L2_PASSWORD="$L2_PASSWORD" L2_SYNC_DIR="$GSYNC" OUT_DIR="$OUT/web" \
+            node "$RUNNER_TEMP/guest-to-ios.mjs" > "$OUT/web/result.json" 2> "$OUT/web/log.txt"; echo $? > "$OUT/web/rc" ) &
+          export TEST_RUNNER_L2_SYNC_DIR="$GSYNC" TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD"
+          xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+            -only-testing:TinodiosUITests/Linia2GuestLinkCallTests -resultBundlePath "$RUNNER_TEMP/guestios.xcresult" \
+            2>&1 | tee "$OUT/main.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|L2TIMING|\*\* TEST' || true
+          for i in $(seq 1 60); do [ -f "$OUT/web/rc" ] && break; sleep 5; done
+          WRC=$(cat "$OUT/web/rc" 2>/dev/null || echo 99)
+          M=$(grep -c "Test Case .* passed" "$OUT/main.log" || true)
+          {
+            echo "### Гость по ссылке → iOS"
+            echo "- iOS: пройдено $M из 3 $(grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && echo ✅ || echo ❌)"
+            echo "- Гость (Chrome): $( [ "$WRC" = 0 ] && echo '✅' || echo "❌ (код $WRC)")"
+            grep 'L2TIMING' "$OUT/main.log" | sed 's/^.*L2TIMING /  - /' | head -20 || true
+            python3 -c "import json,sys;d=json.load(open(sys.argv[1]));[print('  - %s %s — %s' % ('✅' if s['ok'] else '❌', s['name'], s.get('detail',''))) for s in d.get('steps',[])]" "$OUT/web/result.json" 2>/dev/null || true
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$OUT/main.log" && [ "$WRC" = 0 ]
+
       # Стирание по коду на экране PIN (уровни 1–4, 10 неверных PIN, Face ID нигде): после звонков —
       # серверная проверка уровня 4 удалила бы пользователя A. Код — из L2_WIPE_OVERRIDE (в тесте);
       # серверная проверка (код через /panic/settings, удаление у собеседника) — L2_WIPE_SERVER=1.
       - name: Стирание данных по коду (Linia2PanicTests)
         id: panic
-        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only }}
         run: |
           set -o pipefail
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
@@ -370,13 +413,13 @@ jobs:
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/out/shots" "$RUNNER_TEMP/out/failures" "$RUNNER_TEMP/out/crashes"
-          for r in unit ui launch calls peer panic; do
+          for r in unit ui launch calls peer panic guestios; do
             X="$RUNNER_TEMP/$r.xcresult"; [ -d "$X" ] || continue
             xcrun xcresulttool get test-results tests --path "$X" > "$RUNNER_TEMP/out/$r-tests.json" 2>/dev/null || true
             xcrun xcresulttool export attachments --path "$X" --output-path "$RUNNER_TEMP/out/failures/$r" --only-failures >/dev/null 2>&1 || true
           done
           [ -d "$RUNNER_TEMP/ui.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/out/shots" >/dev/null 2>&1 || true
-          for r in launch calls peer panic; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
+          for r in launch calls peer panic guestios; do [ -d "$RUNNER_TEMP/$r.xcresult" ] && xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$r.xcresult" --output-path "$RUNNER_TEMP/out/shots-$r" >/dev/null 2>&1 || true; done
           find ~/Library/Logs/DiagnosticReports -name '*.ips' -newer "$RUNNER_TEMP/ci.json" -exec cp {} "$RUNNER_TEMP/out/crashes/" \; 2>/dev/null || true
           cp "$RUNNER_TEMP"/unit.log "$RUNNER_TEMP"/test.log "$RUNNER_TEMP/out/" 2>/dev/null || true
           python3 ci/test-report.py "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/out/report.md" >> "$GITHUB_STEP_SUMMARY"

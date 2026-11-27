@@ -396,6 +396,59 @@ class WebRTCClient: NSObject {
         w.start(audioOnly: audioOnly, caller: caller, video: video)
     }
 
+    /// LINIA2 (ответ из фона): страница движка для перехода «нативный → WKWebView» посреди звонка. Пока переход не
+    /// выполнен (linia2CommitWebSwitch), нативный движок работает как прежде — страница только загружается.
+    private var pendingWeb: Linia2WebCallEngine?
+
+    func linia2PrepareWebSwitch() -> Linia2WebCallEngine? {
+        guard web == nil else { return nil }
+        if let p = pendingWeb { return p }
+        let w = Linia2WebCallEngine(client: self)
+        pendingWeb = w
+        return w
+    }
+
+    func linia2CancelWebSwitch() {
+        pendingWeb?.close()
+        pendingWeb = nil
+    }
+
+    /// Закрыть нативное соединение (без hang-up и без событий экрану) и передать звонок странице: медиа —
+    /// getUserMedia в JS, новое соединение и offer создаёт экран (createPeerConnection + makeInitialOffer).
+    func linia2CommitWebSwitch(audioOnly: Bool, caller: Bool, video: Bool) -> Bool {
+        guard web == nil, let w = pendingWeb, w.isReady else { return false }
+        pendingWeb = nil
+        if let pc = localPeer {
+            localPeer = nil
+            for sender in pc.senders { sender.track?.isEnabled = false }
+            pc.delegate = nil
+            WebRTCClient.closeQueue.async { pc.close() }
+        }
+        localDataChannel?.delegate = nil
+        localDataChannel = nil
+        localAudioTrack = nil
+        localVideoSource = nil
+        localVideoTrack = nil
+        videoCapturer = nil
+        remoteVideoTrack = nil
+        remoteIceCandidatesCacheQueue.sync {
+            remoteCandidatesDrained = false
+            remoteDescriptionApplied = false
+            remoteIceCandidatesCache.removeAll()
+        }
+        initialOfferSent = false
+        remoteAnswerApplied = false
+        web = w
+        webPC = false
+        CallManager.linia2WebAudio = true
+        // Нативный аудиомодуль — выключить (микрофон берёт WebKit); сессию AVAudioSession не трогаем.
+        let rtc = RTCAudioSession.sharedInstance()
+        if rtc.useManualAudio && rtc.isAudioEnabled { rtc.isAudioEnabled = false }
+        onDiagEvent?(["type": "engine", "name": "web", "switch": 1, "app": Linia2WebCallEngine.appState()])
+        w.start(audioOnly: audioOnly, caller: caller, video: video, established: linia2Established)
+        return true
+    }
+
     /// LINIA2: страница движка не готова (фон, не загрузилась) — этот звонок на нативном движке. Только до setup().
     func linia2DisableWebEngine(reason: String) {
         guard let w = web else { return }
@@ -738,6 +791,7 @@ class WebRTCClient: NSObject {
     }
 
     func disconnect() {
+        linia2CancelWebSwitch()
         initialOfferSent = false
         remoteAnswerApplied = false
         linia2Established = false
@@ -1496,6 +1550,7 @@ class CallViewController: UIViewController {
             return
         }
         cameraManager.web = webRTCClient.web
+        Linia2TestProbe.callEngine = webRTCClient.isWebEngine ? 2 : 1
         cameraManager.setupCamera()
         if !self.isAudioOnlyCall && !cameraDenied {
             cameraManager.startCapture()
@@ -2048,6 +2103,7 @@ extension CallViewController: WebRTCClientDelegate {
         switch state {
         case .connected, .completed:
             iceDisconnectedAt = nil
+            linia2NoteWebSwitchConnected()
             if iceDown { linia2CheckIceRecovered(reason: "ice-connected") }
         case .disconnected:
             guard linia2WasConnected else { return }
@@ -2784,6 +2840,12 @@ extension CallViewController {
 
     /// «Плохая связь»: потери входящих пакетов > 10% или RTT > 800 мс (статистика WebRTC, каждые 2 с).
     private func linia2CheckQuality() {
+        if let w = webRTCClient.web {
+            // Движок WKWebView: байты аудио — из статистики страницы (для автотестов, как у нативного).
+            let s = w.lastStats
+            stateLabel.accessibilityValue = "arx=\((s["aIn"] as? NSNumber)?.intValue ?? 0) atx=\((s["aOut"] as? NSNumber)?.intValue ?? 0)"
+            return
+        }
         webRTCClient.statistics { [weak self] report in
             var rtt: Double = 0
             var lost: Double = 0, received: Double = 0
@@ -2872,21 +2934,47 @@ final class L2GradientView: UIView {
 
 // MARK: - LINIA2 (вариант Б): выбор движка звонка
 //
-// WKWebView в фоне (звонок принят из CallKit на заблокированном экране, приложение не активно) страницу не
-// исполняет: звонок 27.11 16:09 (id 596) — ни одного события JS, ответ не создан. Поэтому:
-//  • приложение не активно — JS не запускаем, ждём didBecomeActive до kWebWaitActive с (пользователь открыл
-//    приложение из экрана CallKit); не дождались — этот звонок на нативном движке (engine=native-fallback);
-//  • страница запущена — ждём от неё «ready» до kWebWaitReady с; нет — тоже нативный движок.
-// Всё это до отправки accept (входящий) / до первого offer (исходящий) — менять посреди переговоров нечего.
+// WKWebView в фоне (звонок принят из CallKit на заблокированном экране, приложение не активно) не даёт
+// getUserMedia: звонок 27.11 16:09 (id 596) — ни одного события JS; 27.11 18:51 (id 760) — ждали didBecomeActive,
+// accept не ушёл, гость слышал гудки и сбросил. Поэтому:
+//  • приложение не активно — СРАЗУ нативный движок (engine=native-bg), accept/offer без ожидания;
+//    приложение потом стало активным, а нативный за kWebSwitchAfter с так и не соединился (ICE) — бесшовный
+//    переход на WKWebView (switch-to-web): hang-up не шлём, в JS новое соединение, offer/answer заново по той же
+//    сигнализации (тот же seq, новые ufrag/pwd и DTLS — как ICE restart), удалённые кандидаты — в новое соединение;
+//    выключается флагом features.webCallSwitch=false (без сборки);
+//  • приложение активно — страница запускается, ждём от неё «ready» до kWebWaitReady с; нет — нативный движок.
 private var linia2EngineChosenKey: UInt8 = 0
+private var linia2SwitchKey: UInt8 = 0
+
+/// Состояние перехода «нативный → WKWebView» (на экран звонка).
+private final class L2WebSwitchState {
+    var nativeBgAt: Date?
+    var activeAt: Date?
+    var timer: Timer?
+    var switching = false
+    var startedAt: Date?
+    var why = ""
+}
 
 extension CallViewController {
-    static let kWebWaitActive: TimeInterval = 20
     static let kWebWaitReady: TimeInterval = 6
+    /// Нативный движок (ответ из фона) не соединился за столько секунд — переход на WKWebView, когда приложение активно.
+    static let kWebSwitchAfter: TimeInterval = 8
+    /// Дольше этого после ответа переход не делаем (звонок уже идёт или завершится сам).
+    static let kWebSwitchWindow: TimeInterval = 60
+    /// После перехода ICE нового соединения не connected за столько секунд — ICE restart (если звонок соединялся).
+    static let kWebSwitchConnectTimeout: TimeInterval = 15
 
     var linia2EngineChosen: Bool {
         get { (objc_getAssociatedObject(self, &linia2EngineChosenKey) as? Bool) ?? false }
         set { objc_setAssociatedObject(self, &linia2EngineChosenKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    private var l2Switch: L2WebSwitchState {
+        if let s = objc_getAssociatedObject(self, &linia2SwitchKey) as? L2WebSwitchState { return s }
+        let s = L2WebSwitchState()
+        objc_setAssociatedObject(self, &linia2SwitchKey, s, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return s
     }
 
     static func appStateName() -> String {
@@ -2895,6 +2983,12 @@ extension CallViewController {
         case .background: return "background"
         default: return "inactive"
         }
+    }
+
+    /// Автотест (-l2-uitest, L2_FORCE_WEB_SWITCH=1): переход на WKWebView через 2 с после выхода на экран, даже если
+    /// нативный движок соединился — проверка самого перехода против настоящего собеседника.
+    private static var forceWebSwitch: Bool {
+        ProcessInfo.processInfo.arguments.contains("-l2-uitest") && ProcessInfo.processInfo.environment["L2_FORCE_WEB_SWITCH"] == "1"
     }
 
     func linia2ChooseEngine(then proceed: @escaping () -> Void) {
@@ -2907,31 +3001,169 @@ extension CallViewController {
             guard !self.closed else { return }
             proceed()
         }
-        let startWeb: () -> Void = { [weak self] in
-            guard let self = self, !done, !self.closed else { return }
-            self.diag?.add(["type": "web-load-start", "app": Self.appStateName()])
-            self.webRTCClient.linia2EnableWebEngine(audioOnly: self.isAudioOnlyCall, caller: self.callDirection == .outgoing,
-                                                    video: !self.isAudioOnlyCall && !self.cameraDenied)
-            guard let w = self.webRTCClient.web else { finish(false, "no-engine"); return }
-            if w.isReady { finish(true, ""); return }
-            w.onReady = { finish(true, "") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebWaitReady) {
-                finish(false, "not-ready app=" + Self.appStateName())
-            }
-        }
-        if UIApplication.shared.applicationState == .active {
-            startWeb()
+        guard UIApplication.shared.applicationState == .active else {
+            // Не ждём выхода на экран: accept уходит сразу, разговор — на нативном движке.
+            done = true
+            linia2EngineChosen = true
+            diag?.add(["type": "engine", "name": "native-bg", "app": Self.appStateName()])
+            Linia2TestProbe.nativeBg += 1
+            guard !closed else { return }
+            proceed()
+            linia2ArmWebSwitch()
             return
         }
-        diag?.add(["type": "web-wait-active", "app": Self.appStateName()])
-        var obs: NSObjectProtocol?
-        obs = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            if let o = obs { NotificationCenter.default.removeObserver(o); obs = nil }
-            startWeb()
+        diag?.add(["type": "web-load-start", "app": Self.appStateName()])
+        webRTCClient.linia2EnableWebEngine(audioOnly: isAudioOnlyCall, caller: callDirection == .outgoing,
+                                           video: !isAudioOnlyCall && !cameraDenied)
+        guard let w = webRTCClient.web else { finish(false, "no-engine"); return }
+        if w.isReady { finish(true, ""); return }
+        w.onReady = { finish(true, "") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebWaitReady) {
+            finish(false, "not-ready app=" + Self.appStateName())
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebWaitActive) {
-            if let o = obs { NotificationCenter.default.removeObserver(o); obs = nil }
-            if UIApplication.shared.applicationState != .active { finish(false, "background") }
+    }
+
+    // MARK: Переход «нативный → WKWebView» (ответ из фона)
+
+    func linia2ArmWebSwitch() {
+        guard Linia2WebCallEngine.enabled else { return }
+        guard Linia2Config.shared.feature("webCallSwitch", default: true) else {
+            diag?.add(["type": "switch-to-web", "state": "off"])
+            return
         }
+        let st = l2Switch
+        st.nativeBgAt = Date()
+        st.timer?.invalidate()
+        st.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] t in
+            guard let self = self else { t.invalidate(); return }
+            self.linia2CheckWebSwitch(t)
+        }
+    }
+
+    private func linia2CheckWebSwitch(_ t: Timer) {
+        let st = l2Switch
+        guard let since = st.nativeBgAt, !closed, !connectionLost, !webRTCClient.isWebEngine else { t.invalidate(); return }
+        let forced = Self.forceWebSwitch
+        let elapsed = Date().timeIntervalSince(since)
+        if elapsed > Self.kWebSwitchWindow {
+            diag?.add(["type": "switch-to-web", "state": "skip", "why": "window", "ms": Int(elapsed * 1000)])
+            t.invalidate()
+            return
+        }
+        if webRTCClient.linia2Established && !forced {
+            diag?.add(["type": "switch-to-web", "state": "skip", "why": "native-connected", "ms": Int(elapsed * 1000)])
+            t.invalidate()
+            return
+        }
+        guard UIApplication.shared.applicationState == .active else { st.activeAt = nil; return }
+        if st.activeAt == nil {
+            st.activeAt = Date()
+            diag?.add(["type": "switch-to-web", "state": "app-active", "ms": Int(elapsed * 1000), "ice": webRTCClient.iceStateName])
+        }
+        // Первый обмен offer/answer нативного движка завершён, сигнализация на связи.
+        guard !st.switching, callInitialSetupComplete, !wsDown, callSeqId > 0, let activeAt = st.activeAt else { return }
+        if forced {
+            guard Date().timeIntervalSince(activeAt) >= 2 else { return }
+        } else {
+            guard Date().timeIntervalSince(activeAt) >= 0.5, elapsed >= Self.kWebSwitchAfter else { return }
+        }
+        t.invalidate()
+        linia2SwitchToWeb(why: forced ? "forced-test" : "native-not-connected")
+    }
+
+    /// Переход посреди звонка: страница движка грузится, пока работает нативный; готова — нативное соединение
+    /// закрывается (без hang-up), в JS — новое соединение и offer по той же сигнализации.
+    func linia2SwitchToWeb(why: String) {
+        let st = l2Switch
+        guard !st.switching, !closed, !webRTCClient.isWebEngine else { return }
+        st.switching = true
+        let t0 = Date()
+        let sinceBg = st.nativeBgAt.map { Int(t0.timeIntervalSince($0) * 1000) } ?? -1
+        diag?.add(["type": "switch-to-web", "state": "start", "why": why, "ms": sinceBg, "ice": webRTCClient.iceStateName])
+        guard let w = webRTCClient.linia2PrepareWebSwitch() else {
+            diag?.add(["type": "switch-to-web", "state": "fail", "why": "no-engine"])
+            st.switching = false
+            return
+        }
+        var done = false
+        let commit: () -> Void = { [weak self] in
+            guard let self = self, !done else { return }
+            done = true
+            self.linia2CommitWebSwitch(why: why, t0: t0)
+        }
+        if w.isReady { commit(); return }
+        w.onReady = commit
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebWaitReady) { [weak self] in
+            guard let self = self, !done else { return }
+            done = true
+            self.webRTCClient.linia2CancelWebSwitch()
+            self.l2Switch.switching = false
+            self.diag?.add(["type": "switch-to-web", "state": "fail", "why": "not-ready", "ms": Int(Date().timeIntervalSince(t0) * 1000)])
+        }
+    }
+
+    private func linia2CommitWebSwitch(why: String, t0: Date) {
+        let st = l2Switch
+        guard !closed else { webRTCClient.linia2CancelWebSwitch(); return }
+        let wasVideo = !isAudioOnlyCall && !cameraDenied && cameraManager.isCapturing
+        // Нативные камера, картинка-в-картинке и окна видео — выключить: дальше всё рисует и снимает страница.
+        if cameraManager.isCapturing { cameraManager.stopCapture() }
+        if #available(iOS 15.0, *), let p = self.pip as? Linia2CallPiP {
+            webRTCClient.removeRemoteRenderer(p.renderer)
+            p.stop()
+        }
+        pip = nil
+        guard webRTCClient.linia2CommitWebSwitch(audioOnly: isAudioOnlyCall, caller: callDirection == .outgoing, video: wasVideo) else {
+            st.switching = false
+            diag?.add(["type": "switch-to-web", "state": "fail", "why": "commit"])
+            return
+        }
+        cameraManager.web = webRTCClient.web
+        cameraManager.isCapturing = wasVideo
+        for container in [localView, remoteView] {
+            guard let c = container else { continue }
+            for sv in c.subviews where sv is RTCVideoRenderer { sv.removeFromSuperview() }
+        }
+        remoteRenderer = nil
+        localView.backgroundColor = .clear
+        if let nw = webRTCClient.web {
+            nw.attach(to: view, below: remoteView)
+            linia2UpdateWebLayout()
+            if remoteVideoLive {
+                nw.call("setRemoteVisible", true)
+                remoteView.isHidden = true
+            }
+        }
+        webRTCClient.setAudioEnabled(!isMuted && !isHeld)
+        guard webRTCClient.createPeerConnection(withDataChannel: true) else {
+            diag?.add(["type": "switch-to-web", "state": "fail", "why": "createPC"])
+            return
+        }
+        // Тот же порядок m= (audio, video, application), что у собеседника; новые ufrag/pwd и DTLS — как ICE restart.
+        webRTCClient.makeInitialOffer()
+        st.startedAt = t0
+        st.why = why
+        Linia2TestProbe.callEngine = 2
+        Linia2TestProbe.webSwitches += 1
+        diag?.add(["type": "switch-to-web", "state": "offer", "why": why, "ms": Int(Date().timeIntervalSince(t0) * 1000)])
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.kWebSwitchConnectTimeout) { [weak self] in
+            guard let self = self, !self.closed, let s = self.l2Switch.startedAt, s == t0 else { return }
+            self.diag?.add(["type": "switch-to-web", "state": "timeout", "why": why, "ice": self.webRTCClient.iceStateName])
+            if self.webRTCClient.linia2Established {
+                self.needIceRestart = true
+                self.linia2SetLinkState(ice: true, reason: "switch-timeout")
+                self.linia2MaybeRestartIce()
+            }
+        }
+    }
+
+    /// ICE соединения WKWebView после перехода — connected: в диагностику (сколько заняло).
+    func linia2NoteWebSwitchConnected() {
+        let st = l2Switch
+        guard let t0 = st.startedAt, webRTCClient.isWebEngine else { return }
+        st.startedAt = nil
+        let ms = Int(Date().timeIntervalSince(t0) * 1000)
+        Linia2TestProbe.webSwitchIceMs = ms
+        diag?.add(["type": "switch-to-web", "state": "connected", "why": st.why, "ms": ms])
     }
 }

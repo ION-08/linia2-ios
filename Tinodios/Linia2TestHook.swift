@@ -100,6 +100,29 @@ enum Linia2TestHook {
         if ProcessInfo.processInfo.environment["L2_TEST_VOIP_REPLAY"] == "1" {
             waitThenReplayVoip()
         }
+        if bgAnswer { keepAliveInBackground() }
+    }
+
+    /// L2_TEST_BG_ANSWER=1 — «ответ из фона»: в симуляторе нет CallKit и VoIP push, поэтому входящий, пришедший,
+    /// когда приложение не активно, принимается сразу (как «Ответить» CallKit на заблокированном экране,
+    /// CallManager.displayIncomingCall), а процесс в фоне держится фоновой задачей (~30 с; на iPhone будит PushKit).
+    static var bgAnswer: Bool { enabled && ProcessInfo.processInfo.environment["L2_TEST_BG_ANSWER"] == "1" }
+    private static var bgTask: UIBackgroundTaskIdentifier = .invalid
+
+    private static func keepAliveInBackground() {
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            guard bgTask == .invalid else { return }
+            bgTask = UIApplication.shared.beginBackgroundTask(withName: "l2-uitest-bg") {
+                UIApplication.shared.endBackgroundTask(bgTask)
+                bgTask = .invalid
+            }
+        }
+        nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
+            guard bgTask != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
     }
 
     /// Ждём интерфейс (вкладки) и снятый PIN, затем — сценарий повторного VoIP push.
@@ -252,6 +275,8 @@ enum Linia2TestHook {
             ("ui", Linia2TestProbe.uiReadyMs), ("lost", Linia2TestProbe.lostToasts),
             ("conn", Cache.tinode.isConnectionAuthenticated ? 1 : 0), ("mig", Linia2TestProbe.migrated),
             ("hupms", Linia2TestProbe.lastHangupCloseMs), ("rend", Linia2TestProbe.remoteEnds),
+            ("eng", Linia2TestProbe.callEngine), ("nbg", Linia2TestProbe.nativeBg), ("wsw", Linia2TestProbe.webSwitches),
+            ("wswice", Linia2TestProbe.webSwitchIceMs), ("bga", Linia2TestProbe.bgAnswers),
             ("queued", c["queued"] ?? -1), ("oldf", wiped ? oldFiles().count : -1),
             ("copyrows", copy["rows"] ?? -1), ("copyplain", copy["plain"] ?? -1), ("copyread", copy["read"] ?? -1),
         ]

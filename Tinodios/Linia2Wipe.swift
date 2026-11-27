@@ -438,4 +438,11 @@ enum Linia2TestProbe {
     // Завершение звонка: мс от «Завершить» до закрытия экрана; число завершений собеседником.
     static var lastHangupCloseMs = -1
     static var remoteEnds = 0
+    // Движок звонка (1 — нативный, 2 — WKWebView), ответов из фона на нативном движке, переходов на WKWebView,
+    // мс от начала перехода до ICE connected; ответов тестовым крючком L2_TEST_BG_ANSWER (в фоне).
+    static var callEngine = 0
+    static var nativeBg = 0
+    static var webSwitches = 0
+    static var webSwitchIceMs = -1
+    static var bgAnswers = 0
 }
