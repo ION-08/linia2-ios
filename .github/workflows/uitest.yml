@@ -16,6 +16,10 @@ on:
         description: "Дизайн-контроль: только снимки экранов (Linia2DesignShots) на SE / 16 / 16 Pro Max × тема × шрифт"
         type: boolean
         default: false
+      launch_only:
+        description: "Только запуск приложения (Linia2LaunchTests, в т.ч. шторм смены сети) — e2e-часть"
+        type: boolean
+        default: false
       guest_only:
         description: "Только «гость по ссылке → iOS» (e2e-часть, Linia2GuestLinkCallTests + guest-to-ios.mjs)"
         type: boolean
@@ -52,7 +56,7 @@ jobs:
       fail-fast: false
       matrix:
         # guest_only — только e2e-часть и только шаг «гость по ссылке → iOS».
-        include: ${{ fromJSON(inputs.guest_only && '[{"device":"pro","idx":2,"suite":"e2e"}]' || '[{"device":"pro","idx":1,"suite":"main"},{"device":"pro","idx":2,"suite":"e2e"}]') }}
+        include: ${{ fromJSON((inputs.guest_only || inputs.launch_only) && '[{"device":"pro","idx":2,"suite":"e2e"}]' || '[{"device":"pro","idx":1,"suite":"main"},{"device":"pro","idx":2,"suite":"e2e"}]') }}
     env:
       API: https://v2.chat-linia.site/invite/api
     steps:
@@ -273,7 +277,7 @@ jobs:
 
       - name: Звонки iOS ↔ iOS и iOS ↔ веб (аудио и видео, 60+ с)
         id: calls
-        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only && !inputs.launch_only }}
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
@@ -338,7 +342,7 @@ jobs:
       # Владелец ссылки — A (L2_LOGIN); гость — Chrome (guest-to-ios.mjs), синхронизация через общий каталог.
       - name: Гость по ссылке → iOS (на экране, в фоне, переход на WKWebView)
         id: guestios
-        if: ${{ (!cancelled()) && matrix.suite == 'e2e' }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.launch_only }}
         timeout-minutes: 40
         env:
           CI_TOKEN: ${{ secrets.CI_TOKEN }}
@@ -383,7 +387,7 @@ jobs:
       # серверная проверка (код через /panic/settings, удаление у собеседника) — L2_WIPE_SERVER=1.
       - name: Стирание данных по коду (Linia2PanicTests)
         id: panic
-        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only }}
+        if: ${{ (!cancelled()) && matrix.suite == 'e2e' && !inputs.guest_only && !inputs.launch_only }}
         run: |
           set -o pipefail
           for D in "$UDID" ${UDID2:-}; do xcrun simctl boot "$D" 2>/dev/null || true; xcrun simctl bootstatus "$D" -b >/dev/null 2>&1 || true; done
