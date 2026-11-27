@@ -361,6 +361,7 @@ private final class Linia2CallCell: UITableViewCell {
         let texts = UIStackView(arrangedSubviews: [nameLabel, detailRow])
         texts.axis = .vertical
         texts.spacing = 4
+        texts.alignment = .leading   // имя может быть уже строки статуса (справа от имени — время)
         texts.translatesAutoresizingMaskIntoConstraints = false
 
         timeLabel.font = L2.font(15)
@@ -400,7 +401,10 @@ private final class Linia2CallCell: UITableViewCell {
 
             texts.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 14),
             texts.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            texts.trailingAnchor.constraint(lessThanOrEqualTo: timeLabel.leadingAnchor, constant: -10),
+            // Дизайн: время — только в строке имени; строка «Видеозвонок · Нет ответа» идёт до кнопки (i)
+            // (на SE обрезалась до «Не…»).
+            texts.trailingAnchor.constraint(lessThanOrEqualTo: infoButton.leadingAnchor, constant: -8),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: timeLabel.leadingAnchor, constant: -8),
 
             kindIcon.widthAnchor.constraint(equalToConstant: 20),
         ])
