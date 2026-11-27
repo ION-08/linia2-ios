@@ -445,4 +445,6 @@ enum Linia2TestProbe {
     static var webSwitches = 0
     static var webSwitchIceMs = -1
     static var bgAnswers = 0
+    // Событий пути сети тестом «шторм смены сети» (L2_TEST_PATH_STORM).
+    static var pathEvents = 0
 }

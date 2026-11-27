@@ -578,4 +578,30 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         app.terminate()
         app.launchEnvironment["L2_TEST_VOIP_REPLAY"] = nil
     }
+
+    /// Сборка 1013 вылетала при запуске на iPhone 17 (5G): частые события NWPathMonitor + ws ping. Холодный старт
+    /// под «штормом смены сети» (L2_TEST_PATH_STORM=1: с запуска 30 с, каждые 200 мс, ping включён, каждая
+    /// вторая проверка — как мёртвый сокет) → PIN → список чатов; приложение живо все 30 с, вход на сервер есть.
+    func test9_ColdStartUnderNetworkPathStorm() throws {
+        loginA()
+        wait(app.cells.firstMatch, "в списке есть чат", timeout: 20)
+        app.terminate()
+        app.launchEnvironment["L2_TEST_PATH_STORM"] = "1"
+        defer { app.launchEnvironment["L2_TEST_PATH_STORM"] = nil }
+        let t0 = Date()
+        app.launch()
+        passPin(required: true, "шторм-сети")
+        wait(tab("l2.tab.chats"), "вкладки под штормом сети", timeout: 5)
+        wait(app.cells.firstMatch, "список чатов под штормом сети", timeout: 10)
+        screenshot("path-storm-list")
+        let rest = 32 - Date().timeIntervalSince(t0)
+        if rest > 0 { watchAlive("шторм-сети", seconds: rest) }
+        assertTabsRespond("шторм-сети")
+        let s = waitHook("шторм-сети-итог", timeout: 20) { ($0["conn"] ?? 0) == 1 && ($0["pstorm"] ?? 0) >= 140 }
+        XCTAssertGreaterThanOrEqual(s["pstorm"] ?? 0, 140, "шторм событий пути не отработал (pstorm)")
+        XCTAssertEqual(s["conn"], 1, "нет входа на сервер после шторма смены сети")
+        print("L2TIMING path-storm pstorm=\(s["pstorm"] ?? -1) conn=\(s["conn"] ?? -1)")
+        screenshot("path-storm-done")
+        app.terminate()
+    }
 }

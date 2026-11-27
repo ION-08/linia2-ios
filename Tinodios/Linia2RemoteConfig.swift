@@ -611,7 +611,10 @@ final class Linia2Failover: TinodeEventListener {
             Linia2Failover.checkScheduled = true
             Linia2Failover.pathQueue.asyncAfter(deadline: .now() + 2) {
                 Linia2Failover.checkScheduled = false
-                DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2NetworkChanged() }
+                // Автотест: каждая вторая проверка — ping с таймаутом 1 мс (как мёртвый сокет → переподключение).
+                var timeout: TimeInterval = 5
+                if Linia2Failover.testForcePing { Linia2Failover.testShortPing.toggle(); if Linia2Failover.testShortPing { timeout = 0.001 } }
+                DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2NetworkChanged(pingTimeout: timeout) }
             }
         }
     }
@@ -641,33 +644,53 @@ final class Linia2Failover: TinodeEventListener {
             Linia2Failover.appActive = false
         }
         monitor.pathUpdateHandler = { [weak self] path in
-            let ok = path.status == .satisfied
             Linia2Failover.logPath(path)
-            // Сеть появилась / сменилась. Живое соединение не рвём никогда: открытый сокет проверяется ws ping
-            // (5 с), переподключение — только без ответа; нет сокета — мгновенная попытка. События пути пачкой
-            // (5G, Wi-Fi Assist, IPv6/NAT64, VPN шлют их по несколько подряд) — одна проверка за 2 с.
-            // LINIA2 (hotfix 1014, вылет 1013 при запуске на 5G): первое событие пути (сразу после start) — как в 1012,
-            // без ws ping; состояние соединения — только синхронно (linia2IsConnectedSafe); ping включается features.netPathPing=true (по умолчанию выкл — как 1012).
-            let first = !Linia2Failover.pathSeen
-            Linia2Failover.pathSeen = true
-            if ok, Linia2Failover.reconnectAllowed, Cache.tinode.myUid != nil {
-                if !first, Linia2Config.shared.feature("netPathPing", default: false), Cache.tinode.linia2IsConnectedSafe {
-                    Linia2Failover.coalescedNetworkCheck()
-                } else {
-                    Cache.tinode.linia2ResumeNow(reason: "network")
-                }
-            }
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if ok && !self.networkOK { self.consecutiveFails = 0 }   // новая сеть — счёт неудач заново
-                self.networkOK = ok
-                self.updateBanner()
-            }
+            self?.linia2HandlePath(ok: path.status == .satisfied)
         }
-        monitor.start(queue: DispatchQueue(label: "linia2.net"))
+        monitor.start(queue: netQueue)
         attemptStarted = Date()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    private let netQueue = DispatchQueue(label: "linia2.net")
+    /// Автотест (-l2-uitest, L2_TEST_PATH_STORM=1): ws ping включён независимо от features.netPathPing.
+    static var testForcePing = false
+    private static var testShortPing = false
+
+    /// Событие пути сети (на очереди монитора linia2.net) — из NWPathMonitor и из теста «шторм смены сети».
+    /// Сеть появилась / сменилась. Живое соединение не рвём: при features.netPathPing открытый сокет проверяется
+    /// ws ping (5 с), переподключение — только без ответа; нет сокета — мгновенная попытка (как в 1012).
+    /// LINIA2 (hotfix 1014, вылет 1013 при запуске на 5G): первое событие пути (сразу после start) — как в 1012;
+    /// состояние соединения — только синхронно (linia2IsConnectedSafe); netPathPing по умолчанию выкл.
+    func linia2HandlePath(ok: Bool) {
+        let first = !Linia2Failover.pathSeen
+        Linia2Failover.pathSeen = true
+        if ok, Linia2Failover.reconnectAllowed, Cache.tinode.myUid != nil {
+            let ping = Linia2Failover.testForcePing || Linia2Config.shared.feature("netPathPing", default: false)
+            if !first, ping, Cache.tinode.linia2IsConnectedSafe {
+                Linia2Failover.coalescedNetworkCheck()
+            } else {
+                Cache.tinode.linia2ResumeNow(reason: "network")
+            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if ok && !self.networkOK { self.consecutiveFails = 0 }   // новая сеть — счёт неудач заново
+            self.networkOK = ok
+            self.updateBanner()
+        }
+    }
+
+    /// Автотест: каждые 200 мс в течение `seconds` — событие пути (тот же обработчик), каждое 15-е — «сети нет».
+    func linia2TestPathStorm(seconds: Double) {
+        let n = Int(seconds / 0.2)
+        for i in 0..<n {
+            netQueue.asyncAfter(deadline: .now() + Double(i) * 0.2) { [weak self] in
+                self?.linia2HandlePath(ok: i % 15 != 14)
+                DispatchQueue.main.async { Linia2TestProbe.pathEvents += 1 }
+            }
+        }
     }
 
     func onConnect(code: Int, reason: String, params: [String: JSONValue]?) {

@@ -101,6 +101,11 @@ enum Linia2TestHook {
             waitThenReplayVoip()
         }
         if bgAnswer { keepAliveInBackground() }
+        if ProcessInfo.processInfo.environment["L2_TEST_PATH_STORM"] == "1" {
+            // Шторм смены сети (вылет 1013 на 5G): с запуска 30 с, каждые 200 мс, ws ping включён принудительно.
+            Linia2Failover.testForcePing = true
+            DispatchQueue.main.async { Linia2Failover.shared.linia2TestPathStorm(seconds: 30) }
+        }
     }
 
     /// L2_TEST_BG_ANSWER=1 — «ответ из фона»: в симуляторе нет CallKit и VoIP push, поэтому входящий, пришедший,
@@ -276,7 +281,7 @@ enum Linia2TestHook {
             ("conn", Cache.tinode.isConnectionAuthenticated ? 1 : 0), ("mig", Linia2TestProbe.migrated),
             ("hupms", Linia2TestProbe.lastHangupCloseMs), ("rend", Linia2TestProbe.remoteEnds),
             ("eng", Linia2TestProbe.callEngine), ("nbg", Linia2TestProbe.nativeBg), ("wsw", Linia2TestProbe.webSwitches),
-            ("wswice", Linia2TestProbe.webSwitchIceMs), ("bga", Linia2TestProbe.bgAnswers),
+            ("wswice", Linia2TestProbe.webSwitchIceMs), ("bga", Linia2TestProbe.bgAnswers), ("pstorm", Linia2TestProbe.pathEvents),
             ("queued", c["queued"] ?? -1), ("oldf", wiped ? oldFiles().count : -1),
             ("copyrows", copy["rows"] ?? -1), ("copyplain", copy["plain"] ?? -1), ("copyread", copy["read"] ?? -1),
         ]
