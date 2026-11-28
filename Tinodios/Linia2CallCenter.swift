@@ -61,6 +61,59 @@ final class Linia2CallCenter {
         tick = nil
     }
 
+    // MARK: LINIA2 (1018): соединение для входящего — заранее, пока звонит
+
+    private var prewarmed: (topic: String, seq: Int, client: WebRTCClient, at: Date)?
+
+    /// Входящий показан (CallKit / алерт): RTCPeerConnection с локальными треками создаётся сразу — сбор кандидатов
+    /// и выделение TURN (iceCandidatePoolSize) идут, пока пользователь не нажал «Принять». Камера — после «Принять».
+    /// Только когда всё уже есть (вход выполнен, TURN в кэше) — без ожидания сети на главном потоке.
+    func prewarmIncoming(topic: String, seq: Int) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.prewarmIncoming(topic: topic, seq: seq) }
+            return
+        }
+        guard seq > 0, !Linia2WebCallEngine.enabled, active == nil || active!.closed,
+              Cache.tinode.isConnectionAuthenticated, Cache.tinode.getServerParam(for: "iceServers") != nil,
+              Linia2Turn.shared.hasFresh else { return }
+        if let p = prewarmed, p.topic == topic, p.seq == seq { return }
+        dropPrewarmed()
+        let c = WebRTCClient()
+        c.setup()
+        guard c.createPeerConnection(withDataChannel: false, early: true) else {
+            c.disconnect()
+            return
+        }
+        prewarmed = (topic, seq, c, Date())
+        // Не приняли за минуту — освободить (TURN-выделения, треки).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 70) { [weak self, weak c] in
+            guard let self = self, let p = self.prewarmed, p.client === c else { return }
+            self.dropPrewarmed()
+        }
+    }
+
+    /// Экран входящего звонка забирает готовое соединение (тот же топик и seq).
+    func takePrewarmed(topic: String, seq: Int) -> (client: WebRTCClient, at: Date)? {
+        guard let p = prewarmed else { return nil }
+        prewarmed = nil
+        guard p.topic == topic, p.seq == seq, p.client.hasPeerConnection else {
+            p.client.disconnect()
+            return nil
+        }
+        return (p.client, p.at)
+    }
+
+    /// Звонок отклонён / снят / завершён до «Принять».
+    func dropPrewarmed() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.dropPrewarmed() }
+            return
+        }
+        guard let p = prewarmed else { return }
+        prewarmed = nil
+        p.client.disconnect()
+    }
+
     // MARK: Входящий (CallKit «Принять» или алерт в автотестах)
 
     func openIncoming(_ call: CallManager.Call) {

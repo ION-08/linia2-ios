@@ -30,9 +30,18 @@ class CameraManager: NSObject {
     var isCapturing = false
     /// LINIA2: движок WKWebView — камерой владеет страница (getUserMedia), здесь только желаемое состояние.
     weak var web: Linia2WebCallEngine?
+    /// LINIA2 (диагностика «cam-ready»): первый кадр камеры — один раз, на главном потоке.
+    var onFirstFrame: (() -> Void)?
+    private var firstFrameSeen = false
 
     func setupCamera() {
         if web != nil { return }
+        // LINIA2 (гудки видеозвонка): камера не трогает аудиосессию приложения. По умолчанию AVCaptureSession
+        // пользуется общей AVAudioSession и при startRunning перенастраивает её — у звонящего в видеозвонке
+        // обрывались «dialing»/гудки (AVAudioPlayer), в аудиозвонке камеры нет — гудки были. Микрофон берёт
+        // WebRTC (RTCAudioSession), не камера; так же делает RTCCameraVideoCapturer (usesApplicationAudioSession = NO).
+        captureSession.usesApplicationAudioSession = false
+        captureSession.automaticallyConfiguresApplicationAudioSession = false
         guard let videoCaptureDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
             let videoInput = try? AVCaptureDeviceInput(device: videoCaptureDevice) else { return }
 
@@ -151,6 +160,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         if connection == videoDataOutput.connection(with: .video) {
             delegate?.captureVideoOutput(sampleBuffer: sampleBuffer)
+            if !firstFrameSeen {
+                firstFrameSeen = true
+                DispatchQueue.main.async { self.onFirstFrame?() }
+            }
         }
     }
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -260,6 +273,13 @@ class WebRTCClient: NSObject {
     private var qCheckingAt: Date?
     private var qConnectedAt: Date?
     private var qFirstAudioSent = false
+    /// LINIA2 (1018): опрос first-audio запущен (соединение, созданное заранее — во время гудков, — опрашиваем
+    /// только после offer/answer, иначе 40 с опроса истекали бы до ответа).
+    private var qProbeStarted = false
+    /// Первый relay-кандидат («gather-complete»: при gatherContinually состояние complete не наступает).
+    private var qRelaySeen = false
+    /// Проверка первого кадра видео собеседника («first-video-frame»).
+    private var firstFrameProbe: Linia2FirstFrameProbe?
     /// Последний RTT выбранной пары (с) — ptime при пересогласовании и битрейт видео.
     var linia2LastRtt: Double = 0
     private var qVideoCapped = false
@@ -490,6 +510,8 @@ class WebRTCClient: NSObject {
 
     func setup() {
         if web != nil { return }   // медиа берёт страница (getUserMedia)
+        // LINIA2 (1018): треки уже созданы (соединение заранее, при входящем) — те же треки уже в соединении.
+        if localAudioTrack != nil && localVideoTrack != nil { return }
         createMediaSenders()
     }
 
@@ -587,7 +609,9 @@ class WebRTCClient: NSObject {
         remoteIceCandidatesCacheQueue.sync { remoteDescriptionApplied = true }
     }
 
-    func createPeerConnection(withDataChannel dataChannel: Bool) -> Bool {
+    /// `early` — заранее (гудки у звонящего / входящий до «Принять»): сбор кандидатов и TURN-выделение идут сразу
+    /// (iceCandidatePoolSize), offer/answer — позже; опрос first-audio — с offer/answer (linia2StartFirstAudioProbe).
+    func createPeerConnection(withDataChannel dataChannel: Bool, early: Bool = false) -> Bool {
         if let w = web {
             if webPC { return true }
             guard let config = generateRTCConfig() else { return false }
@@ -633,7 +657,8 @@ class WebRTCClient: NSObject {
         linia2TuneSenders(audio: aSender, video: vSender)
         diagLock.lock(); qPcAt = Date(); diagLock.unlock()
         qCheckingAt = nil; qConnectedAt = nil; qFirstAudioSent = false; qVideoCapped = false
-        linia2ProbeFirstAudio(localPeer!, attempt: 0)
+        qProbeStarted = false; qRelaySeen = false
+        if !early { linia2StartFirstAudioProbe() }
 
         if dataChannel {
             let chanConfig = RTCDataChannelConfiguration()
@@ -641,9 +666,23 @@ class WebRTCClient: NSObject {
             self.localDataChannel = localPeer!.dataChannel(forLabel: "events", configuration: chanConfig)
             self.localDataChannel?.delegate = self
         }
-        onDiagEvent?(["type": "pc", "iceServers": config.iceServers.count,
+        onDiagEvent?(["type": "pc", "iceServers": config.iceServers.count, "early": early,
                       "turn": config.iceServers.contains { $0.urlStrings.contains { $0.hasPrefix("turn") } }])
         return true
+    }
+
+    /// Опрос «first-audio» — один раз на соединение (главный поток).
+    func linia2StartFirstAudioProbe() {
+        guard web == nil, !qProbeStarted, let pc = localPeer else { return }
+        qProbeStarted = true
+        linia2ProbeFirstAudio(pc, attempt: 0)
+    }
+
+    /// Мс от создания соединения / от ICE connected (для событий диагностики; главный поток).
+    func linia2DiagTimes() -> [String: Any] {
+        let now = Date()
+        func ms(_ d: Date?) -> Int { d.map { Int(now.timeIntervalSince($0) * 1000) } ?? -1 }
+        return ["fromPcMs": ms(linia2PcAtSnapshot), "fromCheckingMs": ms(qCheckingAt), "fromConnectedMs": ms(qConnectedAt)]
     }
 
     /// LINIA2: первый offer звонящего — сразу после создания соединения (не ждём negotiationneeded).
@@ -656,6 +695,7 @@ class WebRTCClient: NSObject {
         }
         guard !initialOfferSent, let pc = localPeer else { return }
         initialOfferSent = true
+        linia2StartFirstAudioProbe()
         offer(pc)
     }
 
@@ -847,7 +887,24 @@ class WebRTCClient: NSObject {
         localVideoSource = nil
         localVideoTrack = nil
         videoCapturer = nil
+        firstFrameProbe?.cancel()
+        firstFrameProbe = nil
         remoteVideoTrack = nil
+    }
+}
+
+/// LINIA2 (1018): получатель кадров видео собеседника — только чтобы заметить первый кадр (потом снимается).
+final class Linia2FirstFrameProbe: NSObject, RTCVideoRenderer {
+    private let lock = NSLock()
+    private var fired = false
+    private let onFirst: () -> Void
+    init(_ onFirst: @escaping () -> Void) { self.onFirst = onFirst }
+    func cancel() { lock.lock(); fired = true; lock.unlock() }
+    func setSize(_ size: CGSize) {}
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard frame != nil else { return }
+        lock.lock(); let first = !fired; fired = true; lock.unlock()
+        if first { onFirst() }
     }
 }
 
@@ -1093,6 +1150,20 @@ extension WebRTCClient {
         guard let track = track, track !== self.remoteVideoTrack else { return }
         self.remoteVideoTrack = track
         track.add(renderer)
+        // LINIA2 (1018): первый кадр видео собеседника — в диагностику и экрану звонка (статус «Соединение…» → таймер).
+        if let old = firstFrameProbe { old.cancel() }
+        let probe = Linia2FirstFrameProbe { [weak self, weak track] in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let p = self.firstFrameProbe { track?.remove(p) }
+                self.firstFrameProbe = nil
+                var ev = self.linia2DiagTimes()
+                ev["type"] = "first-video-frame"
+                self.onDiagEvent?(ev)
+            }
+        }
+        firstFrameProbe = probe
+        track.add(probe)
     }
 
     func didCaptureLocalFrame(_ videoFrame: RTCVideoFrame) {
@@ -1108,6 +1179,7 @@ extension WebRTCClient {
     func handleRemoteOfferDescription(_ desc: RTCSessionDescription) {
         if let w = web { w.call("remoteOffer", ["type": "offer", "sdp": desc.sdp]); return }
         guard let peerConnection = localPeer else { return }
+        linia2StartFirstAudioProbe()
         // LINIA2: встречные offer (оба переподключаются одновременно, ICE restart) — «вежливый» (принимающий звонок)
         // откатывает свой offer и отвечает; «невежливый» (звонящий) offer собеседника игнорирует — тот откатит свой.
         if peerConnection.signalingState == .haveLocalOffer {
@@ -1324,12 +1396,25 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
         Cache.log.info("WebRTCClient: ice rtc gathering state - %d", newState.rawValue)
+        let names: [RTCIceGatheringState: String] = [.new: "new", .gathering: "gathering", .complete: "complete"]
+        onDiagEvent?(["type": "gather", "state": names[newState] ?? "\(newState.rawValue)"])
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         Cache.log.info("WebRTCClient: new local ice candidate %@", candidate)
         let k = Self.candKind(candidate.sdp)
         diagLock.lock(); diagLocalCands[k, default: 0] += 1; diagLock.unlock()
+        if k.hasPrefix("relay") {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.localPeer === peerConnection, !self.qRelaySeen else { return }
+                self.qRelaySeen = true
+                // TURN выделен (relay — последний тип кандидата); при пуле (iceCandidatePoolSize) — сразу после setLocal.
+                var ev = self.linia2DiagTimes()
+                ev["type"] = "gather-complete"
+                ev["by"] = "first-relay"
+                self.onDiagEvent?(ev)
+            }
+        }
         self.delegate?.sendIceCandidate(candidate)
     }
 
@@ -1422,7 +1507,8 @@ class CallViewController: UIViewController {
     /// Звонок может идти при свёрнутом экране — держим топик сами.
     private var strongTopic: DefaultComTopic?
     let cameraManager = CameraManager()
-    let webRTCClient = WebRTCClient()
+    /// LINIA2 (1018): var — входящий может взять соединение, созданное заранее (до «Принять», Linia2CallCenter.prewarm).
+    private(set) var webRTCClient = WebRTCClient()
     // Peer messasges listener.
     var listener: InfoListener!
 
@@ -1469,6 +1555,13 @@ class CallViewController: UIViewController {
     private var pip: AnyObject?
     /// LINIA2: диагностика звонка на сервер (/invite/api/call-diag).
     private(set) var diag: Linia2CallDiag?
+    /// LINIA2 (1018): собеседник ответил (звонящий) — до этого «Вызов…» и гудки, offer не отправляется.
+    private var linia2Accepted = false
+    /// Пришло «ringing» (у собеседника звонит) — гудки должны звучать до ответа.
+    private var linia2Ringing = false
+    private var linia2RingbackRestarts = 0
+    /// Пошли медиаданные (первый звук / первый кадр видео собеседника) — с этого момента таймер.
+    private var linia2MediaAt: Date?
 
     // LINIA2: переподключение при смене сети / обрыве (как в Telegram/WhatsApp): звонок держится до kReconnectGrace с,
     // на экране «Переподключение…»; не восстановилось — «Связь потеряна».
@@ -1600,9 +1693,23 @@ class CallViewController: UIViewController {
         guard !started, !closed else { return }
         started = true
         loadViewIfNeeded()
+        // LINIA2 (1018): входящий — соединение уже поднято при показе звонка (сбор кандидатов, TURN идут с тех пор).
+        var prewarmedAt: Date?
+        if callDirection == .incoming, !Linia2WebCallEngine.enabled,
+           let p = Linia2CallCenter.shared.takePrewarmed(topic: topic?.name ?? "", seq: callSeqId) {
+            webRTCClient = p.client
+            prewarmedAt = p.at
+        }
         let d = Linia2CallDiag(topic: topic?.name ?? "", seq: { [weak self] in self?.callSeqId ?? 0 }, client: webRTCClient)
         diag = d
-        webRTCClient.onDiagEvent = { [weak d] ev in d?.add(ev) }
+        webRTCClient.onDiagEvent = { [weak d, weak self] ev in
+            d?.add(ev)
+            let t = ev["type"] as? String
+            if t == "first-audio" || t == "first-video-frame" {
+                DispatchQueue.main.async { self?.linia2MediaArrived() }
+            }
+        }
+        cameraManager.onFirstFrame = { [weak d] in d?.add(["type": "cam-ready"]) }
         d.stateProvider = { [weak self] in
             guard let self = self else { return [:] }
             return ["rc": self.reconnectingSince != nil ? 1 : 0, "wsDown": self.wsDown ? 1 : 0, "iceDown": self.iceDown ? 1 : 0]
@@ -1614,6 +1721,9 @@ class CallViewController: UIViewController {
                  "connected": Cache.tinode.isConnected, "attached": topic?.attached ?? false,
                  "rtcAudio": RTCAudioSession.sharedInstance().isAudioEnabled,
                  "ua": "iOS " + UIDevice.current.systemVersion])
+        if let at = prewarmedAt {
+            d.add(["type": "pc", "early": true, "prewarmAgoMs": Int(Date().timeIntervalSince(at) * 1000)])
+        }
         self.permissionsCheck { result in
             DispatchQueue.main.async {
                 switch result {
@@ -2111,6 +2221,12 @@ class CallViewController: UIViewController {
             }
             ownsCall = true
             playSoundEffect("dialing")
+            // LINIA2 (1018): соединение — сразу, во время гудков: сбор кандидатов и выделение TURN (iceCandidatePoolSize)
+            // идут до ответа; по «accepted» — только offer (раньше pc и TURN создавались после ответа, +0,5–1,5 с).
+            // offer до ответа не уходит (canSendOffer). Не вышло — создастся по «accepted», как раньше.
+            if !self.webRTCClient.isWebEngine && !self.webRTCClient.createPeerConnection(withDataChannel: true, early: true) {
+                Cache.log.error("CallVC.handleCallInvite - early createPeerConnection (outgoing) failed, will retry on accept")
+            }
             // Send out a call invitation to the peer.
             self.topic?.publish(content: Drafty.videoCall(),
                                 withExtraHeaders:["webrtc": .string(MsgServerData.WebRTC.kStarted.rawValue),
@@ -2251,6 +2367,8 @@ extension CallViewController: WebRTCClientDelegate {
     }
 
     func canSendOffer() -> Bool {
+        // LINIA2 (1018): соединение звонящего создаётся во время гудков — offer только после ответа.
+        if self.callDirection == .outgoing { return self.linia2Accepted }
         return self.callDirection != .incoming || self.callInitialSetupComplete
     }
 
@@ -2354,7 +2472,10 @@ extension CallViewController: TinodeVideoCallDelegate {
             self.linia2SetAvatarVisible(false)
         }
         guard !closed else { return }
+        linia2Accepted = true
+        linia2Ringing = false
         diag?.add(["type": "accepted"])
+        stateLabel.text = linia2ScreenStatusText
         // The callee has informed us (the caller) of the call acceptance.
         guard self.webRTCClient.createPeerConnection(withDataChannel: true) else {
             Cache.log.error("CallVC.handleAcceptedMsg - createPeerConnection failed")
@@ -2417,6 +2538,10 @@ extension CallViewController: TinodeVideoCallDelegate {
 
     func handleRinging() {
         assert(Thread.isMainThread)
+        guard !closed, !linia2Accepted else { return }
+        let first = !linia2Ringing
+        linia2Ringing = true
+        if first { diag?.add(["type": "ringing", "video": !isAudioOnlyCall]) }
         self.dialingAnimation(on: true)
         self.playSoundEffect("call-out", loop: true)
     }
@@ -2479,7 +2604,7 @@ extension CallViewController {
             Cache.log.info("CallVC: reconnected (%@)", reason)
             diag?.add(["type": "reconnect", "state": "done", "reason": reason, "ms": Int(Date().timeIntervalSince(since) * 1000)])
         }
-        stateLabel.text = linia2StatusText
+        stateLabel.text = linia2ScreenStatusText
         stateLabel.textColor = linia2StatusColor
         Linia2CallCenter.shared.refreshBanner()
     }
@@ -2590,7 +2715,7 @@ extension CallViewController {
         reconnectTimer = nil
         Cache.log.info("CallVC: connection lost — ending call")
         diag?.add(["type": "reconnect", "state": "lost", "ms": Int(Date().timeIntervalSince(since) * 1000), "ws": wsDown, "ice": iceDown])
-        stateLabel.text = linia2StatusText
+        stateLabel.text = linia2ScreenStatusText
         stateLabel.textColor = linia2StatusColor
         Linia2CallCenter.shared.refreshBanner()
         if ownsCall { Cache.callManager.failCallInProgress() }
@@ -2700,12 +2825,35 @@ extension CallViewController {
     static let red = L2.hex(0xFF3B30)
 
     /// Текст состояния: «Соединение…», «Идёт звонок мм:сс», «Плохая связь · мм:сс», «На удержании».
+    /// LINIA2 (1018): текст на экране звонка. Звонящий до ответа — «Вызов…» (и гудки); после ответа — «Соединение…
+    /// это может занять до 20 секунд», пока не пошли звук или видео (first-audio / первый кадр; без них — 5 с после
+    /// ICE connected); затем таймер — от начала медиа. Плашка «Идёт звонок» — короткий linia2StatusText.
+    var linia2ScreenStatusText: String {
+        if connectionLost || reconnectingSince != nil || isHeld { return linia2StatusText }
+        if callDirection == .outgoing && !linia2Accepted { return "Вызов…" }
+        let connecting = "Соединение… это может занять до 20 секунд"
+        guard let c = connectedAt else { return connecting }
+        let start = linia2MediaAt ?? c.addingTimeInterval(Self.kMediaGrace)
+        if start > Date() { return connecting }
+        let sec = Int(Date().timeIntervalSince(start))
+        let time = String(format: "%02d:%02d", sec / 60, sec % 60)
+        return isPoorConnection ? "Плохая связь · \(time)" : "Идёт звонок \(time)"
+    }
+    static let kMediaGrace: TimeInterval = 5
+
+    /// Первый звук или первый кадр собеседника.
+    func linia2MediaArrived() {
+        guard linia2MediaAt == nil, !closed else { return }
+        linia2MediaAt = Date()
+        stateLabel.text = linia2ScreenStatusText
+    }
+
     var linia2StatusText: String {
         if connectionLost { return "Связь потеряна" }
         if reconnectingSince != nil { return "Переподключение…" }
         if isHeld { return "На удержании" }
         guard let s = connectedAt else {
-            return callDirection == .outgoing && callSeqId > 0 ? "Вызов…" : "Соединение…"
+            return callDirection == .outgoing && !linia2Accepted ? "Вызов…" : "Соединение…"
         }
         let sec = Int(Date().timeIntervalSince(s))
         let time = String(format: "%02d:%02d", sec / 60, sec % 60)
@@ -2972,7 +3120,9 @@ extension CallViewController {
     }
 
     func linia2SetupCallStatus() {
-        stateLabel.text = linia2StatusText
+        stateLabel.numberOfLines = 2
+        stateLabel.lineBreakMode = .byWordWrapping
+        stateLabel.text = linia2ScreenStatusText
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .linia2CallConnected, object: nil, queue: .main) { [weak self] _ in
             guard let self = self, !self.closed else { return }
@@ -3023,9 +3173,16 @@ extension CallViewController {
     }
 
     private func linia2Tick() {
+        // LINIA2 (1018): гудки до ответа не должны пропадать (перенастройка аудиосессии CallKit/камерой
+        // останавливала AVAudioPlayer) — проверяем раз в секунду и запускаем снова.
+        if linia2Ringing, !linia2Accepted, !closed, callDirection == .outgoing, audioPlayer?.isPlaying != true {
+            linia2RingbackRestarts += 1
+            if linia2RingbackRestarts <= 3 { diag?.add(["type": "ringback", "state": "restart", "n": linia2RingbackRestarts]) }
+            playSoundEffect("call-out", loop: true)
+        }
         if let u = unstableUntil, u < Date() { unstableUntil = nil }
         isPoorConnection = unstableUntil != nil || (connectedAt != nil && lastStatsPoor)
-        stateLabel.text = linia2StatusText
+        stateLabel.text = linia2ScreenStatusText
         stateLabel.textColor = linia2StatusColor
         if let c = connectedAt, Date().timeIntervalSince(c) < 10 || Int(Date().timeIntervalSince1970) % 2 == 0 { linia2CheckQuality() }
     }
@@ -3078,7 +3235,7 @@ extension CallViewController {
                 let poor = loss > 0.10 || rtt > 0.8
                 self.lastStatsPoor = poor
                 self.isPoorConnection = poor || self.unstableUntil != nil
-                self.stateLabel.text = self.linia2StatusText
+                self.stateLabel.text = self.linia2ScreenStatusText
                 self.stateLabel.textColor = self.linia2StatusColor
             }
         }
