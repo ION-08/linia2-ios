@@ -301,3 +301,40 @@ public protocol Storage: AnyObject {
     ///   Array of seq ID of edits ordered from newest to oldest.
     func getAllMsgVersions(fromTopic topic: TopicProto, forSeq seqId: Int, limit: Int?) -> [Int]?
 }
+
+/// LINIA2 (вылет 1013/1014 при запуске: Topic.loadSubs — повторяющиеся подписки одного user в одном топике).
+/// SQL для таблицы `subscriptions` локальной базы (TinodiosDB.SubscriberDb). Лежит в SDK, чтобы юнит-тесты
+/// (TinodeSDKTests) проверяли ровно те же запросы на настоящем SQLite.
+/// Корень дублей: «есть ли подписка» проверялось по кэшу в памяти (Topic.subs), а не в базе, и уникального
+/// ключа (topic_id, user_id) в схеме не было — разбор входящих (очередь co.tinode.incoming) и главный поток
+/// (loadSubs заменяет кэш целиком) теряли запись в кэше, и та же подписка вставлялась ещё раз; повторная
+/// выдача {meta sub} при каждом переподключении (1013: переподключение по смене сети) множила дубли.
+public enum Linia2SubsSQL {
+    public static let uniqueIndexName = "subscriptions_topic_user_unique"
+
+    /// Есть ли уникальный индекс (миграция уже выполнена).
+    public static let hasUniqueIndex =
+        "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = '\(uniqueIndexName)'"
+
+    /// Подписки без топика, без user или со ссылкой на несуществующего user (читаются с user = nil).
+    public static let deleteOrphans =
+        "DELETE FROM subscriptions WHERE topic_id IS NULL OR user_id IS NULL" +
+        " OR NOT EXISTS (SELECT 1 FROM users u WHERE u.id = subscriptions.user_id)"
+
+    /// Дубли одного user (по uid — строки users тоже могли задвоиться) в одном топике: остаётся самая свежая
+    /// (updated, при равенстве — последняя вставленная).
+    public static let deleteDuplicates =
+        "DELETE FROM subscriptions WHERE EXISTS (SELECT 1 FROM subscriptions s2" +
+        " JOIN users u2 ON u2.id = s2.user_id JOIN users u1 ON u1.id = subscriptions.user_id" +
+        " WHERE s2.topic_id = subscriptions.topic_id AND u2.uid = u1.uid AND s2.id <> subscriptions.id" +
+        " AND (COALESCE(s2.updated, '') > COALESCE(subscriptions.updated, '')" +
+        " OR (COALESCE(s2.updated, '') = COALESCE(subscriptions.updated, '') AND s2.id > subscriptions.id)))"
+
+    public static let createUniqueIndex =
+        "CREATE UNIQUE INDEX IF NOT EXISTS \(uniqueIndexName) ON subscriptions (topic_id, user_id)"
+
+    /// Существующая подписка user (uid) в топике: (id подписки, user_id). Аргументы: topic_id, uid.
+    public static let findExisting =
+        "SELECT s.id, s.user_id FROM subscriptions s JOIN users u ON u.id = s.user_id" +
+        " WHERE s.topic_id = ? AND u.uid = ? ORDER BY s.id DESC LIMIT 1"
+}
