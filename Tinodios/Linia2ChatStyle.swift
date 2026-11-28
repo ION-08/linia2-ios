@@ -435,121 +435,29 @@ extension SendMessageBar {
     }
 }
 
-// MARK: - Чат: одно состояние фона ленты — загрузка / ошибка с «Повторить» / пусто (LINIA2_CHAT_LOAD)
-//
-// Раньше «Сообщений пока нет» (фон ленты при пустом массиве) и «Не удалось загрузить» (отдельный слой через 8 с)
-// показывались независимо и перекрывались. Теперь одно место и одно состояние:
-//  • есть сообщения (из локальной базы или с сервера) — ничего;
-//  • «Сообщений пока нет» — только когда сервер подтвердил, что сообщений нет;
-//  • «Не удалось загрузить» — только когда в базе пусто И сервер ответил ошибкой или не ответил за 12 с;
-//  • иначе — «Загрузка…».
+// MARK: - Чат: если история не загрузилась — понятное сообщение и «Повторить» (а не пустой экран)
 
 extension MessageViewController {
     static let kL2RetryTag = 0x4C3252
-    static let kL2LoadTimeout: TimeInterval = 12
 
-    /// Запуск ожидания ответа сервера (viewDidAppear, «Повторить»).
     func linia2ScheduleHistoryCheck() {
-        linia2LoadTimer?.cancel()
-        linia2LoadTimedOut = false
-        let w = DispatchWorkItem { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
             guard let self = self, self.view.window != nil else { return }
-            if self.messages.isEmpty && !self.linia2ServerEmpty {
-                self.linia2LoadTimedOut = true
-                (self.interactor as? MessageInteractor)?.linia2LoadDiag("timeout", err: TinodeError.invalidState("нет ответа сервера за \(Int(Self.kL2LoadTimeout)) с"))
+            let expected = (self.topic?.seq ?? 0) > 0
+            if self.messages.isEmpty && expected {
+                self.linia2ShowRetry()
             }
-            self.linia2RenderLoadState()
-        }
-        linia2LoadTimer = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.kL2LoadTimeout, execute: w)
-        linia2RenderLoadState()
-    }
-
-    /// Ответ интерактора: сервер подтвердил пустой чат или вернул ошибку.
-    func linia2LoadResult(empty: Bool, error: String?) {
-        if empty { linia2ServerEmpty = true; linia2LoadError = nil }
-        if let e = error { linia2LoadError = e }
-        linia2RenderLoadState()
-    }
-
-    /// Из numberOfItemsInSection — перерисовка после текущего прохода раскладки.
-    func linia2ScheduleRenderLoadState() {
-        guard !linia2RenderPending else { return }
-        linia2RenderPending = true
-        DispatchQueue.main.async { [weak self] in
-            self?.linia2RenderPending = false
-            self?.linia2RenderLoadState()
         }
     }
 
-    func linia2RenderLoadState() {
-        guard isViewLoaded, collectionView != nil else { return }
-        collectionView.toggleNoMessagesNote(on: false)   // старая заглушка фона ленты — не используется
-        let want: String?
-        if !messages.isEmpty {
-            want = nil
-            linia2LoadError = nil
-        } else if linia2ServerEmpty {
-            want = "empty"
-        } else if linia2LoadError != nil || linia2LoadTimedOut {
-            want = "error"
-        } else {
-            want = "loading"
-        }
-        if let cur = linia2StateView, cur.superview != nil, cur.accessibilityIdentifier == "l2.chat.state." + (want ?? "") { return }
-        linia2StateView?.removeFromSuperview()
-        linia2StateView = nil
-        guard let state = want else { return }
-        let box: UIView
-        switch state {
-        case "empty":
-            let v = l2EmptyState("Сообщений пока нет", "Напишите первое сообщение", symbol: "bubble.left.and.bubble.right")
-            v.backgroundColor = .clear
-            v.isUserInteractionEnabled = false
-            let wrap = UIView()
-            wrap.isUserInteractionEnabled = false
-            v.accessibilityIdentifier = "l2.chat.empty"
-            v.translatesAutoresizingMaskIntoConstraints = false
-            wrap.addSubview(v)
-            NSLayoutConstraint.activate([v.topAnchor.constraint(equalTo: wrap.topAnchor), v.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
-                                         v.leadingAnchor.constraint(equalTo: wrap.leadingAnchor), v.trailingAnchor.constraint(equalTo: wrap.trailingAnchor)])
-            box = wrap
-        case "error":
-            box = linia2MakeRetryBox()
-        default:
-            let spin = UIActivityIndicatorView(style: .medium)
-            spin.color = L2.textSecondary
-            spin.startAnimating()
-            let l = UILabel()
-            l.text = "Загрузка сообщений…"
-            l.font = L2.font(15)
-            l.textColor = L2.textSecondary
-            let st = UIStackView(arrangedSubviews: [spin, l])
-            st.axis = .vertical
-            st.alignment = .center
-            st.spacing = 10
-            st.isUserInteractionEnabled = false
-            st.isAccessibilityElement = true
-            st.accessibilityLabel = l.text
-            box = st
-        }
-        box.accessibilityIdentifier = "l2.chat.state." + state
-        box.translatesAutoresizingMaskIntoConstraints = false
-        view.insertSubview(box, aboveSubview: collectionView)
-        NSLayoutConstraint.activate([
-            box.centerYAnchor.constraint(equalTo: collectionView.centerYAnchor),
-            box.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 32),
-            box.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
-        ])
-        linia2StateView = box
-    }
-
-    private func linia2MakeRetryBox() -> UIView {
+    private func linia2ShowRetry() {
+        guard view.viewWithTag(Self.kL2RetryTag) == nil else { return }
         let box = UIStackView()
         box.tag = Self.kL2RetryTag
         box.axis = .vertical
         box.alignment = .center
         box.spacing = 14
+        box.translatesAutoresizingMaskIntoConstraints = false
         let icon = UIImageView(image: L2.symbol("exclamationmark.bubble", 40, .regular))
         icon.tintColor = L2.textSecondary
         let title = UILabel()
@@ -557,24 +465,27 @@ extension MessageViewController {
         title.font = L2.font(17, .semibold)
         title.textColor = L2.textPrimary
         let sub = UILabel()
-        sub.text = Cache.tinode.isConnectionAuthenticated
-            ? "Сервер не ответил. Попробуйте ещё раз."
-            : "Нет соединения с сервером. Проверьте интернет и попробуйте ещё раз."
+        sub.text = "Проверьте подключение к интернету и попробуйте ещё раз."
         sub.font = L2.font(15)
         sub.textColor = L2.textSecondary
         sub.numberOfLines = 0
         sub.textAlignment = .center
         let retry = L2Button("Повторить", kind: .outline, symbol: "arrow.clockwise")
         retry.accessibilityIdentifier = "l2.chat.retry"
-        retry.addAction(UIAction { [weak self] _ in
-            guard let self = self else { return }
-            self.linia2LoadError = nil
-            self.interactor?.linia2RetryLoad()
-            self.linia2ScheduleHistoryCheck()   // снова «Загрузка…» и ожидание
+        retry.addAction(UIAction { [weak self, weak box] _ in
+            box?.removeFromSuperview()
+            _ = self?.interactor?.attachToTopic(interactively: true)
+            self?.interactor?.loadMessagesFromCache(scrollToMostRecentMessage: true)
+            self?.linia2ScheduleHistoryCheck()
         }, for: .touchUpInside)
         [icon, title, sub, retry].forEach { box.addArrangedSubview($0) }
-        retry.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        return box
+        view.addSubview(box)
+        NSLayoutConstraint.activate([
+            box.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
+            box.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 32),
+            box.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
+            retry.widthAnchor.constraint(equalToConstant: 200),
+        ])
     }
 }
 

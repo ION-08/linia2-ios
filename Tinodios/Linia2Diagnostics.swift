@@ -411,16 +411,6 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
         }
     }
 
-    private var lastSoon = Date.distantPast
-    /// LINIA2_CHAT_LOAD: ошибка (например, не загрузилась переписка) — отправить текущий журнал, не чаще раза в 2 мин.
-    func uploadSoon() {
-        DispatchQueue.main.async {
-            guard Date().timeIntervalSince(self.lastSoon) > 120 else { return }
-            self.lastSoon = Date()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.uploadCurrent() }
-        }
-    }
-
     private func uploadCurrent() {
         queue.async {
             guard let cur = self.curURL, let data = try? Data(contentsOf: cur) else { return }

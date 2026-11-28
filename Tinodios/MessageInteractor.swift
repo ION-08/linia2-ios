@@ -46,7 +46,6 @@ protocol MessageBusinessLogic: AnyObject {
     func prepareToForward(message: Drafty, forwardedFrom: String, preview: Drafty)
     func pinMessage(seqId: Int, pin: Bool)
     func reloadPinned(forSeq: Int)
-    func linia2RetryLoad()
     var pendingMessage: PendingMessage? { get }
 }
 
@@ -80,38 +79,6 @@ struct UploadDef {
 class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, MessageDataStore {
     private static let kMessagesPerPage = 24
     private var linia2HistoryRequested = false
-    /// LINIA2_CHAT_LOAD: последняя страница истории с сервера получена (после неё пустая лента = «сообщений нет»).
-    private var linia2HistoryDone = false
-    private var linia2LoadT0 = Date()
-    private var linia2CacheLogged = false
-    private var linia2EmptyReported = false
-
-    /// LINIA2_CHAT_LOAD: «чёрный ящик» загрузки чата (topic, источник, мс от открытия, ошибка, состояние сокета).
-    func linia2LoadDiag(_ src: String, n: Int? = nil, err: Error? = nil) {
-        let tinode = Cache.tinode
-        var e: [String: Any] = ["topic": topicName ?? "", "src": src,
-                                "dt": Int(Date().timeIntervalSince(linia2LoadT0) * 1000),
-                                "auth": tinode.isConnectionAuthenticated ? 1 : 0, "conn": tinode.isConnected ? 1 : 0,
-                                "att": (topic?.attached ?? false) ? 1 : 0, "seq": topic?.seq ?? -1]
-        if let n = n { e["n"] = n }
-        if let err = err { e["err"] = String(String(describing: err).prefix(200)) }
-        Linia2LaunchLog.shared.step("chat-load", e)
-        if err != nil { Linia2LaunchLog.shared.uploadSoon() }
-    }
-
-    /// LINIA2_CHAT_LOAD: «Повторить» — заново подписка и последняя страница истории.
-    func linia2RetryLoad() {
-        linia2HistoryRequested = false
-        linia2HistoryDone = false
-        linia2EmptyReported = false
-        linia2LoadT0 = Date()
-        linia2LoadDiag("retry")
-        if !Cache.tinode.isConnectionAuthenticated {
-            Cache.tinode.reconnectNow(interactively: true, reset: false)
-        }
-        _ = attachToTopic(interactively: true)
-        loadMessagesFromCache(scrollToMostRecentMessage: true)
-    }
     /// LINIA2: заголовки для следующего sendMessage (кружок: linia2-ttl).
     var linia2NextHead: [String: JSONValue]?
 
@@ -202,11 +169,6 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         tinode.addListener(self.tinodeEventListener!)
         self.topic = tinode.getTopic(topicName: topicName) as? DefaultComTopic
         self.pagesToLoad = 1
-        self.linia2LoadT0 = Date()
-        self.linia2CacheLogged = false
-        self.linia2EmptyReported = false
-        self.linia2HistoryDone = false
-        self.linia2HistoryRequested = false
         L2Log.event("l2_chat_open", ["chat": L2Log.topicKind(topicName)])
 
         self.presenter?.updateTitleBar(pub: self.topic?.pub, online: (topic?.isChannel ?? false) ? nil : self.topic?.online, deleted: topic?.deleted ?? true)
@@ -257,7 +219,6 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
     }
     func attachToTopic(interactively: Bool) -> Bool {
         guard let topic = self.topic, !topic.attached else {
-            linia2LoadDiag("already-attached")
             self.presenter?.applyTopicPermissions(withError: nil)
             return true
         }
@@ -265,7 +226,6 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         guard tinode.isConnectionAuthenticated else {
             // If connection is not ready, wait for completion.
             // MessageInteractor.attachToTopic() will be called again from the onLogin callback.
-            linia2LoadDiag("wait-auth")
             tinode.reconnectNow(interactively: interactively, reset: false)
             return false
         }
@@ -278,10 +238,8 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
         if topic.isOwner {
             builder = builder.withTags()
         }
-        linia2LoadDiag("subscribe")
         topic.subscribe(set: nil, get: builder.build()).then(
                 onSuccess: { [weak self] msg in
-                    self?.linia2LoadDiag("subscribe-ok", n: msg?.ctrl?.code)
                     // Check for topic redirects.
                     if let ctrl = msg?.ctrl, ctrl.code == ServerMessage.kStatusSeeOther {
                         if let redirectTo = ctrl.getStringParam(for: "topic") {
@@ -312,8 +270,6 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
                     return nil
                 },
                 onFailure: { [weak self] err in
-                    self?.linia2LoadDiag("subscribe-fail", err: err)
-                    self?.presenter?.presentLoadResult(empty: false, error: err.localizedDescription)
                     let tinode = Cache.tinode
                     let errorMsg = String(format: NSLocalizedString("Failed to subscribe to topic: %@", comment: "Error message"), err.localizedDescription)
                     if tinode.isConnected {
@@ -514,38 +470,14 @@ class MessageInteractor: DefaultComTopic.Listener, MessageBusinessLogic, Message
                 self.messages = messagePage.compactMap { $0 as? StoredMessage }.reversed()
                 self.presenter?.presentMessages(messages: self.messages, scrollToMostRecentMessage)
             }
-            if !self.linia2CacheLogged {
-                // LINIA2_CHAT_LOAD: сначала — переписка из локальной базы.
-                self.linia2CacheLogged = true
-                self.linia2LoadDiag("cache", n: self.messages.count)
-            }
             // LINIA2_HISTORY_FALLBACK: кэш пуст, а на сервере есть сообщения — запросить последнюю страницу с сервера (один раз).
             if self.messages.isEmpty, (t.seq ?? 0) > 0, t.attached, !self.linia2HistoryRequested {
                 self.linia2HistoryRequested = true
-                self.linia2LoadDiag("history")
                 let q = t.metaGetBuilder().withData(since: nil, before: nil, limit: MessageInteractor.kMessagesPerPage).build()
-                t.getMeta(query: q).then(
-                    onSuccess: { [weak self] _ in
-                        self?.messageInteractorQueue.async {
-                            self?.linia2HistoryDone = true
-                            self?.linia2LoadDiag("history-ok")
-                            self?.loadMessagesFromCache(scrollToMostRecentMessage: true)
-                        }
-                        return nil
-                    },
-                    onFailure: { [weak self] err in
-                        self?.messageInteractorQueue.async {
-                            self?.linia2HistoryRequested = false   // «Повторить» / переподключение — запросить снова
-                            self?.linia2LoadDiag("history-fail", err: err)
-                            self?.presenter?.presentLoadResult(empty: false, error: err.localizedDescription)
-                        }
-                        return nil
-                    })
-            } else if self.messages.isEmpty, t.attached, (t.seq ?? 0) == 0 || self.linia2HistoryDone, !self.linia2EmptyReported {
-                // LINIA2_CHAT_LOAD: «Сообщений пока нет» — только когда сервер подтвердил, что сообщений нет.
-                self.linia2EmptyReported = true
-                self.linia2LoadDiag("server-empty")
-                self.presenter?.presentLoadResult(empty: true, error: nil)
+                t.getMeta(query: q).thenApply { [weak self] _ in
+                    self?.loadMessagesFromCache(scrollToMostRecentMessage: true)
+                    return nil
+                }
             }
         }
     }
