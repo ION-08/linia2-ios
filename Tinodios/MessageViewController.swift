@@ -170,6 +170,10 @@ class MessageViewController: UIViewController {
     private var linia2DockTopForward: NSLayoutConstraint!
     /// Последняя высота ленты — чтобы при подъёме/опускании клавиатуры низ переписки оставался на месте.
     var linia2LastCollectionHeightValue: CGFloat = 0
+    /// LINIA2_HANG: последний keyboardDismissPadding, который ставили сами.
+    var linia2DismissPadApplied: CGFloat = -1
+    /// LINIA2_HANG: защита от повторного входа в linia2KeepBottomOnResize.
+    var linia2KeepingBottom = false
 
     /// Avatar in the NavBar
     lazy var navBarAvatarView: AvatarWithOnlineIndicator = {
@@ -543,9 +547,17 @@ class MessageViewController: UIViewController {
 
         if #available(iOS 17.0, *) {
             // Интерактивное скрытие (keyboardDismissMode = .interactive) начинается от верха панели ввода.
+            // LINIA2_HANG: сравниваем с тем, что ставили сами, а не с геттером guide — система может вернуть
+            // другое значение (клавиатура скрыта), и тогда каждая раскладка снова ставила padding → снова
+            // раскладка: бесконечный цикл на главном потоке при открытии чата (test1, прогон 46095480498).
+            // Ставим вне прохода раскладки.
             let pad = linia2ActiveInputBar.bounds.height
-            if abs(view.keyboardLayoutGuide.keyboardDismissPadding - pad) > 0.5 {
-                view.keyboardLayoutGuide.keyboardDismissPadding = pad
+            if pad > 0, abs(linia2DismissPadApplied - pad) > 0.5 {
+                linia2DismissPadApplied = pad
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.isViewLoaded else { return }
+                    self.view.keyboardLayoutGuide.keyboardDismissPadding = self.linia2DismissPadApplied
+                }
             }
         }
         linia2KeepBottomOnResize()

@@ -484,7 +484,9 @@ extension MessageViewController {
 
     func linia2RenderLoadState() {
         guard isViewLoaded, collectionView != nil else { return }
-        collectionView.toggleNoMessagesNote(on: false)   // старая заглушка фона ленты — не используется
+        // Старая заглушка фона ленты — не используется. LINIA2_HANG: backgroundView трогаем, только если она есть
+        // (присваивание перекладывает ленту, а сюда приходим из каждого numberOfItemsInSection).
+        if collectionView.backgroundView != nil { collectionView.toggleNoMessagesNote(on: false) }
         let want: String?
         if !messages.isEmpty {
             want = nil

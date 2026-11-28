@@ -17,7 +17,10 @@ extension MessageViewController {
     /// поворот) — сдвинуть содержимое так, чтобы нижние сообщения остались видны. Внутри анимации клавиатуры
     /// сдвиг анимируется вместе с ней.
     func linia2KeepBottomOnResize() {
-        guard let cv = collectionView else { return }
+        // LINIA2_HANG: только на экране и без повторного входа (setContentOffset → раскладка → сюда же).
+        guard let cv = collectionView, view.window != nil, !linia2KeepingBottom else { return }
+        linia2KeepingBottom = true
+        defer { linia2KeepingBottom = false }
         let height = cv.bounds.height
         let old = linia2LastCollectionHeightValue
         linia2LastCollectionHeightValue = height
