@@ -1,0 +1,162 @@
+# Скриншоты App Store: берёт PNG из артефакта store-shots прогона «UI tests» (store_shots=true) и загружает их
+# в версию в состоянии PREPARE_FOR_SUBMISSION для локалей ru и en-US:
+#   6.9" (1320×2868) — набор APP_IPHONE_67 (в API слот 6.9" называется так; если API отвергнет — пробуем APP_IPHONE_69);
+#   6.5" (1284×2778) — те же снимки, масштаб 97,3 % с обрезкой 6 px сверху и снизу, набор APP_IPHONE_65.
+# Альфа-канал убирается (Apple не принимает PNG с альфой). Загрузка — reservation → PUT частей → PATCH uploaded + MD5.
+# Ничего не отправляет на модерацию. Запуск: gh workflow run asc-screenshots.yml -f run_id=<id прогона store-shots>.
+name: ASC screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "ID прогона «UI tests» с артефактом store-shots"
+        required: true
+      files:
+        description: "Снимки по порядку (имена без .png из артефакта)"
+        default: "promax-dark-chats,promax-dark-chat,promax-dark-call,promax-dark-calls,promax-light-chats,promax-light-chat,promax-dark-group,promax-dark-privacy"
+      locales:
+        description: "Локали"
+        default: "ru,en-US"
+      replace:
+        description: "Удалить прежние снимки в этих наборах"
+        type: boolean
+        default: true
+      six5:
+        description: "Загрузить и набор 6.5\""
+        type: boolean
+        default: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: store-shots
+          path: shots
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Подготовка PNG (без альфы, 6.9" и 6.5")
+        env:
+          FILES: ${{ inputs.files }}
+        run: |
+          pip install --quiet pillow
+          python3 - <<'PY'
+          import os
+          from PIL import Image
+          names = [n.strip() for n in os.environ["FILES"].split(",") if n.strip()]
+          os.makedirs("out/69", exist_ok=True); os.makedirs("out/65", exist_ok=True)
+          k = 0
+          for n in names:
+              p = f"shots/{n}.png"
+              if not os.path.exists(p):
+                  print("нет снимка", n); continue
+              im = Image.open(p).convert("RGB")
+              if im.size != (1320, 2868):
+                  print("пропуск — размер", n, im.size); continue
+              k += 1
+              im.save(f"out/69/{k:02d}-{n}.png", optimize=True)
+              s = im.resize((1284, 2790), Image.LANCZOS).crop((0, 6, 1284, 2784))
+              s.save(f"out/65/{k:02d}-{n}.png", optimize=True)
+          print("готово:", k)
+          PY
+          ls -la out/69 out/65
+
+      - name: Загрузка в App Store Connect
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          LOCALES: ${{ inputs.locales }}
+          REPLACE: ${{ inputs.replace }}
+          SIX5: ${{ inputs.six5 }}
+        run: |
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/k.p8"; chmod 600 "$RUNNER_TEMP/k.p8"
+          cat > "$RUNNER_TEMP/asc.mjs" <<'JS'
+          import crypto from 'node:crypto'; import fs from 'node:fs'; import path from 'node:path';
+          const e = process.env, key = fs.readFileSync(process.argv[2]);
+          function tok() { const n = Math.floor(Date.now() / 1000), b = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+            const h = b({ alg: 'ES256', kid: e.ASC_KEY_ID, typ: 'JWT' }), p = b({ iss: e.ASC_ISSUER_ID, iat: n, exp: n + 900, aud: 'appstoreconnect-v1' });
+            return h + '.' + p + '.' + crypto.sign('sha256', Buffer.from(h + '.' + p), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url'); }
+          async function api(p, opt = {}) { const r = await fetch('https://api.appstoreconnect.apple.com' + p, { ...opt, headers: { Authorization: 'Bearer ' + tok(), 'Content-Type': 'application/json' } });
+            const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, j }; }
+          const sum = s => { console.log(s); fs.appendFileSync(e.GITHUB_STEP_SUMMARY, s + '\n'); };
+          const err = r => `HTTP ${r.s} ` + (r.j?.errors || []).map(x => x.detail || x.title).join('; ').slice(0, 400);
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          const app = (await api('/v1/apps?filter[bundleId]=info.codix.liniya2')).j.data[0];
+          const ver = ((await api(`/v1/apps/${app.id}/appStoreVersions?filter[appStoreState]=PREPARE_FOR_SUBMISSION&limit=1`)).j?.data || [])[0];
+          if (!ver) { sum('❌ нет версии в состоянии PREPARE_FOR_SUBMISSION'); process.exit(1); }
+          sum(`Версия ${ver.attributes.versionString} (${ver.attributes.appStoreState})`);
+          const locs = (await api(`/v1/appStoreVersions/${ver.id}/appStoreVersionLocalizations?limit=50`)).j?.data || [];
+          sum('Локали версии: ' + locs.map(l => l.attributes.locale).join(', '));
+          const groups = [['out/69', ['APP_IPHONE_67', 'APP_IPHONE_69'], '6.9"']];
+          if (e.SIX5 === 'true') groups.push(['out/65', ['APP_IPHONE_65'], '6.5"']);
+          let bad = 0;
+
+          async function ensureSet(loc, types) {
+            const sets = (await api(`/v1/appStoreVersionLocalizations/${loc.id}/appScreenshotSets?limit=50`)).j?.data || [];
+            for (const t of types) { const s = sets.find(x => x.attributes.screenshotDisplayType === t); if (s) return s; }
+            for (const t of types) {
+              const r = await api('/v1/appScreenshotSets', { method: 'POST', body: JSON.stringify({ data: { type: 'appScreenshotSets', attributes: { screenshotDisplayType: t },
+                relationships: { appStoreVersionLocalization: { data: { type: 'appStoreVersionLocalizations', id: loc.id } } } } }) });
+              if (r.s < 300) { sum(`  набор ${t} создан`); return r.j.data; }
+              sum(`  набор ${t}: ${err(r)}`);
+            }
+            return null;
+          }
+
+          async function upload(set, file) {
+            const buf = fs.readFileSync(file), name = path.basename(file);
+            const r = await api('/v1/appScreenshots', { method: 'POST', body: JSON.stringify({ data: { type: 'appScreenshots', attributes: { fileName: name, fileSize: buf.length },
+              relationships: { appScreenshotSet: { data: { type: 'appScreenshotSets', id: set.id } } } } }) });
+            if (r.s >= 300) return `резерв ${err(r)}`;
+            const sh = r.j.data;
+            for (const op of sh.attributes.uploadOperations || []) {
+              const h = {}; for (const x of op.requestHeaders || []) h[x.name] = x.value;
+              const pr = await fetch(op.url, { method: op.method, headers: h, body: buf.subarray(op.offset, op.offset + op.length) });
+              if (!pr.ok) return `PUT части ${op.offset}: HTTP ${pr.status}`;
+            }
+            const md5 = crypto.createHash('md5').update(buf).digest('hex');
+            const c = await api(`/v1/appScreenshots/${sh.id}`, { method: 'PATCH', body: JSON.stringify({ data: { type: 'appScreenshots', id: sh.id, attributes: { uploaded: true, sourceFileChecksum: md5 } } }) });
+            if (c.s >= 300) return `подтверждение ${err(c)}`;
+            for (let i = 0; i < 40; i++) {
+              const g = await api(`/v1/appScreenshots/${sh.id}`);
+              const st = g.j?.data?.attributes?.assetDeliveryState;
+              if (st?.state === 'COMPLETE') return 'COMPLETE';
+              if (st?.state === 'FAILED') return 'FAILED ' + JSON.stringify(st.errors || []).slice(0, 300);
+              await sleep(3000);
+            }
+            return 'нет COMPLETE за 2 мин';
+          }
+
+          for (const want of e.LOCALES.split(',').map(s => s.trim()).filter(Boolean)) {
+            const loc = locs.find(l => l.attributes.locale === want);
+            if (!loc) { sum(`❌ [${want}] нет такой локали у версии`); bad++; continue; }
+            for (const [dir, types, label] of groups) {
+              const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort() : [];
+              if (!files.length) { sum(`❌ [${want}] ${label}: нет файлов`); bad++; continue; }
+              const set = await ensureSet(loc, types);
+              if (!set) { sum(`❌ [${want}] ${label}: не удалось создать набор`); bad++; continue; }
+              if (e.REPLACE === 'true') {
+                const old = (await api(`/v1/appScreenshotSets/${set.id}/appScreenshots?limit=50`)).j?.data || [];
+                for (const o of old) await api(`/v1/appScreenshots/${o.id}`, { method: 'DELETE' });
+                if (old.length) sum(`  [${want}] ${label}: удалено прежних ${old.length}`);
+              }
+              let ok = 0;
+              for (const f of files) {
+                const res = await upload(set, path.join(dir, f));
+                if (res === 'COMPLETE') ok++; else { bad++; sum(`  ❌ [${want}] ${label} ${f}: ${res}`); }
+              }
+              sum(`${ok === files.length ? '✅' : '⚠️'} [${want}] ${label} (${set.attributes.screenshotDisplayType}): загружено ${ok}/${files.length}`);
+            }
+          }
+          if (bad) process.exit(1);
+          JS
+          rc=0; node "$RUNNER_TEMP/asc.mjs" "$RUNNER_TEMP/k.p8" || rc=$?; rm -f "$RUNNER_TEMP/k.p8"; exit $rc
