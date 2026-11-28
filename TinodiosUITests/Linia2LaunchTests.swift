@@ -291,6 +291,12 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         screenshot("list-unread")
         let row = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", peerName)).firstMatch
         wait(row, "чат с «\(peerName)» в списке", timeout: 30).tap()
+        // Главный поток не должен зависать при открытии чата (1128c81: 60 с «Timed out while evaluating UI query»).
+        let tapAt = Date()
+        let opened = app.textViews["l2.chat.input"].firstMatch.waitForExistence(timeout: 5)
+        let openSec = Date().timeIntervalSince(tapAt)
+        if !opened || openSec > 5.5 { screenshot("ЗАВИСАНИЕ-открытие-чата") }
+        XCTAssertTrue(opened && openSec <= 5.5, String(format: "приложение не отвечало после тапа по чату: %.1f с (норма ≤5 с)", openSec))
         wait(app.textViews["l2.chat.input"].firstMatch, "чат открыт", timeout: 15)
         wait(labelContains("\(tag)-5"), "последнее сообщение бота в чате", timeout: 30)
         watchAlive("чат-с-сообщениями-бота", seconds: 4)

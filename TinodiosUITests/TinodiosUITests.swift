@@ -603,6 +603,44 @@ final class TinodiosUITests: XCTestCase {
         screenshot("chat-keyboard")
     }
 
+    /// LINIA2_KBD_LIFT: поле ввода и «Отправить» целиком над клавиатурой (iPhone 17 / iOS 27.3 оставлял
+    /// панель под клавиатурой), в т.ч. при 3 строках; после свайпа вниз панель возвращается вниз.
+    func test25b_InputBarAboveKeyboard() {
+        openPeerChat()
+        let input = chatInput()
+        let bottomBefore = input.frame.maxY
+        let tapAt = Date()
+        input.tap()
+        dismissKeyboardTips()
+        let kb = app.keyboards.firstMatch
+        wait(kb, "клавиатура", timeout: 8)
+        XCTAssertLessThan(Date().timeIntervalSince(tapAt), 10, "приложение долго не отвечало после тапа по полю ввода")
+        sleep(1)
+        func assertAbove(_ when: String) {
+            let kbTop = kb.frame.minY
+            XCTAssertGreaterThan(kb.frame.height, 100, "\(when): клавиатура не показана целиком")
+            XCTAssertLessThanOrEqual(input.frame.maxY, kbTop + 1, "\(when): поле ввода (низ \(input.frame.maxY)) под клавиатурой (верх \(kbTop))")
+            let send = app.buttons["l2.chat.send"].firstMatch
+            if send.exists && !send.frame.isEmpty {
+                XCTAssertLessThanOrEqual(send.frame.maxY, kbTop + 1, "\(when): «Отправить» под клавиатурой")
+            }
+            XCTAssertTrue(input.isHittable, "\(when): поле ввода недоступно")
+        }
+        assertAbove("клавиатура открыта")
+        XCTAssertLessThan(input.frame.maxY, bottomBefore - 100, "панель ввода не поднялась вместе с клавиатурой")
+        input.typeText("kbd-1\nkbd-2\nkbd-3")
+        sleep(1)
+        assertAbove("поле в 3 строки")
+        screenshot("chat-keyboard-lift")
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
+        app.collectionViews.firstMatch.swipeDown(velocity: .fast)
+        sleep(1)
+        if kb.exists && kb.frame.height > 100 { app.collectionViews.firstMatch.swipeDown(velocity: .fast); sleep(1) }
+        XCTAssertFalse(kb.exists && kb.frame.height > 100, "клавиатура не скрылась свайпом вниз")
+        XCTAssertTrue(input.isHittable, "после скрытия клавиатуры пропало поле ввода")
+        XCTAssertGreaterThan(input.frame.maxY, app.windows.firstMatch.frame.maxY - 140, "после скрытия клавиатуры панель не вернулась вниз")
+    }
+
     func test26_RotationNoCrash() {
         openPeerChat()
         for o in [UIDeviceOrientation.landscapeLeft, .portrait, .landscapeRight, .portrait] {
