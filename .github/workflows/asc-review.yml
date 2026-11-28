@@ -1,0 +1,56 @@
+# Готовность к App Store Review: только ЧТЕНИЕ метаданных App Store Connect (ничего не меняет).
+# Запуск вручную: gh workflow run asc-review.yml. Итог — в сводке прогона (без секретов и паролей).
+name: ASC review check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Метаданные App Store
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/k.p8"; chmod 600 "$RUNNER_TEMP/k.p8"
+          cat > "$RUNNER_TEMP/asc.mjs" <<'JS'
+          import crypto from 'node:crypto'; import fs from 'node:fs';
+          const e = process.env, key = fs.readFileSync(process.argv[2]);
+          function tok() { const n = Math.floor(Date.now() / 1000), b = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+            const h = b({ alg: 'ES256', kid: e.ASC_KEY_ID, typ: 'JWT' }), p = b({ iss: e.ASC_ISSUER_ID, iat: n, exp: n + 900, aud: 'appstoreconnect-v1' });
+            return h + '.' + p + '.' + crypto.sign('sha256', Buffer.from(h + '.' + p), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url'); }
+          async function api(path) { const r = await fetch('https://api.appstoreconnect.apple.com' + path, { headers: { Authorization: 'Bearer ' + tok() } });
+            const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, j }; }
+          const sum = s => { console.log(s); fs.appendFileSync(e.GITHUB_STEP_SUMMARY, s + '\n'); };
+          const app = (await api('/v1/apps?filter[bundleId]=info.codix.liniya2')).j.data[0];
+          sum(`## ${app.attributes.name} (${app.attributes.bundleId}) primaryLocale=${app.attributes.primaryLocale}`);
+          const infos = (await api(`/v1/apps/${app.id}/appInfos`)).j?.data || [];
+          for (const i of infos) {
+            sum(`appInfo ${i.id}: state=${i.attributes.appStoreState || i.attributes.state} ageRating=${i.attributes.appStoreAgeRating}`);
+            const pc = (await api(`/v1/appInfos/${i.id}/primaryCategory`)).j?.data; sum(`  primaryCategory=${pc?.id || '—'}`);
+            const il = (await api(`/v1/appInfos/${i.id}/appInfoLocalizations`)).j?.data || [];
+            for (const l of il) sum(`  [${l.attributes.locale}] name=${l.attributes.name} subtitle=${l.attributes.subtitle || '—'} privacyPolicyUrl=${l.attributes.privacyPolicyUrl || '—'}`);
+          }
+          const vs = (await api(`/v1/apps/${app.id}/appStoreVersions?limit=5`)).j?.data || [];
+          if (!vs.length) sum('appStoreVersions: НЕТ ни одной версии App Store');
+          for (const v of vs) {
+            sum(`version ${v.attributes.versionString} state=${v.attributes.appStoreState || v.attributes.appVersionState} platform=${v.attributes.platform}`);
+            const b = (await api(`/v1/appStoreVersions/${v.id}/build`)).j?.data; sum(`  build=${b ? b.id : '—'}`);
+            const ls = (await api(`/v1/appStoreVersions/${v.id}/appStoreVersionLocalizations`)).j?.data || [];
+            for (const l of ls) { const a = l.attributes;
+              sum(`  [${a.locale}] description=${(a.description||'').length} симв, keywords=${a.keywords ? 'есть' : '—'}, supportUrl=${a.supportUrl || '—'}, marketingUrl=${a.marketingUrl || '—'}`);
+              const sets = (await api(`/v1/appStoreVersionLocalizations/${l.id}/appScreenshotSets`)).j?.data || [];
+              sum(`    скриншоты: ${sets.map(s => s.attributes.screenshotDisplayType).join(', ') || '—'}`); }
+            const rd = (await api(`/v1/appStoreVersions/${v.id}/appStoreReviewDetail`)).j?.data;
+            sum(`  reviewDetail: ${rd ? `contact=${rd.attributes.contactEmail ? 'есть' : '—'} phone=${rd.attributes.contactPhone ? 'есть' : '—'} demoAccountRequired=${rd.attributes.demoAccountRequired} demoName=${rd.attributes.demoAccountName ? 'есть' : '—'} notes=${(rd.attributes.notes||'').length} симв` : '—'}`);
+            const ad = (await api(`/v1/appStoreVersions/${v.id}/ageRatingDeclaration`)).j?.data; sum(`  ageRatingDeclaration: ${ad ? 'есть' : '—'}`);
+          }
+          const bl = (await api(`/v1/apps/${app.id}/betaAppLocalizations`)).j?.data || [];
+          for (const l of bl) sum(`TestFlight [${l.attributes.locale}] feedbackEmail=${l.attributes.feedbackEmail ? l.attributes.feedbackEmail.replace(/(.).*@/, '$1***@') : '—'}`);
+          const pp = await api(`/v1/apps/${app.id}/appDataUsages`); sum(`App Privacy (appDataUsages): HTTP ${pp.s}`);
+          JS
+          node "$RUNNER_TEMP/asc.mjs" "$RUNNER_TEMP/k.p8"
