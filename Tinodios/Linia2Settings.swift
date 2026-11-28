@@ -1189,7 +1189,7 @@ final class L2LinkRow: UIControl {
 // MARK: - Ссылки на документы (из удалённых настроек, с запасными адресами)
 
 enum Linia2Links {
-    static let supportEmail = "it_ion@icloud.com"
+    static let supportEmail = "ivan@melnikmail.com"
 
     static var privacy: URL? { Linia2Config.shared.link("privacy") ?? URL(string: "https://v2.chat-linia.site/privacy") }
     static var terms: URL? { Linia2Config.shared.link("terms") ?? URL(string: "https://v2.chat-linia.site/terms") }
