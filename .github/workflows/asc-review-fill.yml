@@ -1,0 +1,55 @@
+# App Store Connect (владелец 28.11): Support URL, Feedback Email TestFlight, привязка сборки к версии.
+# Контакт и заметки проверяющему заполняются вручную в браузере (личные данные не храним в публичном репозитории).
+# Ничего не отправляет на модерацию.
+name: ASC review fill
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Номер сборки для привязки к версии (пусто — не трогать)"
+        default: ""
+
+jobs:
+  fill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Заполнить
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUILD: ${{ inputs.build }}
+        run: |
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/k.p8"; chmod 600 "$RUNNER_TEMP/k.p8"
+          cat > "$RUNNER_TEMP/asc.mjs" <<'JS'
+          import crypto from 'node:crypto'; import fs from 'node:fs';
+          const e = process.env, key = fs.readFileSync(process.argv[2]);
+          function tok() { const n = Math.floor(Date.now() / 1000), b = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+            const h = b({ alg: 'ES256', kid: e.ASC_KEY_ID, typ: 'JWT' }), p = b({ iss: e.ASC_ISSUER_ID, iat: n, exp: n + 900, aud: 'appstoreconnect-v1' });
+            return h + '.' + p + '.' + crypto.sign('sha256', Buffer.from(h + '.' + p), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url'); }
+          async function api(path, opt = {}) { const r = await fetch('https://api.appstoreconnect.apple.com' + path, { ...opt, headers: { Authorization: 'Bearer ' + tok(), 'Content-Type': 'application/json' } });
+            const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {} return { s: r.status, j }; }
+          const sum = s => { console.log(s); fs.appendFileSync(e.GITHUB_STEP_SUMMARY, s + '\n'); };
+          const err = r => (r.j?.errors || []).map(x => x.detail || x.title).join('; ').slice(0, 300);
+          const app = (await api('/v1/apps?filter[bundleId]=info.codix.liniya2')).j.data[0];
+          const ver = ((await api(`/v1/apps/${app.id}/appStoreVersions?filter[appStoreState]=PREPARE_FOR_SUBMISSION&limit=1`)).j?.data || [])[0];
+          if (!ver) { sum('❌ нет версии в состоянии PREPARE_FOR_SUBMISSION'); process.exit(1); }
+          sum(`Версия ${ver.attributes.versionString}`);
+          for (const l of (await api(`/v1/appStoreVersions/${ver.id}/appStoreVersionLocalizations`)).j?.data || []) {
+            const r = await api(`/v1/appStoreVersionLocalizations/${l.id}`, { method: 'PATCH', body: JSON.stringify({ data: { type: 'appStoreVersionLocalizations', id: l.id, attributes: { supportUrl: 'https://v2.chat-linia.site/support/' } } }) });
+            sum(`supportUrl [${l.attributes.locale}]: ${r.s < 300 ? '✅' : '❌ ' + err(r)}`); }
+          const bl = (await api(`/v1/apps/${app.id}/betaAppLocalizations`)).j?.data || [];
+          if (!bl.length) { const r = await api('/v1/betaAppLocalizations', { method: 'POST', body: JSON.stringify({ data: { type: 'betaAppLocalizations', attributes: { locale: 'ru', feedbackEmail: 'ivan@melnikmail.com' }, relationships: { app: { data: { type: 'apps', id: app.id } } } } }) });
+            sum(`TestFlight feedbackEmail (новая ru): ${r.s < 300 ? '✅' : '❌ ' + err(r)}`); }
+          for (const l of bl) {
+            const r = await api(`/v1/betaAppLocalizations/${l.id}`, { method: 'PATCH', body: JSON.stringify({ data: { type: 'betaAppLocalizations', id: l.id, attributes: { feedbackEmail: 'ivan@melnikmail.com' } } }) });
+            sum(`TestFlight feedbackEmail [${l.attributes.locale}]: ${r.s < 300 ? '✅' : '❌ ' + err(r)}`); }
+          if (e.BUILD) {
+            const b = ((await api(`/v1/builds?filter[app]=${app.id}&filter[version]=${e.BUILD}&limit=1`)).j?.data || [])[0];
+            if (!b) sum(`❌ сборка ${e.BUILD} не найдена`); else {
+              const r = await api(`/v1/appStoreVersions/${ver.id}/relationships/build`, { method: 'PATCH', body: JSON.stringify({ data: { type: 'builds', id: b.id } }) });
+              sum(`Сборка ${e.BUILD} привязана к версии: ${r.s < 300 ? '✅' : '❌ ' + err(r)}`); } }
+          JS
+          node "$RUNNER_TEMP/asc.mjs" "$RUNNER_TEMP/k.p8"
