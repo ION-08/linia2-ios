@@ -190,6 +190,8 @@ class MessageViewController: UIViewController {
     /// Pointer to the view holding messages.
     weak var collectionView: MessageView!
     private var collectionViewBottomAnchor: NSLayoutConstraint!
+    /// LINIA2_KBD_FEED: «панель ввода выше половины экрана» уже записано в журнал.
+    private var linia2TallBarLogged = false
     /// Button [GO to latest message].
     private weak var goToLatestButton: UIButton!
     private var goToLatestButtonBottomAnchor: NSLayoutConstraint!
@@ -484,9 +486,19 @@ class MessageViewController: UIViewController {
             collectionView.contentInset.bottom = 8
         }
 
-        self.collectionViewBottomAnchor.constant = -(inputAccessoryView?.frame.height ?? 0)
-        self.goToLatestButtonBottomAnchor.constant = -(inputAccessoryView?.frame.height ?? 0) - 16
-        self.linia2BurnLabelBottom?.constant = -(inputAccessoryView?.frame.height ?? 0) - 4
+        // LINIA2_KBD_FEED: панель ввода выше половины экрана — ненормальный кадр (лента сжалась бы в полосу).
+        var barH = inputAccessoryView?.frame.height ?? 0
+        if view.bounds.height > 0, barH > view.bounds.height * 0.5 {
+            if !linia2TallBarLogged {
+                linia2TallBarLogged = true
+                Linia2LaunchLog.shared.step("kbd-bar-tall", ["bar": Int(barH), "h": Int(view.bounds.height)])
+            }
+            barH = min(barH, max(56, sendMessageBar.systemLayoutSizeFitting(CGSize(width: view.bounds.width, height: 0),
+                withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height))
+        }
+        self.collectionViewBottomAnchor.constant = -barH
+        self.goToLatestButtonBottomAnchor.constant = -barH - 16
+        self.linia2BurnLabelBottom?.constant = -barH - 4
 
         // Otherwise setting contentInset after viewDidAppear will be animated.
         if isInitialLayout {

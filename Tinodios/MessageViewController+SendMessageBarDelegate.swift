@@ -40,6 +40,7 @@ extension MessageViewController: SendMessageBarDelegate {
     }
 
     func sendMessageBar(textChangedTo text: String) {
+        linia2ScheduleFeedCheck("text")   // LINIA2_KBD_FEED: при наборе лента не должна опустеть
         if self.sendTypingNotifications {
             interactor?.sendTypingNotification()
         }

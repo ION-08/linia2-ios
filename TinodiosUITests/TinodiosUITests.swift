@@ -636,6 +636,57 @@ final class TinodiosUITests: XCTestCase {
         // Скрытие клавиатуры свайпом не проверяем: в симуляторе CI свайп по ленте её не закрывает (прогон 46108468942).
     }
 
+    /// LINIA2_KBD_FEED (1020): у собеседника при наборе исчезала вся переписка (пустой экран), после отправки
+    /// возвращалась. Длинная переписка → тап в поле → набор нескольких строк и символов → последние и предыдущие
+    /// сообщения видны (ячейки есть и в видимой области ленты между шапкой и панелью ввода), лента не пустая.
+    func test25c_FeedStaysVisibleWhileTyping() {
+        openPeerChat()
+        let stamp = String(Int(Date().timeIntervalSince1970) % 100000)
+        // Длинная переписка: 12 своих сообщений подряд (история CI тоже копится).
+        for i in 1...12 { sendMessage("Лента \(stamp)-\(i)"); usleep(400_000) }
+        sleep(2)
+        let input = chatInput()
+        let nav = app.navigationBars.firstMatch
+        func assertFeedVisible(_ when: String) {
+            let top = nav.exists ? nav.frame.maxY : 0
+            let bottom = input.frame.minY
+            XCTAssertGreaterThan(bottom - top, 80, "\(when): лента сжалась (между шапкой и полем \(bottom - top) pt)")
+            for i in [12, 11] {
+                let m = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Лента \(stamp)-\(i)")).firstMatch
+                XCTAssertTrue(m.exists, "\(when): нет сообщения «Лента …-\(i)» — лента пустая")
+                if m.exists {
+                    let f = m.frame
+                    XCTAssertTrue(f.maxY > top + 1 && f.minY < bottom - 1,
+                                  "\(when): «Лента …-\(i)» вне видимой области (\(f.minY)…\(f.maxY), видно \(top)…\(bottom))")
+                }
+            }
+            let cells = app.cells.allElementsBoundByIndex.filter { $0.exists && $0.frame.maxY > top + 1 && $0.frame.minY < bottom - 1 }
+            XCTAssertGreaterThanOrEqual(cells.count, 2, "\(when): в видимой области ленты меньше двух сообщений")
+        }
+        // Клавиатура скрыта и открыта заново (как у пользователя: открыл чат → тап в поле → набор).
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).swipeDown()
+        sleep(1)
+        input.tap()
+        dismissKeyboardTips()
+        wait(app.keyboards.firstMatch, "клавиатура", timeout: 8)
+        sleep(1)
+        assertFeedVisible("клавиатура открыта")
+        input.typeText("П")
+        sleep(1)
+        assertFeedVisible("набран 1 символ")
+        input.typeText("ривет, это проверка")
+        sleep(1)
+        assertFeedVisible("набрана строка")
+        input.typeText("\nвторая строка\nтретья строка\nчетвёртая")
+        sleep(1)
+        assertFeedVisible("поле в 4 строки")
+        screenshot("chat-typing-feed")
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 30))
+        sleep(1)
+        assertFeedVisible("стёрто")
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 30))
+    }
+
     func test26_RotationNoCrash() {
         openPeerChat()
         for o in [UIDeviceOrientation.landscapeLeft, .portrait, .landscapeRight, .portrait] {
