@@ -72,15 +72,45 @@ extension MessageViewController {
         let barTop = r.minY - cur, barBottom = r.maxY - cur
         // Клавиатура пристыкована снизу и заметно выше самой панели (не только панель без клавиатуры).
         let docked = kb.minY < H - 1 && kb.maxY >= H - 1 && kb.height > bar.bounds.height + 100
-        guard docked, barTop > kb.minY + 1 else { apply(target, 0); return }
+        guard docked, barTop > kb.minY + 1 else {
+            apply(target, 0)
+            // Панель подняла система: всё равно проверяем, что последние сообщения не остались под клавиатурой.
+            if docked { linia2RevealLastMessages(panelTop: min(barTop, kb.minY)) }
+            return
+        }
         // Верх панели под клавиатурой — система её не подняла: низ панели — к верху клавиатуры.
         let lift = -(barBottom - kb.minY)
         Cache.log.info("LINIA2_KBD_LIFT: panel not lifted by system (top %f, keyboard %f), lift %f", Double(barTop), Double(kb.minY), Double(lift))
         apply(target, lift)
+        defer { linia2RevealLastMessages(panelTop: kb.minY - bar.bounds.height) }
         if let cv = collectionView {
             let need = H - kb.minY + bar.bounds.height
-            if cv.contentInset.bottom < need { cv.contentInset.bottom = need }
+            if cv.contentInset.bottom < need {
+                cv.contentInset.bottom = need
+                cv.verticalScrollIndicatorInsets.bottom = need
+            }
         }
+    }
+
+    /// LINIA2_KBD_REVEAL: после появления клавиатуры низ ленты должен быть над панелью ввода. Если пользователь
+    /// был у конца переписки (низ ленты — не дальше клавиатуры+панели ниже верха панели), а последние сообщения
+    /// остались под клавиатурой — поднимаем ленту ровно на это расстояние. Если листал историю выше — не трогаем.
+    func linia2RevealLastMessages(panelTop: CGFloat) {
+        guard Linia2Config.shared.feature("kbdLift"), let cv = collectionView, cv.window != nil else { return }
+        let H = cv.window?.bounds.height ?? UIScreen.main.bounds.height
+        let contentBottom = cv.convert(CGPoint(x: 0, y: cv.contentSize.height), to: nil).y
+        let overlap = contentBottom - panelTop
+        guard overlap > 1, overlap <= (H - panelTop) + 80 else { return }
+        let need = H - panelTop
+        if cv.contentInset.bottom < need {
+            cv.contentInset.bottom = need
+            cv.verticalScrollIndicatorInsets.bottom = need
+        }
+        let maxY = max(-cv.adjustedContentInset.top, cv.contentSize.height + cv.adjustedContentInset.bottom - cv.bounds.height)
+        let y = min(cv.contentOffset.y + overlap, maxY)
+        guard y > cv.contentOffset.y + 0.5 else { return }
+        Cache.log.info("LINIA2_KBD_REVEAL: last messages under keyboard, scroll %f", Double(y - cv.contentOffset.y))
+        cv.setContentOffset(CGPoint(x: cv.contentOffset.x, y: y), animated: true)
     }
 
     @objc func adjustForKeyboard(_ notification: Notification) {
