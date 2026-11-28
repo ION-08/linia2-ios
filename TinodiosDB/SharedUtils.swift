@@ -32,6 +32,8 @@ public class SharedUtils {
 
     // App Tinode api key.
     private static let kApiKey = "AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K"
+    /// LINIA2 (1019): ключ API для проверки маршрутов без входа (Linia2RouteProbe).
+    public static var linia2ApiKey: String { kApiKey }
 
     static public let kAppDefaults = UserDefaults(suiteName: BaseDb.kAppGroupId)!
     static let kAppKeychain = KeychainWrapper(serviceName: "co.tinode.tinodios", accessGroup: BaseDb.kAppGroupId)

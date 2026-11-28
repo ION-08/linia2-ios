@@ -43,7 +43,38 @@ public class Connection: WebSocketConnectionDelegate {
         return Date().timeIntervalSince(t) < 10
     }
 
-    private var webSocketConnection: WebSocket?
+    // MARK: LINIA2 (сборка 1019): маршруты (транспорт + адрес) и автоматическое переключение
+
+    /// Только автотесты (-l2-uitest -l2-block-ws): WebSocket «заблокирован» — подключение висит, как под ТСПУ.
+    public static var linia2TestBlockWS = false
+    /// Переход на следующий маршрут, если подключение не открылось за столько секунд (features.transportSwitchSeconds).
+    public static var linia2SwitchTimeout: TimeInterval = 5
+    /// Отправили запрос (с id) и ни одного сообщения от сервера столько секунд — канал «завис» (ТСПУ пропускает
+    /// первые пакеты и режет дальше): следующий маршрут. 0 — выключено (features.transportStallSeconds).
+    public static var linia2StallTimeout: TimeInterval = 30
+
+    private let routeLock = NSLock()
+    /// Текущий транспорт (под routeLock). Отдельный объект на каждый тип; WebSocket — тот же, что и раньше.
+    private var transportValue: Linia2Transport?
+    private var webSocketConnection: Linia2Transport? {
+        get { routeLock.lock(); defer { routeLock.unlock() }; return transportValue }
+        set { routeLock.lock(); transportValue = newValue; routeLock.unlock() }
+    }
+    private var transports: [Linia2TransportKind: Linia2Transport] = [:]
+    /// Маршруты по порядку. Один маршрут (по умолчанию / расширение уведомлений) — поведение как до 1019:
+    /// без таймаута перехода и без проверки «зависания».
+    private var routes: [Linia2Route] = []
+    private var routeIndex = 0
+    private var activeRoute: Linia2Route?
+    private var attemptSeq = 0
+    private var awaitingFirstMessage = false
+    private var failedInCycle = 0
+    private var lastSendWithReply = Date.distantPast
+    private var lastReceive = Date.distantPast
+    private var basePath = "/v0/channels"
+    /// Маршрутов больше одного (пишется под routeLock вместе со списком).
+    private var multiRouteValue = false
+    private var multiRoute: Bool { multiRouteValue }
     private var connectionListener: ConnectionListener?
     private var endpointComponenets: URLComponents
     private var apiKey: String
@@ -75,7 +106,7 @@ public class Connection: WebSocketConnectionDelegate {
     // Opaque parameter passed to onConnect. Used once then discarded.
     private var param: Any?
 
-    init(open url: URL, with apiKey: String, notify listener: ConnectionListener?) {
+    init(open url: URL, with apiKey: String, notify listener: ConnectionListener?, routes: [Linia2Route] = []) {
         self.apiKey = apiKey
         // TODO: apply necessary URL modifications.
         self.endpointComponenets = URLComponents(url: url, resolvingAgainstBaseURL: false)!
@@ -89,8 +120,152 @@ public class Connection: WebSocketConnectionDelegate {
         if endpointComponenets.port == nil {
             endpointComponenets.port = useTLS ? 443 : 80
         }
-        self.webSocketConnection = WebSocket(timeout: kConnectionTimeout, delegate: self)
+        let ws = WebSocket(timeout: kConnectionTimeout, delegate: self)
+        self.transports[.ws] = ws
+        self.webSocketConnection = ws
+        if !endpointComponenets.path.isEmpty { basePath = endpointComponenets.path }
+        self.routes = routes
+        self.multiRouteValue = routes.count > 1
         maybeInitReconnectClosure()
+    }
+
+    /// Транспорт нужного типа (создаётся один раз). Под routeLock.
+    private func transportLocked(_ kind: Linia2TransportKind) -> Linia2Transport {
+        if kind == .ws && Connection.linia2TestBlockWS {
+            if let t = transports[.ws], t is Linia2BlackholeTransport { return t }
+            let t = Linia2BlackholeTransport()
+            transports[.ws] = t
+            return t
+        }
+        if let t = transports[kind] { return t }
+        let t: Linia2Transport
+        switch kind {
+        case .ws: t = WebSocket(timeout: kConnectionTimeout, delegate: self)
+        case .lpH3: t = Linia2LongPoll(http3: true, delegate: self)
+        case .lp: t = Linia2LongPoll(http3: false, delegate: self)
+        }
+        transports[kind] = t
+        return t
+    }
+
+    /// Новый список маршрутов (изменились настройки). Живое соединение не трогаем — список для следующих подключений.
+    func linia2SetRoutes(_ newRoutes: [Linia2Route]) {
+        routeLock.lock()
+        let cur = activeRoute ?? (routes.indices.contains(routeIndex) ? routes[routeIndex] : nil)
+        routes = newRoutes
+        multiRouteValue = newRoutes.count > 1
+        if let c = cur, let i = newRoutes.firstIndex(of: c), transportValue?.state == .open || transportValue?.state == .connecting {
+            routeIndex = i
+        } else {
+            routeIndex = 0
+        }
+        failedInCycle = 0
+        routeLock.unlock()
+    }
+
+    /// Следующее подключение — с маршрута номер index (возврат на основной).
+    func linia2SelectRoute(_ index: Int) {
+        routeLock.lock()
+        if routes.indices.contains(index) { routeIndex = index }
+        failedInCycle = 0
+        routeLock.unlock()
+    }
+
+    var linia2RouteStatus: Linia2RouteStatus? {
+        routeLock.lock(); defer { routeLock.unlock() }
+        let r: Linia2Route?
+        if let a = activeRoute { r = a } else if routes.indices.contains(routeIndex) { r = routes[routeIndex] } else { r = nil }
+        guard let route = r ?? endpointRoute else { return nil }
+        let n = max(routes.count, 1)
+        let idx = (routes.firstIndex(of: route) ?? 0) + 1
+        return Linia2RouteStatus(route: route, netProtocol: transportValue?.linia2NetProtocol,
+                                 connected: transportValue?.state == .open && !awaitingFirstMessage,
+                                 index: idx, count: n, failedInCycle: failedInCycle)
+    }
+
+    private var endpointRoute: Linia2Route? {
+        guard let h = endpointComponenets.host else { return nil }
+        return Linia2Route(kind: .ws, host: h, port: endpointComponenets.port)
+    }
+
+    /// Маршрут не удался (ошибка до первого ответа, таймаут, «зависание»): следующий по кругу.
+    /// true — пробовать следующий сразу; false — круг пройден, дальше — обычные паузы переподключения.
+    private func noteRouteFailure(_ why: String) -> Bool {
+        routeLock.lock()
+        guard routes.count > 1 else { routeLock.unlock(); return false }
+        let failed = activeRoute ?? routes[min(routeIndex, routes.count - 1)]
+        routeIndex = Linia2TransportPlan.next(after: routes.firstIndex(of: failed) ?? routeIndex, count: routes.count)
+        failedInCycle += 1
+        let again = failedInCycle < routes.count
+        if !again { failedInCycle = 0 }
+        let next = routes[routeIndex]
+        routeLock.unlock()
+        Tinode.linia2Event?("route-fail", ["route": failed.id, "why": why, "next": next.id, "now": again ? 1 : 0])
+        connectionListener?.onRouteChanged()
+        return again
+    }
+
+    /// Бросить текущий маршрут: транспорт отцепляется (его события больше не приходят), ожидающим — обрыв,
+    /// подключение по следующему маршруту.
+    private func abandonRoute(_ why: String, wasOpen: Bool) {
+        routeLock.lock()
+        let old = transportValue
+        transportValue = nil
+        awaitingFirstMessage = false
+        routeLock.unlock()
+        let again = noteRouteFailure(why)
+        old?.close(byUs: true)
+        if wasOpen {
+            enqueue { self.connectionListener?.onDisconnect(isServerOriginated: false, code: .abnormalClosure, reason: "route-\(why)") }
+        }
+        guard autoreconnect else { return }
+        if again {
+            connectQueue.async { self.connectSocket() }
+        }
+        if !reconnecting {
+            reconnecting = true
+            connectWithBackoffAsync()
+        }
+    }
+
+    private func scheduleRouteChecks(attempt: Int) {
+        guard multiRoute else { return }
+        let timeout = max(1, Connection.linia2SwitchTimeout)
+        connectQueue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self = self else { return }
+            self.routeLock.lock()
+            let stuck = self.attemptSeq == attempt && self.transportValue?.state == .connecting
+            self.routeLock.unlock()
+            if stuck { self.abandonRoute("timeout", wasOpen: false) }
+        }
+    }
+
+    /// После открытия: первый ответ сервера за 2 × таймаут перехода; дальше — проверка «зависания» каждые 5 с.
+    private func scheduleOpenChecks(attempt: Int) {
+        guard multiRoute else { return }
+        let timeout = max(2, Connection.linia2SwitchTimeout * 2)
+        connectQueue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self = self else { return }
+            self.routeLock.lock()
+            let silent = self.attemptSeq == attempt && self.awaitingFirstMessage && self.transportValue?.state == .open
+            self.routeLock.unlock()
+            if silent { self.abandonRoute("no-reply", wasOpen: true) }
+        }
+        scheduleStallCheck(attempt: attempt)
+    }
+
+    private func scheduleStallCheck(attempt: Int) {
+        connectQueue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self = self else { return }
+            let stall = Connection.linia2StallTimeout
+            self.routeLock.lock()
+            let same = self.attemptSeq == attempt && self.transportValue?.state == .open && self.routes.count > 1
+            let stuck = same && stall > 0 && self.lastSendWithReply > self.lastReceive
+                && Date().timeIntervalSince(self.lastSendWithReply) > stall
+            self.routeLock.unlock()
+            guard same else { return }
+            if stuck { self.abandonRoute("stall", wasOpen: true) } else { self.scheduleStallCheck(attempt: attempt) }
+        }
     }
 
     // LINIA2 (большой аккаунт: сигналы звонка доходили с задержкой 3–7 с): входящие сообщения разбираются
@@ -117,7 +292,20 @@ public class Connection: WebSocketConnectionDelegate {
             || text.contains("\"event\":\"ice-candidate\"") || text.contains("\"event\":\"hang-up\"")
     }
 
-    func onConnected(connection: WebSocket) {
+    private func isCurrent(_ t: Linia2Transport) -> Bool {
+        routeLock.lock(); defer { routeLock.unlock() }
+        return t === transportValue
+    }
+
+    func onConnected(connection: Linia2Transport) {
+        guard isCurrent(connection) else { return }
+        routeLock.lock()
+        let attempt = attemptSeq
+        awaitingFirstMessage = multiRoute
+        lastReceive = Date()
+        lastSendWithReply = .distantPast
+        routeLock.unlock()
+        scheduleOpenChecks(attempt: attempt)
         self.backoffSteps.reset()
         let r = self.reconnecting
         self.reconnecting = false
@@ -126,10 +314,23 @@ public class Connection: WebSocketConnectionDelegate {
         enqueue { self.connectionListener?.onConnect(reconnecting: r, param: p) }
     }
 
-    func onDisconnected(connection: WebSocket, isServerOriginated clean: Bool, closeCode: URLSessionWebSocketTask.CloseCode, reason: String) {
+    func onDisconnected(connection: Linia2Transport, isServerOriginated clean: Bool, closeCode: URLSessionWebSocketTask.CloseCode, reason: String) {
+        // LINIA2 (1019): события отцепленного транспорта (сменили маршрут) не трогают текущее соединение.
+        guard isCurrent(connection) else { return }
+        routeLock.lock()
+        let neverAnswered = awaitingFirstMessage || activeRoute == nil
+        awaitingFirstMessage = false
+        activeRoute = nil
+        routeLock.unlock()
         enqueue { self.connectionListener?.onDisconnect(isServerOriginated: clean, code: closeCode, reason: reason) }
         // LINIA2: закрыли мы сами — переподключение решает тот, кто закрыл (не запускаем цикл).
         guard reason != Tinode.linia2ClientCancelReason else { return }
+        // Маршрут не дал ни одного ответа сервера — следующий маршрут сразу (без паузы), пока круг не пройден.
+        if multiRoute && neverAnswered && autoreconnect {
+            if noteRouteFailure("error") {
+                connectQueue.async { self.connectSocket() }
+            }
+        }
         guard !self.reconnecting else {
             return
         }
@@ -139,13 +340,30 @@ public class Connection: WebSocketConnectionDelegate {
         }
     }
 
-    func onError(connection: WebSocket, error: Error) {
+    func onError(connection: Linia2Transport, error: Error) {
         // LINIA2: обрыв сообщается один раз — через onDisconnected (раньше onError + onDisconnected давали
         // два handleDisconnect подряд: двойной сброс тем/обещаний и двойной счёт обрывов в Linia2Failover).
         Tinode.log.error("Connection error: %@", error.localizedDescription)
     }
 
-    func onMessage(connection: WebSocket, text: String) {
+    func onMessage(connection: Linia2Transport, text: String) {
+        guard isCurrent(connection) else { return }
+        routeLock.lock()
+        lastReceive = Date()
+        var proven: Linia2Route?
+        if awaitingFirstMessage || activeRoute == nil {
+            awaitingFirstMessage = false
+            failedInCycle = 0
+            if routes.indices.contains(routeIndex) { activeRoute = routes[routeIndex] } else { activeRoute = endpointRoute }
+            proven = activeRoute
+        }
+        let n = routes.count
+        routeLock.unlock()
+        if let r = proven {
+            let proto = connection.linia2NetProtocol
+            Tinode.linia2Event?("route-up", ["route": r.id, "proto": proto ?? "", "n": n])
+            connectionListener?.onRouteUp(route: r, netProtocol: proto)
+        }
         if Connection.isUrgentCallSignal(text) {
             // Сигналы звонка — между собой по порядку (все на очереди сокета), без ожидания разбора остального.
             self.connectionListener?.onMessage(with: text)
@@ -156,7 +374,7 @@ public class Connection: WebSocketConnectionDelegate {
         enqueue { self.connectionListener?.onMessage(with: text) }
     }
 
-    func onMessage(connection: WebSocket, data: Data) {
+    func onMessage(connection: Linia2Transport, data: Data) {
         // Unexpected data message.
     }
 
@@ -179,14 +397,31 @@ public class Connection: WebSocketConnectionDelegate {
         }
     }
 
-    private func createUrlRequest() throws -> URLRequest {
-        var request = URLRequest(url: endpointComponenets.url!)
-        request.addValue(apiKey, forHTTPHeaderField: "X-Tinode-APIKey")
-        return request
-    }
-
-    private func openConnection(with urlRequest: URLRequest) {
-        self.webSocketConnection?.connect(req: urlRequest)
+    /// LINIA2 (1019): транспорт и адрес текущего маршрута. Без списка маршрутов — WebSocket на адрес из Tinode (как раньше).
+    private func openConnection() {
+        routeLock.lock()
+        var url = endpointComponenets.url!
+        var kind = Linia2TransportKind.ws
+        if !routes.isEmpty {
+            if !routes.indices.contains(routeIndex) { routeIndex = 0 }
+            let r = routes[routeIndex]
+            if let u = r.url(path: basePath) { url = u; kind = r.kind }
+        }
+        let t = transportLocked(kind)
+        let prev = transportValue
+        transportValue = t
+        attemptSeq += 1
+        let attempt = attemptSeq
+        awaitingFirstMessage = multiRoute
+        activeRoute = nil
+        let n = routes.count
+        let idx = routeIndex
+        routeLock.unlock()
+        if let p = prev, p !== t { p.close(byUs: true) }
+        if n > 1 { Tinode.linia2Event?("route-try", ["route": "\(kind.rawValue)://\(url.host ?? "")", "i": idx + 1, "n": n]) }
+        t.connect(url: url, apiKey: apiKey)
+        scheduleRouteChecks(attempt: attempt)
+        if n > 1 { connectionListener?.onRouteChanged() }
     }
     private func connectSocket() {
         guard !isConnected else { return }
@@ -207,8 +442,7 @@ public class Connection: WebSocketConnectionDelegate {
         }
         lastAttemptAt = Date()
         attemptLock.unlock()
-        let request = try! createUrlRequest()
-        self.openConnection(with: request)
+        self.openConnection()
     }
 
     private func connectWithBackoffAsync() {
@@ -244,7 +478,7 @@ public class Connection: WebSocketConnectionDelegate {
 
     func disconnect() {
         attemptLock.lock(); closeGeneration += 1; attemptLock.unlock()
-        webSocketConnection?.close()
+        webSocketConnection?.close(byUs: true)
         if autoreconnect {
             autoreconnect = false
             reconnectClosure!.cancel()
@@ -261,7 +495,18 @@ public class Connection: WebSocketConnectionDelegate {
         ws.linia2Ping(timeout: timeout, done: done)
     }
 
+    /// LINIA2 (1019): маршрут не работает, хотя транспорт открыт (например, вход не проходит) — следующий маршрут.
+    func linia2AbandonRoute(_ why: String) {
+        guard multiRoute, let t = webSocketConnection, t.state == .open || t.state == .connecting else { return }
+        connectQueue.async { self.abandonRoute(why, wasOpen: t.state == .open) }
+    }
+
     func send(payload data: Data) {
+        if multiRoute && Linia2TransportPlan.expectsReply(data) {
+            routeLock.lock()
+            if lastSendWithReply <= lastReceive { lastSendWithReply = Date() }
+            routeLock.unlock()
+        }
         webSocketConnection?.send(data: data)
     }
 
@@ -272,4 +517,13 @@ protocol ConnectionListener {
     func onMessage(with message: String)
     func onDisconnect(isServerOriginated: Bool, code: URLSessionWebSocketTask.CloseCode, reason: String)
     func onError(error: Error)
+    /// LINIA2 (1019): маршрут дал первый ответ сервера.
+    func onRouteUp(route: Linia2Route, netProtocol: String?)
+    /// LINIA2 (1019): начата попытка по другому маршруту / маршрут не удался (для статуса в интерфейсе).
+    func onRouteChanged()
+}
+
+extension ConnectionListener {
+    func onRouteUp(route: Linia2Route, netProtocol: String?) {}
+    func onRouteChanged() {}
 }

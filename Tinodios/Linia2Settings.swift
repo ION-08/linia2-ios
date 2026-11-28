@@ -965,6 +965,7 @@ private final class PaddedBubbleLabel: UILabel {
 // MARK: - О приложении
 
 final class Linia2AboutViewController: UIViewController {
+    private let transportLabel = UILabel()
     private static let siteURL = URL(string: "https://\(SharedUtils.kLinia2Host)")
 
     override func viewDidLoad() {
@@ -985,8 +986,18 @@ final class Linia2AboutViewController: UIViewController {
         let versionLabel = label("Версия \(version) (сборка \(build))", L2.font(17, .semibold), L2.textPrimary)
         let serverLabel = label("Сервер: \(SharedUtils.kLinia2Host)", L2.font(15), L2.textSecondary)
         let tinodeLabel = label("Основано на Tinode (Apache 2.0)", L2.font(15), L2.textSecondary)
+        // LINIA2 (1019): диагностика канала — транспорт · адрес · HTTP-версия · номер маршрута.
+        transportLabel.text = "Соединение: " + Linia2Transports.shared.statusLine
+        transportLabel.font = L2.font(13)
+        transportLabel.textColor = L2.textSecondary
+        transportLabel.textAlignment = .center
+        transportLabel.numberOfLines = 0
+        transportLabel.accessibilityIdentifier = "l2.about.transport"
+        NotificationCenter.default.addObserver(forName: Linia2Transports.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.transportLabel.text = "Соединение: " + Linia2Transports.shared.statusLine
+        }
 
-        let infoStack = UIStackView(arrangedSubviews: [versionLabel, serverLabel, tinodeLabel])
+        let infoStack = UIStackView(arrangedSubviews: [versionLabel, serverLabel, tinodeLabel, transportLabel])
         infoStack.axis = .vertical
         infoStack.spacing = 8
         let infoCard = UIView()

@@ -15,6 +15,7 @@
 //    copyrows/copyplain/copyread — копия базы, снятая перед стиранием: значений / открытых / прочитанных новым ключом.
 //    «l2.test.tree» — дерево файлов (Documents, Library, Caches, tmp, App Group) до и после.
 //  L2_TEST_OUTBOX=текст — перед стиранием положить в очередь отправки неотправленное сообщение (не должно уйти).
+//  tr — маршрут канала после входа: 0 ws, 1 lp-h3, 2 lp, −1 нет. -l2-block-ws — WebSocket «заблокирован» (висит).
 //  L2_TEST_UNREACHABLE=N — «сервер недоступен» первые N с после запуска (подключение не идёт), затем — как обычно.
 //  L2_TEST_VOIP_REPLAY=1 — после входа (PIN пройден): payload VoIP push «started» по звонку topic+seq → повтор →
 //    «hang-up» → снова «started» с тем же topic+seq (повтор после завершения) → «started» устаревший (ts −120 с).
@@ -61,6 +62,10 @@ enum Linia2TestHook {
     /// До подключения (в начале didFinishLaunching).
     static func applyLaunchOverrides() {
         guard enabled else { return }
+        // LINIA2 (1019): «WebSocket заблокирован» (подключение висит, как под ТСПУ) — переход на long-polling.
+        if ProcessInfo.processInfo.arguments.contains("-l2-block-ws") {
+            Connection.linia2TestBlockWS = true
+        }
         if let n = ProcessInfo.processInfo.environment["L2_TEST_UNREACHABLE"].flatMap({ Double($0) }), n > 0 {
             Connection.linia2StartupBlockedUntil = Date().addingTimeInterval(n)
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + n + 0.2) {
@@ -297,6 +302,7 @@ enum Linia2TestHook {
             ("hupms", Linia2TestProbe.lastHangupCloseMs), ("rend", Linia2TestProbe.remoteEnds),
             ("eng", Linia2TestProbe.callEngine), ("nbg", Linia2TestProbe.nativeBg), ("wsw", Linia2TestProbe.webSwitches),
             ("wswice", Linia2TestProbe.webSwitchIceMs), ("bga", Linia2TestProbe.bgAnswers), ("pstorm", Linia2TestProbe.pathEvents),
+            ("tr", Linia2Transports.shared.testCode),
             ("queued", c["queued"] ?? -1), ("oldf", wiped ? oldFiles().count : -1),
             ("copyrows", copy["rows"] ?? -1), ("copyplain", copy["plain"] ?? -1), ("copyread", copy["read"] ?? -1),
         ]

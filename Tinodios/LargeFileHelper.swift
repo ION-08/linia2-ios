@@ -88,6 +88,8 @@ public class LargeFileHelper: NSObject {
         headers.forEach({ (key: String, value: String) in
             request.addValue(value, forHTTPHeaderField: key)
         })
+        // LINIA2 (1019): канал идёт через long-polling по HTTP/3 — файлы тоже сразу по HTTP/3 (TCP может резаться).
+        if Linia2Transports.shared.preferHTTP3 { request.assumesHTTP3Capable = true }
     }
 
     public static func addAuthQueryParams(to url: URL, using tinode: Tinode) -> URL {

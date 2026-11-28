@@ -7,15 +7,26 @@
 
 import Foundation
 
+/// LINIA2 (сборка 1019, транспорты): события любого транспорта (WebSocket, long-polling) — см. Linia2Transport.swift.
 protocol WebSocketConnectionDelegate {
-    func onConnected(connection: WebSocket)
-    func onDisconnected(connection: WebSocket, isServerOriginated clean: Bool, closeCode: URLSessionWebSocketTask.CloseCode, reason: String)
-    func onError(connection: WebSocket, error: Error)
-    func onMessage(connection: WebSocket, text: String)
-    func onMessage(connection: WebSocket, data: Data)
+    func onConnected(connection: Linia2Transport)
+    func onDisconnected(connection: Linia2Transport, isServerOriginated clean: Bool, closeCode: URLSessionWebSocketTask.CloseCode, reason: String)
+    func onError(connection: Linia2Transport, error: Error)
+    func onMessage(connection: Linia2Transport, text: String)
+    func onMessage(connection: Linia2Transport, data: Data)
 }
 
-class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate {
+class WebSocket: NSObject, URLSessionWebSocketDelegate, URLSessionDelegate, Linia2Transport {
+    /// LINIA2: протокол транспорта для диагностики (WebSocket поверх HTTP/1.1 upgrade).
+    var linia2NetProtocol: String? { "ws" }
+
+    /// LINIA2: Linia2Transport — запрос как раньше (ключ API в заголовке X-Tinode-APIKey).
+    func connect(url: URL, apiKey: String) {
+        var request = URLRequest(url: url)
+        request.addValue(apiKey, forHTTPHeaderField: "X-Tinode-APIKey")
+        connect(req: request)
+    }
+
     /// LINIA2: максимальный размер одного входящего сообщения. По умолчанию у URLSessionWebSocketTask — 1 МБ:
     /// ответ {meta sub} на 'me' большого аккаунта (сотни чатов с аватарами в pub) больше — receive падал
     /// («Message too long»), сокет закрывался клиентом (на сервере — 1005), вход не завершался.

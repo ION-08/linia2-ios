@@ -38,6 +38,7 @@
 		B0876012243F1DD900B464D1 /* FndTopic.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0876011243F1DD900B464D1 /* FndTopic.swift */; };
 		B0876014243F1E4000B464D1 /* ComTopic.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0876013243F1E4000B464D1 /* ComTopic.swift */; };
 		B089261627838F4600C419C0 /* WebSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = B089261527838F4600C419C0 /* WebSocket.swift */; };
+		4C1A2B3C4D5E6F7081920B02 /* Linia2Transport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A2B3C4D5E6F7081920B01 /* Linia2Transport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +88,7 @@
 		B0876011243F1DD900B464D1 /* FndTopic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FndTopic.swift; sourceTree = "<group>"; };
 		B0876013243F1E4000B464D1 /* ComTopic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComTopic.swift; sourceTree = "<group>"; };
 		B089261527838F4600C419C0 /* WebSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocket.swift; sourceTree = "<group>"; };
+		4C1A2B3C4D5E6F7081920B01 /* Linia2Transport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Linia2Transport.swift; sourceTree = "<group>"; };
 		C8B1F7A52439924B698AC915 /* libPods-TinodeSDKTests.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-TinodeSDKTests.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D80621A4BCCAF3C0B58C06E5 /* Pods-TinodeSDK.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TinodeSDK.release.xcconfig"; path = "Pods/Target Support Files/Pods-TinodeSDK/Pods-TinodeSDK.release.xcconfig"; sourceTree = "<group>"; };
 		FD6888AEFAE0E94A350A75E8 /* Pods-TinodeSDKTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TinodeSDKTests.release.xcconfig"; path = "Pods/Target Support Files/Pods-TinodeSDKTests/Pods-TinodeSDKTests.release.xcconfig"; sourceTree = "<group>"; };
@@ -149,6 +151,7 @@
 				0A431BF82244A14D00A837F7 /* Topic.swift */,
 				0A431BF92244A14D00A837F7 /* User.swift */,
 				B089261527838F4600C419C0 /* WebSocket.swift */,
+				4C1A2B3C4D5E6F7081920B01 /* Linia2Transport.swift */,
 				0A431BDF2244A0BE00A837F7 /* TinodeSDK.h */,
 				0A431BE02244A0BE00A837F7 /* Info.plist */,
 			);
@@ -347,6 +350,7 @@
 				0A610453227563E200C6A9D2 /* Log.swift in Sources */,
 				B0876012243F1DD900B464D1 /* FndTopic.swift in Sources */,
 				B089261627838F4600C419C0 /* WebSocket.swift in Sources */,
+				4C1A2B3C4D5E6F7081920B02 /* Linia2Transport.swift in Sources */,
 				0AAF8BEC23B70E2A00C9CFBB /* MsgRange.swift in Sources */,
 				0A81B317236FA896009AF14B /* Types.swift in Sources */,
 				0A44B0052244AAC500A98866 /* ServerMessages.swift in Sources */,

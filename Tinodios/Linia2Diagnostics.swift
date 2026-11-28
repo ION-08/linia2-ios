@@ -148,6 +148,7 @@ final class Linia2CallDiag {
     func start(_ info: [String: Any]) {
         var ev = info
         ev["type"] = "start"
+        ev["tr"] = Linia2Transports.shared.statusLine   // LINIA2 (1019): канал сигнализации (ws / lp-h3 / lp · адрес · h3/h2)
         add(ev)
         flush()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.sample() }

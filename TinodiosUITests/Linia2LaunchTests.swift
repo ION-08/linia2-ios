@@ -493,6 +493,36 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         app.terminate()
     }
 
+    /// LINIA2 (1019): WebSocket «заблокирован» (-l2-block-ws: подключение висит, как под ТСПУ) → через 5 с
+    /// приложение само переходит на long-polling (lp-h3), входит (conn=1, tr=1|2), плашка «Подключение…» уходит,
+    /// чат открывается. Последним в классе (имя testZ…), запоминание маршрута в автотестах выключено.
+    func testZ_WebSocketBlockedFallsBackToLongPoll() throws {
+        loginA()
+        app.terminate()
+        app.launchArguments += ["-l2-block-ws"]
+        defer { app.launchArguments.removeAll { $0 == "-l2-block-ws" } }
+        let t0 = Date()
+        app.launch()
+        passPin(required: true, "ws-заблокирован")
+        let s = waitHook("long-polling", timeout: 60) { ($0["conn"] ?? 0) == 1 && ($0["tr"] ?? -1) >= 1 }
+        let took = Date().timeIntervalSince(t0)
+        XCTAssertEqual(s["conn"], 1, "не вошли при заблокированном WebSocket")
+        XCTAssertTrue([1, 2].contains(s["tr"] ?? -1), "канал не через long-polling (tr=\(s["tr"] ?? -1))")
+        let launch = any("l2.test.launch")
+        let a = XCTAttachment(string: launch.exists ? (launch.value as? String ?? "") : "")
+        a.name = "launch-steps-lp"
+        a.lifetime = .keepAlways
+        add(a)
+        print(String(format: "L2-TIME testZ: ws blocked → tr=%d conn=%d за %.1f с", s["tr"] ?? -1, s["conn"] ?? -1, took))
+        let banner = any("l2.connection.status")
+        let gone = Date().addingTimeInterval(10)
+        while Date() < gone && banner.exists { usleep(300_000) }
+        XCTAssertFalse(banner.exists, "плашка соединения не исчезла после входа через long-polling")
+        assertTabsRespond("long-polling")
+        screenshot("ws-blocked-lp")
+        app.terminate()
+    }
+
     func test6_StartWithServerUnreachable() throws {
         loginA()
         let row = app.cells.firstMatch

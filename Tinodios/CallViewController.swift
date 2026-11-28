@@ -257,6 +257,28 @@ class WebRTCClient: NSObject {
     /// LINIA2 (диагностика реальной сети): счётчики кандидатов «тип/протокол», напр. "relay/udp".
     private let diagLock = NSLock()
     private var diagLocalCands: [String: Int] = [:]
+    /// LINIA2 (1019, только отображение): выбранная пара ICE идёт через TURN (relay) — из отчёта diagReportPair.
+    private var linia2RelaySelected: Bool?
+
+    /// LINIA2 (1019): состояние соединения для строки этапа на экране звонка — только чтение, логику не меняет.
+    struct Linia2Stage {
+        let signaling: RTCSignalingState
+        let gathering: RTCIceGatheringState
+        let ice: RTCIceConnectionState
+        let hasRemote: Bool
+        /// Вариантов ретранслятора (URL turn:/turns: в iceServers) — «резервный канал K из N».
+        let relayVariants: Int
+        /// Найдено своих кандидатов ICE.
+        let candidates: Int
+        let relaySelected: Bool?
+    }
+    var linia2Stage: Linia2Stage? {
+        guard let pc = localPeer else { return nil }
+        let turns = pc.configuration.iceServers.flatMap { $0.urlStrings }.filter { $0.hasPrefix("turn") }.count
+        diagLock.lock(); let n = diagLocalCands.values.reduce(0, +); let relay = linia2RelaySelected; diagLock.unlock()
+        return Linia2Stage(signaling: pc.signalingState, gathering: pc.iceGatheringState, ice: pc.iceConnectionState,
+                           hasRemote: pc.remoteDescription != nil, relayVariants: turns, candidates: n, relaySelected: relay)
+    }
     private var diagRemoteCands: [String: Int] = [:]
     /// Отправлено собеседнику локальных кандидатов по типу (host/srflx/relay/prflx) и не отправлено (нет seq/топика).
     private var diagLocalSent: [String: Int] = [:]
@@ -409,6 +431,10 @@ class WebRTCClient: NSObject {
             if let p = sel {
                 let l = cands[(p["localCandidateId"] as? String) ?? ""] ?? [:]
                 let r = cands[(p["remoteCandidateId"] as? String) ?? ""] ?? [:]
+                if let self = self {
+                    let relay = (l["candidateType"] as? String) == "relay" || (r["candidateType"] as? String) == "relay"
+                    self.diagLock.lock(); self.linia2RelaySelected = relay; self.diagLock.unlock()
+                }
                 ev["sel"] = "\((l["candidateType"] as? String) ?? "?")/\((l["protocol"] as? String) ?? "?") -> \((r["candidateType"] as? String) ?? "?")/\((r["protocol"] as? String) ?? "?")"
                 if let rtt = (p["currentRoundTripTime"] as? NSNumber)?.doubleValue { ev["rtt"] = Int(rtt * 1000) }
             }
@@ -629,6 +655,7 @@ class WebRTCClient: NSObject {
         }
         diagLock.lock()
         diagLocalCands = [:]; diagRemoteCands = [:]; diagLocalSent = [:]; diagLocalDropped = 0
+        linia2RelaySelected = nil
         diagRemoteAddOk = 0; diagRemoteAddFail = 0; diagLastAddErr = ""
         diagLock.unlock()
         // Треки создаются в setup(); после disconnect() их нет — не падаем на force-unwrap.
@@ -1562,6 +1589,8 @@ class CallViewController: UIViewController {
     private var linia2RingbackRestarts = 0
     /// Пошли медиаданные (первый звук / первый кадр видео собеседника) — с этого момента таймер.
     private var linia2MediaAt: Date?
+    /// LINIA2 (1019): начало этапа «Соединение…» (после ответа) — для строки этапа и «резервный канал K из N».
+    var linia2StageSince: Date?
 
     // LINIA2: переподключение при смене сети / обрыве (как в Telegram/WhatsApp): звонок держится до kReconnectGrace с,
     // на экране «Переподключение…»; не восстановилось — «Связь потеряна».
@@ -2832,14 +2861,41 @@ extension CallViewController {
         if connectionLost || reconnectingSince != nil || isHeld { return linia2StatusText }
         if callDirection == .outgoing && !linia2Accepted { return "Вызов…" }
         let connecting = "Соединение… это может занять до 20 секунд"
-        guard let c = connectedAt else { return connecting }
+        guard let c = connectedAt else { return linia2StageText(connected: false) ?? connecting }
         let start = linia2MediaAt ?? c.addingTimeInterval(Self.kMediaGrace)
-        if start > Date() { return connecting }
+        if start > Date() { return linia2StageText(connected: true) ?? connecting }
         let sec = Int(Date().timeIntervalSince(start))
         let time = String(format: "%02d:%02d", sec / 60, sec % 60)
         return isPoorConnection ? "Плохая связь · \(time)" : "Идёт звонок \(time)"
     }
     static let kMediaGrace: TimeInterval = 5
+
+    /// LINIA2 (1019): строка этапа вместо долгого «Соединение…» — по реальным состояниям RTCPeerConnection
+    /// (только отображение): «Ответил» → «Обмен ключами шифрования…» → «Поиск пути соединения…» →
+    /// «Плохое соединение — пробуем резервный канал K из N…» (каждые 5 с, N — варианты TURN) →
+    /// «Подключение через ретранслятор…» / «Соединено…» → таймер. nil — прежний текст (движок WKWebView и т.п.).
+    func linia2StageText(connected: Bool) -> String? {
+        guard let st = webRTCClient.linia2Stage else { return nil }
+        if linia2StageSince == nil { linia2StageSince = Date() }
+        let el = Date().timeIntervalSince(linia2StageSince ?? Date())
+        if connected || st.ice == .connected || st.ice == .completed {
+            return st.relaySelected == true ? "Подключение через ретранслятор…" : "Соединено…"
+        }
+        if callDirection == .outgoing && el < 1.5 { return "Ответил" }
+        if !st.hasRemote || st.signaling != .stable { return "Обмен ключами шифрования…" }
+        switch st.ice {
+        case .new:
+            return "Обмен ключами шифрования…"
+        case .checking:
+            if el >= 5 && st.relayVariants > 1 {
+                let k = min(st.relayVariants, 2 + Int((el - 5) / 5))
+                return "Плохое соединение — пробуем резервный канал \(k) из \(st.relayVariants)…"
+            }
+            return st.candidates > 0 ? "Поиск пути соединения… (вариантов: \(st.candidates))" : "Поиск пути соединения…"
+        default:
+            return nil
+        }
+    }
 
     /// Первый звук или первый кадр собеседника.
     func linia2MediaArrived() {

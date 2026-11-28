@@ -125,6 +125,13 @@ public class Tinode {
     public static let kTopicNew = "new"
     /// LINIA2: причина «сокет закрыли мы сами» (cancel / смена адреса) — это не обрыв связи.
     public static let linia2ClientCancelReason = "l2-client-cancel"
+    /// LINIA2 (1019): маршруты подключения (транспорт + адрес) по порядку; nil / пусто — один WebSocket на hostName (как раньше).
+    /// Задаёт приложение (Linia2Transports); расширение уведомлений не задаёт.
+    public static var linia2RoutesProvider: (() -> [Linia2Route])?
+    /// LINIA2 (1019): маршрут дал первый ответ сервера (запомнить, диагностика). С очереди соединения.
+    public static var linia2RouteUp: ((Linia2Route, String?) -> Void)?
+    /// LINIA2 (1019): идёт перебор маршрутов / маршрут сменился (статус «резервный канал K из N»). С любой очереди.
+    public static var linia2RouteChanged: (() -> Void)?
     public static let kUserNew = "new"
     public static let kChannelNew = "nch"
     public static let kTopicMe = "me"
@@ -1071,6 +1078,36 @@ public class Tinode {
         _ = reconnectNow(interactively: true, reset: false)
     }
 
+    /// LINIA2 (1019): маршруты изменились (настройки) — для следующих подключений; живое соединение не трогаем.
+    public func linia2RefreshRoutes() {
+        let routes = Tinode.linia2RoutesProvider?() ?? []
+        operationsQueue.async { self.connection?.linia2SetRoutes(routes) }
+    }
+
+    /// LINIA2 (1019): текущий маршрут, протокол (h3/h2/ws), номер в списке — для диагностики и статуса.
+    public var linia2RouteStatus: Linia2RouteStatus? {
+        // Без operationsQueue (как isConnected): читается с главного потока каждые несколько секунд.
+        connection?.linia2RouteStatus
+    }
+
+    /// LINIA2 (1019): маршрут открыт, но не работает (вход не проходит) — следующий маршрут.
+    public func linia2AbandonRoute(why: String) {
+        let c: Connection? = operationsQueue.sync { connection }
+        c?.linia2AbandonRoute(why)
+    }
+
+    /// LINIA2 (1019): переподключиться по первому маршруту списка (основной снова доступен). Живое соединение
+    /// закрывается и открывается заново (вход по токену — автоматически).
+    public func linia2ReturnToFirstRoute() {
+        let routes = Tinode.linia2RoutesProvider?() ?? []
+        operationsQueue.sync {
+            connection?.linia2SetRoutes(routes)
+            connection?.linia2SelectRoute(0)
+        }
+        Tinode.linia2Event?("route-return", ["route": routes.first?.id ?? ""])
+        _ = reconnectNow(interactively: true, reset: true)
+    }
+
     /// LINIA2 (только автотесты, -l2-uitest): эмуляция обрыва сети на `seconds` с — веб-сокет закрывается,
     /// повторное подключение запрещено до срока, затем — сразу переподключение (вход — как обычно, autoLogin).
     public func linia2SimulateOutage(seconds: TimeInterval) {
@@ -1184,6 +1221,16 @@ public class Tinode {
             // LINIA2: соединение закрылось до входа — ожидающие connect() не должны ждать вечно.
             try? rejectAllPromises(err: TinodeError.notConnected("disconnected: \(reason)"))
         }
+        func onRouteUp(route: Linia2Route, netProtocol: String?) {
+            // Адрес для файлов и ссылок (baseURL) — тот, через который реально подключились.
+            let t = tinode
+            t.operationsQueue.async { if t.hostName != route.host { t.hostName = route.host } }
+            Tinode.linia2RouteUp?(route, netProtocol)
+            Tinode.linia2RouteChanged?()
+        }
+        func onRouteChanged() {
+            Tinode.linia2RouteChanged?()
+        }
         func onError(error: Error) {
             tinode.handleDisconnect(isServerOriginated: true, code: .invalid, reason: error.localizedDescription)
             Log.default.error("Tinode network error: %@", error.localizedDescription)
@@ -1251,7 +1298,8 @@ public class Tinode {
             connectionListener = TinodeConnectionListener(tinode: self)
             connection = Connection(open: endpointURL,
                                     with: apiKey,
-                                    notify: connectionListener)
+                                    notify: connectionListener,
+                                    routes: Tinode.linia2RoutesProvider?() ?? [])
         }
         let connectedPromise = PromisedReply<ServerMessage>()
         connectionListener!.addPromise(promise: connectedPromise)

@@ -191,6 +191,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Linia2LaunchLog.shared.measure("storage-start") { Linia2Storage.start() }
         // LINIA2: удалённые настройки (цвета, тексты, функции) — до применения темы.
         Linia2LaunchLog.shared.measure("config-start") { Linia2Config.shared.start() }
+        Linia2Transports.shared.start()   // LINIA2 (1019): маршруты канала (ws / lp-h3 / lp, зеркала) — до первого подключения
         DispatchQueue.main.async { Linia2Failover.shared.start() }   // LINIA2_FAILOVER: резервные адреса + «Подключение…»
         // LINIA2: тема и акцент.
         Linia2Theme.apply(to: window)

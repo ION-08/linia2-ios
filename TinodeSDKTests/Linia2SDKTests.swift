@@ -248,3 +248,165 @@ final class Linia2SubsStoreStub: Storage {
     func getMessage(fromTopic topic: TopicProto, byEffectiveSeqId seqId: Int) -> Message? { return nil }
     func getAllMsgVersions(fromTopic topic: TopicProto, forSeq seqId: Int, limit: Int?) -> [Int]? { return nil }
 }
+
+// MARK: - LINIA2 (1019): транспорты (порядок, конфиг, переключение, long-polling)
+
+final class Linia2TransportTests: XCTestCase {
+    private let hosts = ["v2.chat-linia.site", "v2b.chat-linia.site"]
+
+    func testDefaultOrderWsThenLpH3ThenLpForEachHost() {
+        let r = Linia2TransportPlan.parse(nil, hosts: hosts).map { $0.id }
+        XCTAssertEqual(r, ["ws://v2.chat-linia.site", "lp-h3://v2.chat-linia.site", "lp://v2.chat-linia.site",
+                           "ws://v2b.chat-linia.site", "lp-h3://v2b.chat-linia.site", "lp://v2b.chat-linia.site"])
+        XCTAssertEqual(Linia2TransportPlan.parse([], hosts: hosts).count, 6)
+    }
+
+    func testParseConfigOrderPortsAndInvalidEntries() {
+        let spec: [[String: Any]] = [
+            ["type": "lp-h3", "host": "V2.chat-linia.site"],
+            ["type": "ws"],                                         // без адреса — первый из hosts
+            ["type": "lp", "host": "bridge.example.ru", "port": 8443],
+            ["type": "lp", "host": "bridge.example.ru", "port": 8443], // повтор
+            ["type": "ftp", "host": "x.example.com"],              // неизвестный тип
+            ["type": "ws", "host": "bad host"],                     // неверный адрес
+            ["type": "ws", "host": "a.example.com", "port": 70000], // неверный порт
+            ["type": "lp", "host": "off.example.com", "enabled": false],
+            ["type": "lp-h3", "ip": "1.2.3.4", "host": "v2.chat-linia.site"], // по IP — не поддерживается
+            ["type": "ws", "host": "v2b.chat-linia.site", "port": 443],      // 443 = без порта
+        ]
+        let r = Linia2TransportPlan.parse(spec, hosts: hosts).map { $0.id }
+        XCTAssertEqual(r, ["lp-h3://v2.chat-linia.site", "ws://v2.chat-linia.site", "lp://bridge.example.ru:8443",
+                           "ws://v2b.chat-linia.site"])
+    }
+
+    func testParseAllInvalidFallsBackToDefault() {
+        let r = Linia2TransportPlan.parse([["type": "nope"], ["host": "x.example.com"]], hosts: hosts)
+        XCTAssertEqual(r, Linia2TransportPlan.defaultRoutes(hosts: hosts))
+    }
+
+    func testRememberedRouteFirstWithin24h() {
+        let base = Linia2TransportPlan.defaultRoutes(hosts: hosts)
+        let lp = Linia2Route(kind: .lpH3, host: "v2.chat-linia.site")
+        let now = Date()
+        let o = Linia2TransportPlan.order(base, remembered: lp, rememberedAt: now.addingTimeInterval(-3600), maxAge: 86400, now: now)
+        XCTAssertEqual(o.first, lp)
+        XCTAssertEqual(o.count, base.count)
+        XCTAssertEqual(o[1], base[0])
+        // Старше 24 ч — встроенный порядок.
+        let old = Linia2TransportPlan.order(base, remembered: lp, rememberedAt: now.addingTimeInterval(-90000), maxAge: 86400, now: now)
+        XCTAssertEqual(old, base)
+        // Маршрута нет в списке — без изменений.
+        let gone = Linia2TransportPlan.order(base, remembered: Linia2Route(kind: .lp, host: "x.example.com"),
+                                             rememberedAt: now, maxAge: 86400, now: now)
+        XCTAssertEqual(gone, base)
+    }
+
+    func testRouteIdRoundTripAndURLs() {
+        let r = Linia2Route(kind: .lp, host: "v2b.chat-linia.site", port: 8443)
+        XCTAssertEqual(Linia2Route(id: r.id), r)
+        XCTAssertNil(Linia2Route(id: "zz://host.example.com"))
+        XCTAssertNil(Linia2Route(id: "ws://host.example.com:0"))
+        XCTAssertEqual(r.url()?.absoluteString, "https://v2b.chat-linia.site:8443/v0/channels/lp")
+        XCTAssertEqual(Linia2Route(kind: .ws, host: "v2.chat-linia.site").url()?.absoluteString, "wss://v2.chat-linia.site:443/v0/channels")
+        XCTAssertEqual(Linia2Route(kind: .lpH3, host: "v2.chat-linia.site").url()?.absoluteString, "https://v2.chat-linia.site:443/v0/channels/lp")
+    }
+
+    func testNextRouteWrapsAround() {
+        XCTAssertEqual(Linia2TransportPlan.next(after: 0, count: 6), 1)
+        XCTAssertEqual(Linia2TransportPlan.next(after: 5, count: 6), 0)
+        XCTAssertEqual(Linia2TransportPlan.next(after: 0, count: 0), 0)
+    }
+
+    func testTransportKindSynonyms() {
+        XCTAssertEqual(Linia2TransportKind(config: "WSS"), .ws)
+        XCTAssertEqual(Linia2TransportKind(config: "h3"), .lpH3)
+        XCTAssertEqual(Linia2TransportKind(config: "longpoll"), .lp)
+        XCTAssertNil(Linia2TransportKind(config: "vless"))
+    }
+
+    func testLongPollBodySplitsConcatenatedMessages() {
+        let body = #"{"ctrl":{"id":"1","code":200}}{"data":{"content":"a}{b \"q\" ]","seq":3}} {"pres":{"what":"on"}}"#
+        let parts = Linia2TransportPlan.splitMessages(Data(body.utf8))
+        XCTAssertEqual(parts.count, 3)
+        XCTAssertEqual(parts[0], #"{"ctrl":{"id":"1","code":200}}"#)
+        XCTAssertTrue(parts[1].contains(#"a}{b \"q\" ]"#))
+        XCTAssertEqual(parts[2], #"{"pres":{"what":"on"}}"#)
+        XCTAssertEqual(Linia2TransportPlan.splitMessages(Data()).count, 0)
+        // Кириллица и эмодзи — целиком.
+        let ru = #"{"data":{"content":"Привет 👋"}}"#
+        XCTAssertEqual(Linia2TransportPlan.splitMessages(Data(ru.utf8)), [ru])
+    }
+
+    func testSidParsing() {
+        let d = Data(#"{"ctrl":{"params":{"sid":"RcRe3iNi3Qk"},"code":201,"text":"created"}}"#.utf8)
+        XCTAssertEqual(Linia2LongPoll.parseSid(d), "RcRe3iNi3Qk")
+        XCTAssertNil(Linia2LongPoll.parseSid(Data(#"{"ctrl":{"code":403}}"#.utf8)))
+    }
+
+    func testExpectsReply() {
+        XCTAssertTrue(Linia2TransportPlan.expectsReply(Data(#"{"pub":{"id":"12345","topic":"usrX"}}"#.utf8)))
+        XCTAssertFalse(Linia2TransportPlan.expectsReply(Data(#"{"note":{"topic":"usrX","what":"kp"}}"#.utf8)))
+    }
+
+    func testCallSignalDataMessageIsUrgentRegardlessOfTransport() {
+        // Звонковая сигнализация — обычные {info what=call} в том же канале: по long-polling приходят теми же строками.
+        let offer = #"{"info":{"topic":"usrA","from":"usrB","what":"call","event":"offer","seq":5,"payload":{}}}"#
+        let parts = Linia2TransportPlan.splitMessages(Data((offer + offer).utf8))
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertTrue(parts.allSatisfy { Connection.isUrgentCallSignal($0) })
+    }
+}
+
+/// Переключение маршрутов в Connection: WebSocket «заблокирован» (висит) → через таймаут — следующий маршрут.
+final class Linia2ConnectionFailoverTests: XCTestCase {
+    final class Listener: ConnectionListener {
+        var routesTried: [String] = []
+        var connected = false
+        func onConnect(reconnecting: Bool, param: Any?) { connected = true }
+        func onMessage(with message: String) {}
+        func onDisconnect(isServerOriginated: Bool, code: URLSessionWebSocketTask.CloseCode, reason: String) {}
+        func onError(error: Error) {}
+        func onRouteChanged() {}
+    }
+
+    func testBlockedWsSwitchesToNextRouteAfterTimeout() throws {
+        Connection.linia2TestBlockWS = true
+        let oldTimeout = Connection.linia2SwitchTimeout
+        Connection.linia2SwitchTimeout = 1
+        defer { Connection.linia2TestBlockWS = false; Connection.linia2SwitchTimeout = oldTimeout }
+        // Адрес .invalid не резолвится: второй маршрут (lp) быстро падает — проверяем только порядок попыток.
+        let routes = [Linia2Route(kind: .ws, host: "blocked.invalid"), Linia2Route(kind: .lp, host: "next.invalid")]
+        let l = Listener()
+        let c = Connection(open: URL(string: "wss://blocked.invalid/v0/channels")!, with: "key", notify: l, routes: routes)
+        var tried: [String] = []
+        let lock = NSLock()
+        let prev = Tinode.linia2Event
+        Tinode.linia2Event = { name, extra in
+            if name == "route-try" || name == "route-fail" {
+                lock.lock(); tried.append(name + ":" + ((extra["route"] as? String) ?? "")); lock.unlock()
+            }
+        }
+        defer { Tinode.linia2Event = prev }
+        try c.connect(reconnectAutomatically: true, withParam: nil)
+        XCTAssertEqual(c.linia2RouteStatus?.route.kind, .ws)
+        let end = Date().addingTimeInterval(6)
+        while Date() < end {
+            lock.lock(); let done = tried.contains("route-try:lp://next.invalid"); lock.unlock()
+            if done { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        c.disconnect()
+        lock.lock(); let t = tried; lock.unlock()
+        XCTAssertTrue(t.contains("route-fail:ws://blocked.invalid"), "заблокированный WebSocket не брошен по таймауту: \(t)")
+        XCTAssertTrue(t.contains("route-try:lp://next.invalid"), "следующий маршрут (lp) не пробовали: \(t)")
+    }
+
+    func testSingleRouteKeepsOldBehaviour() throws {
+        let l = Listener()
+        let c = Connection(open: URL(string: "wss://v2.chat-linia.site/v0/channels")!, with: "key", notify: l)
+        let st = c.linia2RouteStatus
+        XCTAssertEqual(st?.route.kind, .ws)
+        XCTAssertEqual(st?.count, 1)
+        XCTAssertEqual(st?.index, 1)
+    }
+}

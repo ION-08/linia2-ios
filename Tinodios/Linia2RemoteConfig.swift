@@ -98,26 +98,55 @@ final class Linia2Config {
         return true
     }
 
+    /// LINIA2 (1019): встроенные адреса конфига (bootstrap) — на случай, если основной домен заблокирован.
+    static let bootstrapURLs = ["https://v2.chat-linia.site/app-config.json", "https://v2b.chat-linia.site/app-config.json"]
+    private static let kLastConfigURL = "linia2.config.lastURL"
+
+    /// Адреса конфига по порядку: последний удачный → активный адрес сервера → остальные адреса (servers.hosts) →
+    /// servers.configUrls из последнего полученного конфига → встроенные. Только https, без повторов, не больше 16.
+    func configURLs() -> [URL] {
+        var list: [String] = []
+        if let last = UserDefaults.standard.string(forKey: Self.kLastConfigURL) { list.append(last) }
+        let active = SharedUtils.linia2ActiveHost
+        for h in [active] + SharedUtils.linia2Hosts.filter({ $0 != active }) { list.append("https://\(h)/app-config.json") }
+        list += strings("servers", "configUrls") ?? []
+        list += Self.bootstrapURLs
+        var seen = Set<String>()
+        var out: [URL] = []
+        for s in list {
+            guard let u = URL(string: s.trimmingCharacters(in: .whitespaces)), u.scheme?.lowercased() == "https", u.host != nil,
+                  s.count < 300, seen.insert(u.absoluteString).inserted else { continue }
+            out.append(u)
+            if out.count >= 16 { break }
+        }
+        return out
+    }
+
     func fetch() {
         if testOverride { return }
         lastFetch = Date()
-        // По очереди: активный адрес, затем остальные (резервные) — конфиг доступен, даже если основной заблокирован.
-        let active = SharedUtils.linia2ActiveHost
-        let hosts = [active] + SharedUtils.linia2Hosts.filter { $0 != active }
-        fetch(from: hosts)
+        // По очереди: последний удачный, активный адрес, резервные, bootstrap — сначала по HTTP/3 (QUIC проходит там,
+        // где TCP режется), затем те же адреса обычным HTTP.
+        let urls = configURLs()
+        fetch(from: urls.map { ($0, true) } + urls.map { ($0, false) })
     }
 
-    private func fetch(from hosts: [String]) {
-        guard let host = hosts.first,
-              let u = URL(string: "https://\(host)/app-config.json?t=\(Int(Date().timeIntervalSince1970))") else { return }
-        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
+    private func fetch(from attempts: [(URL, Bool)]) {
+        guard let first = attempts.first else { return }
+        let base = first.0, h3 = first.1
+        guard var c = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
+        c.queryItems = (c.queryItems ?? []) + [URLQueryItem(name: "t", value: String(Int(Date().timeIntervalSince1970)))]
+        guard let u = c.url else { return }
+        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: h3 ? 6 : 10)
         req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        req.assumesHTTP3Capable = h3
         URLSession.shared.dataTask(with: req) { [weak self] d, resp, _ in
             guard let self = self else { return }
             guard let d = d, (resp as? HTTPURLResponse)?.statusCode == 200, let obj = Self.validate(d) else {
-                if hosts.count > 1 { self.fetch(from: Array(hosts.dropFirst())) }
+                if attempts.count > 1 { self.fetch(from: Array(attempts.dropFirst())) }
                 return
             }
+            UserDefaults.standard.set(base.absoluteString, forKey: Self.kLastConfigURL)
             self.queue.async {
                 let changed = (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) !=
                     (try? JSONSerialization.data(withJSONObject: self.data, options: [.sortedKeys]))
@@ -282,6 +311,12 @@ final class Linia2Config {
     func strings(_ sectionName: String, _ key: String) -> [String]? {
         guard let a = section(sectionName)[key] as? [Any] else { return nil }
         return a.compactMap { $0 as? String }
+    }
+
+    /// LINIA2 (1019): список транспортов features.transports (см. Linia2Transports).
+    var transportSpec: [[String: Any]]? {
+        guard let a = section("features")["transports"] as? [Any] else { return nil }
+        return a.compactMap { $0 as? [String: Any] }
     }
 
     /// Встроенная функция включена? По умолчанию — да.
@@ -648,6 +683,10 @@ final class Linia2Failover: TinodeEventListener {
             self?.linia2HandlePath(ok: path.status == .satisfied)
         }
         monitor.start(queue: netQueue)
+        // LINIA2 (1019): перебор маршрутов — сразу обновить плашку («резервный канал K из N»).
+        nc.addObserver(forName: Linia2Transports.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateBanner()
+        }
         attemptStarted = Date()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in self?.tick() }
@@ -723,6 +762,8 @@ final class Linia2Failover: TinodeEventListener {
         guard now.timeIntervalSince(lastFailAt) >= 1 else { return }
         lastFailAt = now
         consecutiveFails += 1
+        // LINIA2 (1019): адреса перебирает список маршрутов (Linia2Transports) — здесь адрес не меняем.
+        guard !Linia2Transports.shared.handlesHosts else { return }
         guard consecutiveFails >= Linia2Failover.kFailsBeforeSwitch,
               now.timeIntervalSince(lastSwitchAt) >= Linia2Failover.kMinSwitchInterval else { return }
         switchToNext("\(consecutiveFails) неудачных подключений подряд (\(why))")
@@ -771,7 +812,8 @@ final class Linia2Failover: TinodeEventListener {
         // На резервном и без связи — раз в минуту проверяем основной. Рабочее соединение на резервном НЕ рвём
         // (сборка 1011: возврат на основной через 4 с после входа рвал живой сокет и запускал цикл).
         let primary = SharedUtils.linia2Hosts[0]
-        if !connected, !Cache.tinode.isConnected, SharedUtils.linia2ActiveHost != primary, Date().timeIntervalSince(lastProbe) > 60 {
+        if !Linia2Transports.shared.handlesHosts,
+           !connected, !Cache.tinode.isConnected, SharedUtils.linia2ActiveHost != primary, Date().timeIntervalSince(lastProbe) > 60 {
             lastProbe = Date()
             probe(primary) { [weak self] ok in if ok { self?.use(primary, why: "основной снова доступен") } }
         }
@@ -831,8 +873,10 @@ final class Linia2Failover: TinodeEventListener {
             return l
         }()
         // «Подключение…» — с маленькой пульсирующей линией логотипа; «Нет соединения» — без неё.
-        l.set(text: networkOK ? L2T("l2.net.connecting", "Подключение…") : L2T("l2.net.offline", "Нет соединения"),
-              pulse: networkOK)
+        // LINIA2 (1019): идёт переход на резервный маршрут — «Плохое соединение — … резервный канал K из N…».
+        var text = networkOK ? L2T("l2.net.connecting", "Подключение…") : L2T("l2.net.offline", "Нет соединения")
+        if networkOK, let fb = Linia2Transports.shared.fallbackText { text = fb }
+        l.set(text: text, pulse: networkOK)
         window.bringSubviewToFront(l)
     }
 }
@@ -868,6 +912,16 @@ final class Linia2ConnectionPill: UIView {
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
                                      stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
                                      stack.centerYAnchor.constraint(equalTo: centerYAnchor)])
+        // LINIA2 (1019): длинный текст («резервный канал K из N») — уменьшается, не выходит за экран.
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.65
+        label.lineBreakMode = .byTruncatingTail
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        guard let sv = superview else { return }
+        widthAnchor.constraint(lessThanOrEqualTo: sv.widthAnchor, constant: -24).isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -885,4 +939,181 @@ final class PaddedLabelL2: UILabel {
         let s = super.intrinsicContentSize
         return CGSize(width: s.width + 28, height: s.height)
     }
+}
+
+// MARK: - LINIA2 (сборка 1019): транспорты канала Tinode (ws / lp-h3 / lp) и зеркала
+
+/// Список маршрутов подключения (транспорт + адрес) из app-config и автоматическое переключение (TinodeSDK/Connection).
+/// app-config, раздел features:
+///   "transports": [{"type":"ws","host":"v2.chat-linia.site"}, {"type":"lp-h3","host":"v2.chat-linia.site"},
+///                  {"type":"lp","host":"v2b.chat-linia.site","port":8443}, …]   — порядок попыток;
+///                  нет поля — для каждого адреса servers.hosts: ws → lp-h3 → lp;
+///   "transportFailover": true      — включатель (false — только WebSocket и прежняя смена адресов);
+///   "transportSwitchSeconds": 5    — не подключилось за столько секунд — следующий маршрут (2…30);
+///   "transportStallSeconds": 30    — запрос без ответа столько секунд — канал «завис», следующий (0 — выкл.);
+///   "transportRememberHours": 24   — удачный маршрут первым при следующих подключениях столько часов;
+///   "transportReturnMinutes": 15   — раз в N минут проверять первый маршрут списка и вернуться на него (0 — выкл.).
+final class Linia2Transports {
+    static let shared = Linia2Transports()
+    static let changedNotification = Notification.Name("Linia2TransportsChanged")
+    private static let kLast = "linia2.transport.last"
+    private static let kLastAt = "linia2.transport.lastAt"
+
+    private let lock = NSLock()
+    private var routesValue: [Linia2Route] = []
+    private var baseValue: [Linia2Route] = []
+    private var started = false
+    private var timer: Timer?
+    private var lastReturnCheck = Date()
+    private var notAuthedSince: Date?
+    private var loginStallCount = 0
+    private var lastLoginStall = Date.distantPast
+    private var probing = false
+
+    /// Список для Connection (под замком — читается с очереди операций Tinode).
+    func routes() -> [Linia2Route] { lock.lock(); defer { lock.unlock() }; return routesValue }
+    private var baseRoutes: [Linia2Route] { lock.lock(); defer { lock.unlock() }; return baseValue }
+
+    var enabled: Bool { Linia2Config.shared.feature("transportFailover", default: true) }
+    /// Адреса перебирает список маршрутов (Linia2Failover адрес не меняет).
+    var handlesHosts: Bool { routes().count > 1 }
+
+    /// Запоминать удачный маршрут: в автотестах — только при L2_TEST_REMEMBER=1 (не переносить «lp» между тестами).
+    private var rememberAllowed: Bool {
+        !Linia2TestHook.enabled || ProcessInfo.processInfo.environment["L2_TEST_REMEMBER"] == "1"
+    }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        rebuild()
+        Tinode.linia2RoutesProvider = { Linia2Transports.shared.routes() }
+        Tinode.linia2RouteUp = { r, p in Linia2Transports.shared.routeUp(r, p) }
+        Tinode.linia2RouteChanged = {
+            DispatchQueue.main.async { NotificationCenter.default.post(name: Linia2Transports.changedNotification, object: nil) }
+        }
+        NotificationCenter.default.addObserver(forName: Linia2Config.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.rebuild()
+            DispatchQueue.global(qos: .utility).async { Cache.tinode.linia2RefreshRoutes() }
+        }
+        DispatchQueue.main.async {
+            self.timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.tick() }
+        }
+    }
+
+    private func clamp(_ v: Double?, _ def: Double, _ lo: Double, _ hi: Double) -> Double {
+        guard let v = v else { return def }
+        return min(hi, max(lo, v))
+    }
+
+    private var rememberHours: Double { clamp(Linia2Config.shared.number("features", "transportRememberHours"), 24, 0, 24 * 30) }
+    private var returnMinutes: Double {
+        let v = Linia2Config.shared.number("features", "transportReturnMinutes") ?? 15
+        return v <= 0 ? 0 : min(24 * 60, max(2, v))
+    }
+
+    /// Пересобрать список из настроек и запомненного маршрута.
+    func rebuild() {
+        let cfg = Linia2Config.shared
+        Connection.linia2SwitchTimeout = clamp(cfg.number("features", "transportSwitchSeconds"), 5, 2, 30)
+        let stall = cfg.number("features", "transportStallSeconds") ?? 30
+        Connection.linia2StallTimeout = stall <= 0 ? 0 : min(300, max(10, stall))
+        var base: [Linia2Route] = []
+        var list: [Linia2Route] = []
+        if enabled {
+            base = Linia2TransportPlan.parse(cfg.transportSpec, hosts: SharedUtils.linia2Hosts)
+            let d = UserDefaults.standard
+            let last = d.string(forKey: Self.kLast).flatMap { Linia2Route(id: $0) }
+            let at = d.object(forKey: Self.kLastAt) as? Date
+            list = Linia2TransportPlan.order(base, remembered: rememberAllowed ? last : nil, rememberedAt: at,
+                                             maxAge: rememberHours * 3600)
+        }
+        lock.lock(); baseValue = base; routesValue = list; lock.unlock()
+    }
+
+    private func routeUp(_ r: Linia2Route, _ proto: String?) {
+        if rememberAllowed {
+            let d = UserDefaults.standard
+            d.set(r.id, forKey: Self.kLast)
+            d.set(Date(), forKey: Self.kLastAt)
+        }
+        if SharedUtils.linia2Hosts.contains(r.host), SharedUtils.linia2ActiveHost != r.host {
+            SharedUtils.linia2ActiveHost = r.host
+        }
+        L2Log.event("l2_transport", ["route": r.id, "proto": proto ?? ""])
+    }
+
+    private func forgetRemembered() {
+        UserDefaults.standard.removeObject(forKey: Self.kLast)
+        UserDefaults.standard.removeObject(forKey: Self.kLastAt)
+        rebuild()
+    }
+
+    private var inCall: Bool { CallManager.state.uuid != nil || CallManager.state.inConversation }
+
+    private func tick() {
+        guard routes().count > 1 else { return }
+        let t = Cache.tinode
+        let active = UIApplication.shared.applicationState == .active
+        // Транспорт открыт, а вход не проходит дольше 15 с (канал пропускает мелкие пакеты и режет крупные) —
+        // следующий маршрут. Не чаще раза в 30 с и не больше 3 раз подряд (вдруг дело не в канале).
+        if t.myUid != nil, t.isConnected, !t.isConnectionAuthenticated {
+            if notAuthedSince == nil { notAuthedSince = Date() }
+            if active, let s = notAuthedSince, Date().timeIntervalSince(s) > 15, Date().timeIntervalSince(lastLoginStall) > 30,
+               loginStallCount < 3 {
+                lastLoginStall = Date()
+                loginStallCount += 1
+                notAuthedSince = nil
+                L2Log.event("l2_transport_login_stall")
+                DispatchQueue.global(qos: .userInitiated).async { t.linia2AbandonRoute(why: "login-stall") }
+            }
+        } else {
+            notAuthedSince = nil
+            if t.isConnectionAuthenticated { loginStallCount = 0 }
+        }
+        // На резервном маршруте — раз в N минут проверить первый маршрут списка (без входа) и вернуться на него.
+        let every = returnMinutes
+        guard every > 0, !probing, active, !inCall, t.isConnectionAuthenticated,
+              Date().timeIntervalSince(lastReturnCheck) > every * 60,
+              let first = baseRoutes.first, let cur = t.linia2RouteStatus, cur.connected, cur.route != first else { return }
+        lastReturnCheck = Date()
+        probing = true
+        Linia2RouteProbe.probe(first, apiKey: SharedUtils.linia2ApiKey) { [weak self] ok, proto in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.probing = false
+                L2Log.event("l2_transport_return_probe", ["route": first.id, "ok": ok ? 1 : 0, "proto": proto ?? ""])
+                guard ok, !self.inCall, UIApplication.shared.applicationState == .active else { return }
+                self.forgetRemembered()
+                DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2ReturnToFirstRoute() }
+            }
+        }
+    }
+
+    /// Плашка при переходе: «Плохое соединение — подключаемся через резервный канал K из N…» (nil — обычный текст).
+    var fallbackText: String? {
+        guard routes().count > 1, let st = Cache.tinode.linia2RouteStatus, !st.connected, st.count > 1,
+              st.index > 1 || st.failedInCycle > 0 else { return nil }
+        let fmt = L2T("l2.net.fallback", "Плохое соединение — подключаемся через резервный канал %d из %d…")
+        return String(format: fmt, st.index, st.count)
+    }
+
+    /// Строка диагностики: «lp-h3 · v2.chat-linia.site · h3 · 2/6».
+    var statusLine: String {
+        guard let st = Cache.tinode.linia2RouteStatus else { return "—" }
+        var s = "\(st.route.kind.rawValue) · \(st.route.host)" + (st.route.port.map { ":\($0)" } ?? "")
+        s += " · " + (st.netProtocol ?? "?")
+        if st.count > 1 { s += " · \(st.index)/\(st.count)" }
+        if !st.connected { s += " · подключение" }
+        return s
+    }
+
+    /// Для тестового крючка: 0 — ws, 1 — lp-h3, 2 — lp, −1 — не подключены.
+    var testCode: Int {
+        guard let st = Cache.tinode.linia2RouteStatus, st.connected, Cache.tinode.isConnectionAuthenticated else { return -1 }
+        switch st.route.kind { case .ws: return 0; case .lpH3: return 1; case .lp: return 2 }
+    }
+
+    /// Файлы (загрузка/скачивание) — тоже по HTTP/3, если канал идёт через lp-h3.
+    var preferHTTP3: Bool { Cache.tinode.linia2RouteStatus?.route.kind == .lpH3 }
 }
