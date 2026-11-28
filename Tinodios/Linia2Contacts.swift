@@ -54,13 +54,59 @@ enum Linia2ContactInfo {
         return "Без имени"
     }
 
-    /// «был(а) 5 минут назад» / «был(а) недавно».
+    /// L2_LASTSEEN: «был(а) только что» / «был(а) 5 мин назад» / «был(а) сегодня в 10:15» / «был(а) вчера в 22:04» /
+    /// «был(а) 27 нояб. в 9:30» (другой год — с годом) / «был(а) недавно» (время неизвестно). Как в вебе (linia2.js l2SeenFmt).
     static func lastSeenText(of topic: DefaultComTopic) -> String {
-        guard let when = topic.lastSeen?.when else { return "был(а) недавно" }
-        let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.unitsStyle = .full
-        return "был(а) " + f.localizedString(for: when, relativeTo: Date())
+        return lastSeenText(when: topic.lastSeen?.when)
+    }
+
+    static func lastSeenText(when: Date?, now: Date = Date()) -> String {
+        guard let when = when else { return "был(а) недавно" }
+        return "был(а) " + lastSeenWhen(when, now: now)
+    }
+
+    /// Без «был(а)»: «только что», «5 мин назад», «сегодня в 10:15», «вчера в 22:04», «27 нояб. в 9:30».
+    static func lastSeenWhen(_ when: Date, now: Date = Date()) -> String {
+        let sec = now.timeIntervalSince(when)
+        if sec < 60 { return "только что" }
+        if sec < 3600 { return "\(Int(sec / 60)) мин назад" }
+        let cal = Calendar.current
+        let c = cal.dateComponents([.year, .month, .day, .hour, .minute], from: when)
+        let hm = String(format: "%d:%02d", c.hour ?? 0, c.minute ?? 0)
+        if cal.isDate(when, inSameDayAs: now) { return "сегодня в " + hm }
+        if let y = cal.date(byAdding: .day, value: -1, to: now), cal.isDate(when, inSameDayAs: y) { return "вчера в " + hm }
+        let months = ["янв.", "февр.", "марта", "апр.", "мая", "июня", "июля", "авг.", "сент.", "окт.", "нояб.", "дек."]
+        let m = months[max(0, min(11, (c.month ?? 1) - 1))]
+        let year = (c.year ?? 0) != cal.component(.year, from: now) ? " \(c.year ?? 0)" : ""
+        return "\(c.day ?? 1) \(m)\(year) в " + hm
+    }
+}
+
+/// L2_LASTSEEN: раз в минуту обновляет «был(а) N мин назад» на видимых экранах (шапка чата, контакты, профиль).
+/// Один таймер на всё приложение (с допуском 10 с), слабые ссылки; работа на тике — только смена текста подписей.
+protocol Linia2SeenRefreshable: AnyObject {
+    func linia2RefreshSeen()
+}
+
+final class Linia2SeenTicker {
+    static let shared = Linia2SeenTicker()
+    private let targets = NSHashTable<AnyObject>.weakObjects()
+    private var timer: Timer?
+
+    func register(_ t: Linia2SeenRefreshable) {
+        assert(Thread.isMainThread)
+        targets.add(t)
+        guard timer == nil else { return }
+        let tm = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.tick() }
+        tm.tolerance = 10
+        RunLoop.main.add(tm, forMode: .common)
+        timer = tm
+    }
+
+    private func tick() {
+        let list = targets.allObjects.compactMap { $0 as? Linia2SeenRefreshable }
+        if list.isEmpty { timer?.invalidate(); timer = nil; return }
+        list.forEach { $0.linia2RefreshSeen() }
     }
 }
 
@@ -129,10 +175,8 @@ final class Linia2ContactCell: UITableViewCell {
         if online {
             subtitleLabel.text = "в сети"
             subtitleLabel.textColor = L2.online
-        } else if let login = Linia2ContactInfo.login(of: topic) {
-            subtitleLabel.text = "@" + login
-            subtitleLabel.textColor = L2.textSecondary
         } else {
+            // L2_LASTSEEN: в списке контактов — когда был(а) в сети (логин — в карточке контакта)
             subtitleLabel.text = Linia2ContactInfo.lastSeenText(of: topic)
             subtitleLabel.textColor = L2.textSecondary
         }
@@ -210,6 +254,7 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
             Cache.tinode.addListener(l)
         }
         reload()
+        Linia2SeenTicker.shared.register(self)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -505,6 +550,7 @@ final class Linia2ContactCardViewController: UIViewController {
             Cache.tinode.addListener(l)
         }
         refresh()
+        Linia2SeenTicker.shared.register(self)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -572,5 +618,25 @@ final class Linia2ContactCardViewController: UIViewController {
         Linia2Moderation.confirmToggleBlock(from: self, topic: topic, sourceView: blockButton) { [weak self] _ in
             self?.refresh()
         }
+    }
+}
+
+// MARK: - L2_LASTSEEN: обновление «был(а) …» раз в минуту
+
+extension Linia2ContactsViewController: Linia2SeenRefreshable {
+    func linia2RefreshSeen() {
+        guard viewIfLoaded?.window != nil else { return }
+        for case let cell as Linia2ContactCell in tableView.visibleCells {
+            guard let ip = tableView.indexPath(for: cell), ip.section < sections.count,
+                  ip.row < sections[ip.section].topics.count else { continue }
+            cell.configure(sections[ip.section].topics[ip.row])
+        }
+    }
+}
+
+extension Linia2ContactCardViewController: Linia2SeenRefreshable {
+    func linia2RefreshSeen() {
+        guard viewIfLoaded?.window != nil else { return }
+        refresh()
     }
 }

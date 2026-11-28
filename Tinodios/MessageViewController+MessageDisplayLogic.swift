@@ -91,6 +91,10 @@ extension MessageViewController: MessageDisplayLogic {
         navBarAvatarView.online = online
         navBarAvatarView.linia2StyleIndicator()
         linia2SetStatus(online)
+        // L2_LASTSEEN: pres «off» обновляет время визита в MeTopic — перечитать чуть позже, чтобы не показать старое
+        if online == false {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.linia2RefreshSeen() }
+        }
     }
 
     func runTypingAnimation() {

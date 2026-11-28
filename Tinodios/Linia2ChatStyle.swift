@@ -368,9 +368,25 @@ extension MessageViewController {
             status?.text = online == true ? "кто-то в сети" : "группа"
             dot?.isHidden = online != true
         } else {
-            status?.text = online == true ? "в сети" : "не в сети"
+            // L2_LASTSEEN: не «не в сети», а когда был(а): «был(а) 5 мин назад», «был(а) вчера в 22:04»…
+            if online == true {
+                status?.text = "в сети"
+            } else if let t = topic {
+                status?.text = Linia2ContactInfo.lastSeenText(of: t)
+            } else {
+                status?.text = "был(а) недавно"
+            }
             dot?.isHidden = online != true
+            Linia2SeenTicker.shared.register(self)
         }
+    }
+
+    /// L2_LASTSEEN: тик раз в минуту — только видимая шапка p2p; «печатает…» не перебиваем.
+    func linia2RefreshSeen() {
+        guard viewIfLoaded?.window != nil, topic?.isP2PType ?? false,
+              let status = linia2TitleContainer?.viewWithTag(Self.kL2Status) as? UILabel,
+              status.text != "печатает…" else { return }
+        linia2SetStatus(topic?.online)
     }
 
     func linia2SetTyping() {
@@ -590,3 +606,5 @@ extension NSAttributedString {
         return m
     }
 }
+
+extension MessageViewController: Linia2SeenRefreshable {}
