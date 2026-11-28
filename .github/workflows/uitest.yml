@@ -21,11 +21,11 @@ on:
         type: boolean
         default: false
       asc_run_id:
-        description: "Загрузить скриншоты в App Store Connect из артефакта store-shots прогона с этим ID (asc-screenshots.yml)"
+        description: "Загрузить скриншоты в App Store Connect: branch — из ci/store-shots/ ветки, иначе ID прогона с артефактом store-shots"
         type: string
         default: ""
       asc_files:
-        description: "Порядок снимков для App Store (пусто — по умолчанию asc-screenshots.yml)"
+        description: "Файлы по порядку через запятую (пусто — все по алфавиту)"
         type: string
         default: ""
       launch_only:
@@ -850,7 +850,8 @@ jobs:
           path: ${{ runner.temp }}/store/*.log
           if-no-files-found: ignore
 
-  # Загрузка скриншотов в App Store Connect (без отправки на модерацию): store_shots=false, asc_run_id=<id прогона store-shots>.
+  # Загрузка скриншотов в App Store Connect (без отправки на модерацию), asc-screenshots.yml:
+  #   asc_run_id=branch — снимки из ci/store-shots/ этой ветки; asc_run_id=<id прогона store-shots> — из его артефакта.
   asc-screenshots:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.asc_run_id != '' }}
     permissions:
@@ -858,6 +859,6 @@ jobs:
       contents: read
     uses: ./.github/workflows/asc-screenshots.yml
     with:
-      run_id: ${{ inputs.asc_run_id }}
-      files: ${{ inputs.asc_files != '' && inputs.asc_files || 'promax-dark-chats,promax-dark-chat,promax-dark-call,promax-dark-calls,promax-light-chats,promax-light-chat,promax-dark-group,promax-dark-privacy' }}
+      run_id: ${{ inputs.asc_run_id != 'branch' && inputs.asc_run_id || '' }}
+      files: ${{ inputs.asc_files }}
     secrets: inherit

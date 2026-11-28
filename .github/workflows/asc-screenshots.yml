@@ -1,20 +1,26 @@
-# Скриншоты App Store: берёт PNG из артефакта store-shots прогона «UI tests» (store_shots=true) и загружает их
-# в версию в состоянии PREPARE_FOR_SUBMISSION для локалей ru и en-US:
-#   6.9" (1320×2868) — набор APP_IPHONE_69 (если API его не знает — APP_IPHONE_67, он тоже принимает 1320×2868);
-#   6.5" (1284×2778) — те же снимки, масштаб 97,3 % с обрезкой 6 px сверху и снизу, набор APP_IPHONE_65.
-# Альфа-канал убирается (Apple не принимает PNG с альфой). Загрузка — reservation → PUT частей → PATCH uploaded + MD5.
-# Ничего не отправляет на модерацию. Запуск: gh workflow run asc-screenshots.yml -f run_id=<id прогона store-shots>.
+# Скриншоты App Store → версия в состоянии PREPARE_FOR_SUBMISSION, локали ru и en-US. Ничего не отправляет на модерацию.
+# Источник снимков:
+#   • по умолчанию — папка ci/store-shots/ в ветке, с которой запущен workflow (PNG/JPEG/HEIC, порядок — по имени файла);
+#   • run_id=<id прогона «UI tests» store_shots=true> — артефакт store-shots этого прогона.
+# Размеры без искажений и без обрезки: снимок вписывается с сохранением пропорций, свободные края заливаются
+# цветом соответствующего края снимка (фон). Альфа убирается.
+#   6.9" — 1320×2868, набор APP_IPHONE_69 (если API его не знает — APP_IPHONE_67, он тоже принимает 1320×2868);
+#   6.5" — 1284×2778, набор APP_IPHONE_65.
+# Загрузка: reservation (POST appScreenshots) → PUT частей → PATCH uploaded + MD5 → ждём assetDeliveryState COMPLETE.
+# Запуск (пока файл не в main — через uitest.yml):
+#   gh workflow run uitest.yml --ref store-shots -f asc_run_id=branch            # из ci/store-shots/
+#   gh workflow run uitest.yml --ref store-shots -f asc_run_id=<id прогона>      # из артефакта store-shots
 name: ASC screenshots
 
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "ID прогона «UI tests» с артефактом store-shots"
-        required: true
+        description: "Пусто — снимки из ci/store-shots/ ветки; иначе ID прогона «UI tests» с артефактом store-shots"
+        default: ""
       files:
-        description: "Снимки по порядку (имена без .png из артефакта)"
-        default: "promax-dark-chats,promax-dark-chat,promax-dark-call,promax-dark-calls,promax-light-chats,promax-light-chat,promax-dark-group,promax-dark-privacy"
+        description: "Имена файлов по порядку через запятую (пусто — все снимки по алфавиту)"
+        default: ""
       locales:
         description: "Локали"
         default: "ru,en-US"
@@ -31,26 +37,20 @@ on:
   workflow_call:
     inputs:
       run_id:
-        description: "ID прогона «UI tests» с артефактом store-shots"
-        required: true
         type: string
+        default: ""
       files:
-        description: "Снимки по порядку (имена без .png из артефакта)"
-        default: "promax-dark-chats,promax-dark-chat,promax-dark-call,promax-dark-calls,promax-light-chats,promax-light-chat,promax-dark-group,promax-dark-privacy"
         type: string
+        default: ""
       locales:
-        description: "Локали"
-        default: "ru,en-US"
         type: string
+        default: "ru,en-US"
       replace:
-        description: "Удалить прежние снимки в этих наборах"
         type: boolean
         default: true
       six5:
-        description: "Загрузить и набор 6.5\""
         type: boolean
         default: true
-
 
 permissions:
   actions: read
@@ -61,38 +61,80 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
+        if: ${{ inputs.run_id == '' }}
+        with:
+          sparse-checkout: ci/store-shots
+
+      - name: Снимки из ci/store-shots/
+        if: ${{ inputs.run_id == '' }}
+        run: |
+          mkdir -p shots
+          [ -d ci/store-shots ] && find ci/store-shots -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.heic' \) -exec cp {} shots/ \;
+          ls -la shots
+
       - uses: actions/download-artifact@v4
+        if: ${{ inputs.run_id != '' }}
         with:
           name: store-shots
           path: shots
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
 
-      - name: Подготовка PNG (без альфы, 6.9" и 6.5")
+      - name: Подготовка (вписать без искажений, 6.9" и 6.5")
         env:
           FILES: ${{ inputs.files }}
         run: |
-          pip install --quiet pillow
+          pip install --quiet pillow pillow-heif
           python3 - <<'PY'
           import os
-          from PIL import Image
-          names = [n.strip() for n in os.environ["FILES"].split(",") if n.strip()]
+          from PIL import Image, ImageOps
+          try:
+              import pillow_heif; pillow_heif.register_heif_opener()
+          except Exception:
+              pass
+          exts = (".png", ".jpg", ".jpeg", ".heic")
+          avail = sorted(f for f in os.listdir("shots") if f.lower().endswith(exts))
+          want = [n.strip() for n in os.environ.get("FILES", "").split(",") if n.strip()]
+          names = []
+          for n in (want or avail):
+              hit = [f for f in avail if f == n or os.path.splitext(f)[0] == n]
+              if hit: names.append(hit[0])
+              else: print("нет снимка", n)
+          def edge(im, box):
+              c = im.crop(box).resize((1, 1), Image.BOX).getpixel((0, 0))
+              return tuple(c[:3])
+          def fit(im, W, H):
+              w, h = im.size
+              k = min(W / w, H / h)
+              nw, nh = max(1, round(w * k)), max(1, round(h * k))
+              if (nw, nh) != (w, h):
+                  im = im.resize((nw, nh), Image.LANCZOS)
+              x, y = (W - nw) // 2, (H - nh) // 2
+              bg = edge(im, (0, 0, nw, min(8, nh)))
+              out = Image.new("RGB", (W, H), bg)
+              # Края — цветом соответствующей кромки снимка.
+              if y > 0:
+                  out.paste(edge(im, (0, 0, nw, min(8, nh))), (0, 0, W, y))
+                  out.paste(edge(im, (0, nh - min(8, nh), nw, nh)), (0, y + nh, W, H))
+              if x > 0:
+                  out.paste(edge(im, (0, 0, min(8, nw), nh)), (0, 0, x, H))
+                  out.paste(edge(im, (nw - min(8, nw), 0, nw, nh)), (x + nw, 0, W, H))
+              out.paste(im, (x, y))
+              return out
           os.makedirs("out/69", exist_ok=True); os.makedirs("out/65", exist_ok=True)
-          k = 0
-          for n in names:
-              p = f"shots/{n}.png"
-              if not os.path.exists(p):
-                  print("нет снимка", n); continue
-              im = Image.open(p).convert("RGB")
-              if im.size != (1320, 2868):
-                  print("пропуск — размер", n, im.size); continue
-              k += 1
-              im.save(f"out/69/{k:02d}-{n}.png", optimize=True)
-              s = im.resize((1284, 2790), Image.LANCZOS).crop((0, 6, 1284, 2784))
-              s.save(f"out/65/{k:02d}-{n}.png", optimize=True)
-          print("готово:", k)
+          for k, f in enumerate(names[:10], 1):
+              im = ImageOps.exif_transpose(Image.open(os.path.join("shots", f))).convert("RGB")
+              if im.width > im.height:
+                  print("пропуск — альбомная ориентация", f, im.size); continue
+              base = f"{k:02d}-" + os.path.splitext(f)[0].replace(" ", "_")
+              fit(im, 1320, 2868).save(f"out/69/{base}.png", optimize=True)
+              fit(im, 1284, 2778).save(f"out/65/{base}.png", optimize=True)
+              print(f, im.size, "→", base)
+          print("готово:", len(os.listdir("out/69")))
           PY
           ls -la out/69 out/65
+          [ "$(ls out/69 | wc -l)" -gt 0 ] || { echo "::error::нет снимков"; exit 1; }
 
       - name: Загрузка в App Store Connect
         env:
