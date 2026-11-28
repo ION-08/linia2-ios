@@ -666,8 +666,17 @@ open class Topic<DP: Codable & Mergeable, DR: Codable & Mergeable, SP: Codable, 
         subsLastUpdated = loaded.max(by: {(s1, s2) -> Bool in
             ((s1.updated ?? Date.distantPast) < (s2.updated ?? Date.distantPast))
         })?.updated
-        subs = (Dictionary(uniqueKeysWithValues: loaded.map { ($0.user, $0) }) as! [String: Subscription<SP, SR>])
-        return subs!.count
+        // LINIA2 (вылет 1013 на iPhone 17, iOS 27.3): в локальной базе бывают повторяющиеся подписки
+        // (одинаковый user) или подписки без user — Dictionary(uniqueKeysWithValues:) на дубле — fatal error.
+        // Без user — пропускаем; на дубле оставляем самую свежую (updated).
+        var map = [String: Subscription<SP, SR>]()
+        for s in loaded {
+            guard let u = s.user, let sub = s as? Subscription<SP, SR> else { continue }
+            if let old = map[u], (old.updated ?? Date.distantPast) > (sub.updated ?? Date.distantPast) { continue }
+            map[u] = sub
+        }
+        subs = map
+        return map.count
     }
 
     public func getSubscription(for key: String?) -> Subscription<SP, SR>? {
