@@ -27,6 +27,31 @@ on:
         type: boolean
         default: true
 
+  # Вызов из uitest.yml (input asc_run_id) — пока этот файл не в main, ручной запуск недоступен.
+  workflow_call:
+    inputs:
+      run_id:
+        description: "ID прогона «UI tests» с артефактом store-shots"
+        required: true
+        type: string
+      files:
+        description: "Снимки по порядку (имена без .png из артефакта)"
+        default: "promax-dark-chats,promax-dark-chat,promax-dark-call,promax-dark-calls,promax-light-chats,promax-light-chat,promax-dark-group,promax-dark-privacy"
+        type: string
+      locales:
+        description: "Локали"
+        default: "ru,en-US"
+        type: string
+      replace:
+        description: "Удалить прежние снимки в этих наборах"
+        type: boolean
+        default: true
+      six5:
+        description: "Загрузить и набор 6.5\""
+        type: boolean
+        default: true
+
+
 permissions:
   actions: read
   contents: read

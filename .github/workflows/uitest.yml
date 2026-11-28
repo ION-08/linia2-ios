@@ -20,6 +20,14 @@ on:
         description: "Скриншоты для App Store (Linia2StoreShots) на демо-данных: iPhone 16 Pro Max, тёмная + светлая → артефакт store-shots"
         type: boolean
         default: false
+      asc_run_id:
+        description: "Загрузить скриншоты в App Store Connect из артефакта store-shots прогона с этим ID (asc-screenshots.yml)"
+        type: string
+        default: ""
+      asc_files:
+        description: "Порядок снимков для App Store (пусто — по умолчанию asc-screenshots.yml)"
+        type: string
+        default: ""
       launch_only:
         description: "Только запуск приложения (Linia2LaunchTests, в т.ч. шторм смены сети) — e2e-часть"
         type: boolean
@@ -45,7 +53,7 @@ jobs:
   uitest:
     # Push с [release] тестирует release.yml (2 круга подряд) — отдельный прогон не нужен (общий тестовый сервер).
     # Ручной запуск с design=true — только job design.
-    if: ${{ (github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]')) && !(github.event_name == 'workflow_dispatch' && (inputs.design || inputs.store_shots)) }}
+    if: ${{ (github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]')) && !(github.event_name == 'workflow_dispatch' && (inputs.design || inputs.store_shots || inputs.asc_run_id != '')) }}
     # macos-15: симуляторы iOS 18 уже установлены (на macos-26 их приходится скачивать ~30+ мин).
     # Сборка для TestFlight остаётся на macos-26 / Xcode 26 (testflight.yml).
     runs-on: macos-15
@@ -677,7 +685,7 @@ jobs:
   # (PNG promax-<тема>-<экран>.png, 1320×2868). Загрузка в App Store Connect — asc-screenshots.yml (run_id этого прогона).
   # Для каждой темы — свои пользователи и чистая установка приложения (непрочитанные, журнал звонков — как у нового).
   store:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.store_shots }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.store_shots && inputs.asc_run_id == '' }}
     runs-on: macos-15
     timeout-minutes: 120
     env:
@@ -841,3 +849,15 @@ jobs:
           name: store-logs
           path: ${{ runner.temp }}/store/*.log
           if-no-files-found: ignore
+
+  # Загрузка скриншотов в App Store Connect (без отправки на модерацию): store_shots=false, asc_run_id=<id прогона store-shots>.
+  asc-screenshots:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.asc_run_id != '' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/asc-screenshots.yml
+    with:
+      run_id: ${{ inputs.asc_run_id }}
+      files: ${{ inputs.asc_files != '' && inputs.asc_files || 'promax-dark-chats,promax-dark-chat,promax-dark-call,promax-dark-calls,promax-light-chats,promax-light-chat,promax-dark-group,promax-dark-privacy' }}
+    secrets: inherit
