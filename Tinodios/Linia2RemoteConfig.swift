@@ -856,9 +856,14 @@ final class Linia2Failover: TinodeEventListener {
     }
 
     /// Плашка сверху: «Нет соединения» (нет сети) или «Подключение…» (сеть есть, сервер ещё не ответил).
+    /// LINIA2_NET (1020): плановая смена маршрута (возврат с резервного канала на основной) — без плашки, пока
+    /// новое подключение не задержалось дольше этого срока.
+    static var quietUntil = Date.distantPast
+
     private func updateBanner() {
-        let show = Cache.tinode.myUid != nil && ((!connected && (attemptStarted.map { Date().timeIntervalSince($0) > 2 } ?? true))
-                                                 || connectedButNotLoggedIn)
+        // LINIA2_NET (1020): плашка — только при реальном отсутствии связи дольше 3 с (было 2 с).
+        let show = Cache.tinode.myUid != nil && Date() >= Linia2Failover.quietUntil
+            && ((!connected && (attemptStarted.map { Date().timeIntervalSince($0) > 3 } ?? true)) || connectedButNotLoggedIn)
         guard let window = Linia2Root.window else { return }
         if !show { banner?.removeFromSuperview(); banner = nil; return }
         let l = banner ?? {
@@ -969,6 +974,10 @@ final class Linia2Transports {
     private var loginStallCount = 0
     private var lastLoginStall = Date.distantPast
     private var probing = false
+    /// LINIA2_NET (1020): плановый возврат на первый маршрут — откуда вернулись и когда; не удался — пауза.
+    private var returnedFrom: Linia2Route?
+    private var returnedAt = Date.distantPast
+    private var returnBackoffUntil = Date.distantPast
 
     /// Список для Connection (под замком — читается с очереди операций Tinode).
     func routes() -> [Linia2Route] { lock.lock(); defer { lock.unlock() }; return routesValue }
@@ -1032,10 +1041,34 @@ final class Linia2Transports {
     }
 
     private func routeUp(_ r: Linia2Route, _ proto: String?) {
+        // LINIA2_NET (1020): после планового возврата на первый маршрут снова поднялся резервный (первый в России
+        // проходит проверку, но рвётся под нагрузкой) — больше не возвращаться 6 ч; резервный остаётся запомненным.
+        if let from = returnedFrom, Date().timeIntervalSince(returnedAt) < 300 {
+            if r != baseRoutes.first {
+                returnBackoffUntil = Date().addingTimeInterval(6 * 3600)
+                L2Log.event("l2_transport_return_failed", ["route": r.id, "from": from.id])
+            }
+            returnedFrom = nil
+        }
         if rememberAllowed {
-            let d = UserDefaults.standard
-            d.set(r.id, forKey: Self.kLast)
-            d.set(Date(), forKey: Self.kLastAt)
+            // LINIA2_NET (1020): запоминать маршрут, только когда он проработал 60 с со входом. Раньше — по первому
+            // ответу сервера: из России WebSocket отвечает на {hi} и рвётся позже — после возврата на него (проверка раз
+            // в 15 мин) запоминался ws, и следующий запуск снова начинал с ws (запуск 28.11: ws → 5 с → lp-h3).
+            let rememberNow = { (why: String) in
+                let d = UserDefaults.standard
+                d.set(r.id, forKey: Self.kLast)
+                d.set(Date(), forKey: Self.kLastAt)
+                Linia2LaunchLog.shared.step("net-route-remember", ["route": r.id, "why": why])
+            }
+            if Linia2TestHook.enabled && ProcessInfo.processInfo.environment["L2_TEST_REMEMBER"] == "1" {
+                rememberNow("test")
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+                    guard let st = Cache.tinode.linia2RouteStatus, st.connected, st.route == r,
+                          Cache.tinode.isConnectionAuthenticated else { return }
+                    rememberNow("stable")
+                }
+            }
         }
         if SharedUtils.linia2Hosts.contains(r.host), SharedUtils.linia2ActiveHost != r.host {
             SharedUtils.linia2ActiveHost = r.host
@@ -1074,16 +1107,22 @@ final class Linia2Transports {
         // На резервном маршруте — раз в N минут проверить первый маршрут списка (без входа) и вернуться на него.
         let every = returnMinutes
         guard every > 0, !probing, active, !inCall, t.isConnectionAuthenticated,
-              Date().timeIntervalSince(lastReturnCheck) > every * 60,
+              Date().timeIntervalSince(lastReturnCheck) > every * 60, Date() >= returnBackoffUntil,
               let first = baseRoutes.first, let cur = t.linia2RouteStatus, cur.connected, cur.route != first else { return }
         lastReturnCheck = Date()
         probing = true
-        Linia2RouteProbe.probe(first, apiKey: SharedUtils.linia2ApiKey) { [weak self] ok, proto in
+        // LINIA2_NET (1020): проверка — два ответа сервера с паузой 12 с (ТСПУ пропускает первые пакеты и рвёт
+        // соединение позже: одиночный {hi} «проходил», рабочий LP рвался ради неработающего WebSocket).
+        Linia2RouteProbe.probe(first, apiKey: SharedUtils.linia2ApiKey, timeout: 6, holdSeconds: 12) { [weak self] ok, proto in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.probing = false
                 L2Log.event("l2_transport_return_probe", ["route": first.id, "ok": ok ? 1 : 0, "proto": proto ?? ""])
-                guard ok, !self.inCall, UIApplication.shared.applicationState == .active else { return }
+                guard ok, !self.inCall, UIApplication.shared.applicationState == .active,
+                      Cache.tinode.linia2RouteStatus?.connected == true else { return }
+                self.returnedFrom = cur.route
+                self.returnedAt = Date()
+                Linia2Failover.quietUntil = Date().addingTimeInterval(15)
                 self.forgetRemembered()
                 DispatchQueue.global(qos: .userInitiated).async { Cache.tinode.linia2ReturnToFirstRoute() }
             }

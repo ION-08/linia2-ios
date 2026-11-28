@@ -284,7 +284,7 @@ final class Linia2CallDiag {
         req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         req.httpBody = data
         flushInFlight = true
-        URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
+        Linia2API.send(req, retries: 1) { [weak self] _, resp, err in
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
             let failed = err != nil || status >= 500
             DispatchQueue.main.async {
@@ -297,7 +297,7 @@ final class Linia2CallDiag {
                     self.flush()
                 }
             }
-        }.resume()
+        }
     }
 }
 
@@ -457,11 +457,11 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
             req.httpBody = data
-            URLSession.shared.dataTask(with: req) { _, resp, err in
+            Linia2API.send(req, retries: 1) { _, resp, err in
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if err != nil || status >= 300 { done(false); return }
                 next()
-            }.resume()
+            }
         }
         next()
     }

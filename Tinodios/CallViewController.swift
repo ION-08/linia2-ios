@@ -2893,7 +2893,9 @@ extension CallViewController {
     /// это может занять до 20 секунд», пока не пошли звук или видео (first-audio / первый кадр; без них — 5 с после
     /// ICE connected); затем таймер — от начала медиа. Плашка «Идёт звонок» — короткий linia2StatusText.
     var linia2ScreenStatusText: String {
-        if connectionLost || reconnectingSince != nil || isHeld { return linia2StatusText }
+        // LINIA2_NET (1020): «Переподключение…» — только если связь не вернулась за 3 с (короткие обрывы канала
+        // сигналинга, смена маршрута LP — без мигания надписи); отображение, логика переподключения прежняя.
+        if connectionLost || isHeld || (reconnectingSince.map { Date().timeIntervalSince($0) > 3 } ?? false) { return linia2StatusText }
         if callDirection == .outgoing && !linia2Accepted { return "Вызов…" }
         let connecting = "Соединение… это может занять до 20 секунд"
         guard let c = connectedAt else { return linia2StageText(connected: false) ?? connecting }

@@ -337,8 +337,9 @@ final class Linia2LongPoll: NSObject, Linia2Transport, URLSessionTaskDelegate {
         s.dataTask(with: req) { [weak self] d, resp, err in
             guard let self = self, g == self.gen else { return }
             if let e = err as NSError? {
-                // Таймаут опроса (сервер отвечает за ~50 с) — канал завис: не повторяем.
-                if e.code != NSURLErrorTimedOut && self.pollFails + 1 < Self.kMaxPollRetries {
+                // Таймаут опроса (сервер отвечает за ~50 с): LINIA2_NET (1020) — один повтор с тем же sid (QUIC-поток мог
+                // молча пропасть в сети; сессия на сервере жива — без переподключения и плашки), второй — обрыв.
+                if (e.code != NSURLErrorTimedOut || self.pollFails == 0) && self.pollFails + 1 < Self.kMaxPollRetries {
                     self.pollFails += 1
                     Tinode.linia2Event?("lp-poll-retry", ["t": self.name, "code": e.code, "n": self.pollFails])
                     self.q.asyncAfter(deadline: .now() + 1) { self.poll(g) }
@@ -390,9 +391,16 @@ final class Linia2LongPoll: NSObject, Linia2Transport, URLSessionTaskDelegate {
         let body = outbox.removeFirst()
         guard let req = request(sid: sid, body: body) else { return }
         sending = true
+        // LINIA2_NET (1020): {note} («печатает…», прочтение) ответа не ждёт — его потеря не повод рвать рабочий канал.
+        let lossy = !Linia2TransportPlan.expectsReply(body)
         s.dataTask(with: req) { [weak self] _, resp, err in
             guard let self = self, g == self.gen else { return }
             self.sending = false
+            if lossy, err != nil || !(200..<300).contains(Self.status(resp)) {
+                Tinode.linia2Event?("lp-note-drop", ["t": self.name, "code": (err as NSError?)?.code ?? Self.status(resp)])
+                self.pumpSend(g)
+                return
+            }
             if let e = err as NSError? {
                 // Повтор мог бы задвоить сообщение — сообщаем об обрыве (ожидающие ответа получат ошибку, вход — заново).
                 self.fail(code: e.code, desc: e.localizedDescription, stage: "send", server: false)
@@ -476,12 +484,16 @@ public final class Linia2RouteProbe: WebSocketConnectionDelegate {
     private var done: ((Bool, String?) -> Void)?
     private let lock = NSLock()
     private var keepAlive: Linia2RouteProbe?
+    /// LINIA2_NET (1020): holdSeconds > 0 — после первого ответа подождать столько и проверить второй ответ.
+    private var hold: TimeInterval = 0
+    private var replies = 0
 
-    public static func probe(_ route: Linia2Route, apiKey: String, timeout: TimeInterval = 6,
+    public static func probe(_ route: Linia2Route, apiKey: String, timeout: TimeInterval = 6, holdSeconds: TimeInterval = 0,
                              done: @escaping (_ ok: Bool, _ netProtocol: String?) -> Void) {
         let p = Linia2RouteProbe()
         p.done = done
         p.keepAlive = p
+        p.hold = max(0, holdSeconds)
         guard let url = route.url() else { p.finish(false); return }
         let t: Linia2Transport
         switch route.kind {
@@ -491,7 +503,7 @@ public final class Linia2RouteProbe: WebSocketConnectionDelegate {
         }
         p.transport = t
         t.connect(url: url, apiKey: apiKey)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { p.finish(false) }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout + p.hold) { p.finish(false) }
     }
 
     private func finish(_ ok: Bool) {
@@ -516,7 +528,13 @@ public final class Linia2RouteProbe: WebSocketConnectionDelegate {
     }
     func onError(connection: Linia2Transport, error: Error) {}
     func onMessage(connection: Linia2Transport, text: String) {
-        finish(text.contains("\"ctrl\""))
+        guard text.contains("\"ctrl\"") else { finish(false); return }
+        lock.lock(); replies += 1; let n = replies; let h = hold; lock.unlock()
+        if h <= 0 || n >= 2 { finish(true); return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + h) { [weak connection] in
+            let hi = "{\"hi\":{\"id\":\"l2probe2\",\"ver\":\"0.22\",\"ua\":\"Linia2-probe\"}}"
+            connection?.send(data: Data(hi.utf8))
+        }
     }
     func onMessage(connection: Linia2Transport, data: Data) {}
 }

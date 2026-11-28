@@ -72,6 +72,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             if code < 300 {
                 Linia2LaunchLog.shared.onLogin()
                 Linia2LaunchLog.shared.flushMX()
+                Linia2Turn.shared.prefetch()   // LINIA2_NET (1020): TURN — сразу после входа (до звонка), кэш до ttl
             }
             if code < 300 { Cache.callManager.linia2SignalingLoggedIn() }
         }

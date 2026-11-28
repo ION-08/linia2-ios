@@ -19,7 +19,60 @@ enum Linia2Style {
 // MARK: - API сервера регистрации
 
 enum Linia2API {
-    static var base: String { "https://\(SharedUtils.kLinia2Host)/invite/api/" }
+    /// LINIA2_NET (1020): адрес API — хост текущего рабочего маршрута канала (зеркало / нестандартный порт), если
+    /// подключены; иначе — активный адрес сервера. Раньше — всегда основной домен (из России TCP до него режется).
+    static var base: String { "https://\(apiHost)/invite/api/" }
+
+    static var apiHost: String {
+        if let st = Cache.tinode.linia2RouteStatus, st.connected {
+            return st.route.host + (st.route.port.map { ":\($0)" } ?? "")
+        }
+        return SharedUtils.linia2ActiveHost
+    }
+
+    /// Сессия для запросов к нашему серверу: без ожидания сети, без кэша.
+    static let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.waitsForConnectivity = false
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.urlCache = nil
+        cfg.timeoutIntervalForRequest = 15
+        cfg.timeoutIntervalForResource = 40
+        return URLSession(configuration: cfg)
+    }()
+
+    /// LINIA2_NET: запрос к нашему серверу (turn, call-diag, panic, voip-token, …): сразу по HTTP/3 (QUIC проходит
+    /// там, где ТСПУ режет TCP), на хост рабочего маршрута; сетевая ошибка (не ответ сервера) — повтор через 1 с и 2 с,
+    /// последний — на активный/основной адрес обычным HTTPS. Ответ сервера (любой код) — сразу в completion.
+    static func send(_ req: URLRequest, retries: Int = 2,
+                     completion: @escaping (Data?, URLResponse?, Error?) -> Void) {
+        var attempts: [(URLRequest, Bool)] = []
+        for i in 0...max(0, retries) {
+            var r = req
+            if i == retries, retries > 0, var c = r.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) {
+                // Последняя попытка — активный адрес по обычному HTTPS (h3 недоступен / зеркало не отвечает).
+                let h = SharedUtils.linia2ActiveHost
+                if c.host != h || c.port != nil { c.host = h; c.port = nil }
+                if let u = c.url { r.url = u }
+                attempts.append((r, false))
+            } else {
+                attempts.append((r, true))
+            }
+        }
+        func run(_ i: Int) {
+            var r = attempts[i].0
+            r.assumesHTTP3Capable = attempts[i].1
+            session.dataTask(with: r) { d, resp, err in
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if (err != nil || status == 0), i + 1 < attempts.count, (err as NSError?)?.code != NSURLErrorCancelled {
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Double(i + 1)) { run(i + 1) }
+                    return
+                }
+                completion(d, resp, err)
+            }.resume()
+        }
+        run(0)
+    }
 
     /// POST JSON, ответ — JSON-словарь. Колбэк вызывается на главном потоке.
     static func post(_ path: String, _ body: [String: Any], token: String? = nil,
@@ -30,11 +83,11 @@ enum Linia2API {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = token { req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        URLSession.shared.dataTask(with: req) { data, resp, _ in
+        send(req) { data, resp, _ in
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
             let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             DispatchQueue.main.async { completion(status, json) }
-        }.resume()
+        }
     }
 
     static let networkError = "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз."

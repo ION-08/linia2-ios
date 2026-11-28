@@ -94,7 +94,10 @@ final class Linia2Turn {
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
         req.httpMethod = "POST"
         req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-        URLSession.shared.dataTask(with: req) { data, _, _ in
+        // LINIA2_NET (1020): HTTP/3 и хост рабочего маршрута, с повторами (обычный HTTPS до основного домена из России
+        // режется — звонок 28.11: turn=false, iceServers=1).
+        let t0 = Date()
+        Linia2API.send(req, retries: 2) { data, resp, err in
             var parsed: [Server] = []
             var ttl: Double = 0
             if let data = data,
@@ -107,6 +110,9 @@ final class Linia2Turn {
                     if !urls.isEmpty { parsed.append(Server(urls: urls, username: user, credential: cred)) }
                 }
             }
+            Linia2LaunchLog.shared.step("turn-fetch", ["ok": parsed.isEmpty ? 0 : 1, "ms": Int(Date().timeIntervalSince(t0) * 1000),
+                                                     "http": (resp as? HTTPURLResponse)?.statusCode ?? 0,
+                                                     "err": (err as NSError?)?.code ?? 0, "host": url.host ?? ""])
             self.queue.async {
                 self.inFlight = false
                 if !parsed.isEmpty {
@@ -118,6 +124,6 @@ final class Linia2Turn {
                 }
                 completion?(self.servers)
             }
-        }.resume()
+        }
     }
 }
