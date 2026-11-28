@@ -147,29 +147,20 @@ class MessageViewController: UIViewController {
         static let kMaxPosterSize = 1024 * 8
     }
 
-    /// LINIA2_KBD_GUIDE: панель ввода — обычное подвью экрана чата (а не inputAccessoryView), низ привязан
-    /// к view.keyboardLayoutGuide. Раньше её поднимала система как inputAccessoryView; на iOS 27.3 (iPhone 17)
-    /// панель оставалась у нижнего края под клавиатурой.
+    /// The `sendMessageBar` is used as the `inputAccessoryView` in the view controller.
     lazy var sendMessageBar: SendMessageBar = {
         let view = SendMessageBar()
-        view.translatesAutoresizingMaskIntoConstraints = false
+        view.autoresizingMask = .flexibleHeight
         return view
     }()
 
-    /// Панель пересылки — на месте `sendMessageBar`, пока пересылается сообщение.
+    /// The `forwardMessageBar` is used as the `inputAccessoryView` in the view controller
+    /// (for forwarded messages only).
     lazy var forwardMessageBar: ForwardMessageBar = {
         let view = ForwardMessageBar()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.isHidden = true
+        view.autoresizingMask = .flexibleHeight
         return view
     }()
-
-    /// Подложка панели ввода: от верха видимой панели до нижнего края экрана (под полосой «домой»/клавиатурой).
-    let linia2InputDock = UIView()
-    private var linia2DockTopSend: NSLayoutConstraint!
-    private var linia2DockTopForward: NSLayoutConstraint!
-    /// Последняя высота ленты — чтобы при подъёме/опускании клавиатуры низ переписки оставался на месте.
-    var linia2LastCollectionHeightValue: CGFloat = 0
 
     /// Avatar in the NavBar
     lazy var navBarAvatarView: AvatarWithOnlineIndicator = {
@@ -379,30 +370,14 @@ class MessageViewController: UIViewController {
         appGoingInactive()
     }
 
+    // This makes messageInputBar visible.
+    override var inputAccessoryView: UIView? {
+        return !isForwardingMessage ? sendMessageBar : forwardMessageBar
+    }
+
     // Indicates whether the user is about to forward a message to this topic
     // i.e. the forwarded message preview is shown in the preview bar.
-    var isForwardingMessage: Bool = false {
-        didSet {
-            guard oldValue != isForwardingMessage, isViewLoaded else { return }
-            linia2UpdateInputBarVisibility()
-        }
-    }
-
-    /// Видимая сейчас панель (ввода или пересылки).
-    var linia2ActiveInputBar: UIView { isForwardingMessage ? forwardMessageBar : sendMessageBar }
-
-    func linia2UpdateInputBarVisibility() {
-        if isForwardingMessage, sendMessageBar.inputField.isFirstResponder {
-            _ = sendMessageBar.inputField.resignFirstResponder()
-        }
-        sendMessageBar.isHidden = isForwardingMessage
-        forwardMessageBar.isHidden = !isForwardingMessage
-        // Сначала снять старую привязку, потом поставить новую — иначе на миг две противоречат друг другу.
-        let (off, on) = isForwardingMessage ? (linia2DockTopSend!, linia2DockTopForward!) : (linia2DockTopForward!, linia2DockTopSend!)
-        off.isActive = false
-        on.isActive = true
-        view.setNeedsLayout()
-    }
+    var isForwardingMessage: Bool = false
 
     override var canBecomeFirstResponder: Bool {
         return true
@@ -433,15 +408,7 @@ class MessageViewController: UIViewController {
 
         // Setup UICollectionView constraints: fill the screen
         collectionView.translatesAutoresizingMaskIntoConstraints = false
-        // Панель ввода над клавиатурой (view.keyboardLayoutGuide, iOS 15+): без ручных расчётов по уведомлениям.
-        let dock = linia2InputDock
-        dock.translatesAutoresizingMaskIntoConstraints = false
-        dock.backgroundColor = L2.background
-        dock.accessibilityIdentifier = "l2.chat.inputDock"
-        let kbGuide = view.keyboardLayoutGuide
-        // Плавающая клавиатура iPad: панель остаётся внизу, guide «отпускает» её (followsUndockedKeyboard = false).
-        kbGuide.followsUndockedKeyboard = false
-        self.collectionViewBottomAnchor = collectionView.bottomAnchor.constraint(equalTo: dock.topAnchor)
+        self.collectionViewBottomAnchor = collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -(inputAccessoryView?.frame.height ?? 0))
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             self.collectionViewBottomAnchor,
@@ -477,31 +444,12 @@ class MessageViewController: UIViewController {
 
         // Button on the bottom-right.
         self.goToLatestButton.translatesAutoresizingMaskIntoConstraints = false
-        self.goToLatestButtonBottomAnchor = self.goToLatestButton.bottomAnchor.constraint(equalTo: linia2InputDock.topAnchor, constant: -16)
+        self.goToLatestButtonBottomAnchor = self.goToLatestButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -(inputAccessoryView?.frame.height ?? 0) - 16)
         NSLayoutConstraint.activate([
             self.goToLatestButton.widthAnchor.constraint(equalToConstant: 44.0),
             self.goToLatestButton.heightAnchor.constraint(equalToConstant: 44.0),
             self.goToLatestButtonBottomAnchor,
             self.goToLatestButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -8)])
-
-        // Панели — поверх ленты (вертикальный ползунок записи голосового выходит выше панели).
-        view.addSubview(dock)
-        for bar in [sendMessageBar as UIView, forwardMessageBar as UIView] {
-            view.addSubview(bar)
-            NSLayoutConstraint.activate([
-                bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                bar.bottomAnchor.constraint(equalTo: kbGuide.topAnchor),
-            ])
-        }
-        linia2DockTopSend = dock.topAnchor.constraint(equalTo: sendMessageBar.topAnchor)
-        linia2DockTopForward = dock.topAnchor.constraint(equalTo: forwardMessageBar.topAnchor)
-        NSLayoutConstraint.activate([
-            dock.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            dock.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            dock.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            linia2DockTopSend,
-        ])
     }
 
     override func viewDidLoad() {
@@ -536,15 +484,15 @@ class MessageViewController: UIViewController {
             collectionView.contentInset.bottom = 8
         }
 
-        if #available(iOS 17.0, *) {
-            // Интерактивное скрытие (keyboardDismissMode = .interactive) начинается от верха панели ввода.
-            let pad = linia2ActiveInputBar.bounds.height
-            if abs(view.keyboardLayoutGuide.keyboardDismissPadding - pad) > 0.5 {
-                view.keyboardLayoutGuide.keyboardDismissPadding = pad
-            }
+        self.collectionViewBottomAnchor.constant = -(inputAccessoryView?.frame.height ?? 0)
+        self.goToLatestButtonBottomAnchor.constant = -(inputAccessoryView?.frame.height ?? 0) - 16
+        self.linia2BurnLabelBottom?.constant = -(inputAccessoryView?.frame.height ?? 0) - 4
+
+        // Otherwise setting contentInset after viewDidAppear will be animated.
+        if isInitialLayout {
+            defer { isInitialLayout = false }
+            addKeyboardObservers()
         }
-        linia2KeepBottomOnResize()
-        isInitialLayout = false
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -580,7 +528,14 @@ class MessageViewController: UIViewController {
         linia2EnablePopGesture()
         linia2ScheduleHistoryCheck()
         linia2UpdateBurnUI()
-        // Панель ввода — подвью экрана (LINIA2_KBD_GUIDE): видна всегда, первым отвечающим чат делать не нужно.
+        // Панель ввода — inputAccessoryView, видна, только пока чат — первый отвечающий. Чат, открытый под
+        // экраном звонка (входящий при холодном старте), им не становился — после звонка панели не было.
+        if presentedViewController == nil, linia2Search == nil, !isFirstResponder,
+           sendMessageBar.inputField?.isFirstResponder != true {
+            becomeFirstResponder()
+        }
+
+        collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: sendMessageBar.frame.height, right: 0)
 
         if case let .forwarded(_, _, fwdPreview) = self.interactor?.pendingMessage {
             self.isForwardingMessage = true
@@ -1359,8 +1314,9 @@ extension MessageViewController: PendingMessagePreviewDelegate {
         return self.textSizeHelper.computeSize(for: msg, within: CGFloat.infinity)
     }
     func dismissPendingMessagePreview() {
-        // Панель ввода — подвью (не inputAccessoryView): становиться первым отвечающим не нужно,
-        // иначе закрылась бы клавиатура.
+        // Make sure MessageVC is the first responder so we can successfully reload
+        // the input accessory view.
+        self.becomeFirstResponder()
         self.interactor?.dismissPendingMessage()
         self.togglePreviewBar(with: nil)
         self.view.setNeedsLayout()

@@ -523,7 +523,7 @@ extension MessageViewController {
             l.accessibilityIdentifier = "l2.chat.burnLabel"
             l.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(l)
-            let bottom = l.bottomAnchor.constraint(equalTo: linia2InputDock.topAnchor, constant: -4)
+            let bottom = l.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -(inputAccessoryView?.frame.height ?? 0) - 4)
             NSLayoutConstraint.activate([bottom, l.centerXAnchor.constraint(equalTo: view.centerXAnchor), l.heightAnchor.constraint(equalToConstant: 22)])
             linia2BurnLabel = l
             linia2BurnLabelBottom = bottom
