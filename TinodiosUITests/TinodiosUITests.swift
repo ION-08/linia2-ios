@@ -664,7 +664,8 @@ final class TinodiosUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(cells.count, 2, "\(when): в видимой области ленты меньше двух сообщений")
         }
         // Клавиатура скрыта и открыта заново (как у пользователя: открыл чат → тап в поле → набор).
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).swipeDown()
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        from.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)))
         sleep(1)
         input.tap()
         dismissKeyboardTips()
