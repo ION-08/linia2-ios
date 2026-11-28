@@ -210,7 +210,7 @@ jobs:
           # Нестабильные тесты перезапускаются до 2 раз; каждый перезапуск виден в отчёте.
           # launch_only (ручной запуск): тесты запуска на машине основного набора (на e2e-машине установка падает: «server died»).
           if [ "${{ inputs.launch_only }}" = "true" ]; then
-            SEL="-only-testing:TinodiosUITests/Linia2LaunchTests/test9_ColdStartUnderNetworkPathStorm -only-testing:TinodiosUITests/Linia2LaunchTests/test1_ColdStartWithUnreadBotMessages -only-testing:TinodiosUITests/Linia2LaunchTests/test6_StartWithServerUnreachable"
+            SEL="-only-testing:TinodiosUITests/Linia2LaunchTests/test9_ColdStartUnderNetworkPathStorm -only-testing:TinodiosUITests/Linia2LaunchTests/test1_ColdStartWithUnreadBotMessages -only-testing:TinodiosUITests/Linia2LaunchTests/test6_StartWithServerUnreachable -only-testing:TinodiosUITests/Linia2LaunchTests/test3_ShortBackgroundPushActivate -only-testing:TinodiosUITests/Linia2LaunchTests/test4_LongBackgroundPushTapPin"
           else
             SEL="-only-testing:TinodiosUITests -skip-testing:TinodiosUITests/Linia2CallTests -skip-testing:TinodiosUITests/Linia2CallPeerTests -skip-testing:TinodiosUITests/Linia2DesignShots -skip-testing:TinodiosUITests/Linia2LaunchTests -skip-testing:TinodiosUITests/Linia2PanicTests -skip-testing:TinodiosUITests/Linia2GuestLinkCallTests"
           fi
