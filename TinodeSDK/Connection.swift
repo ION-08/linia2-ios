@@ -357,11 +357,11 @@ public class Connection: WebSocketConnectionDelegate {
             if routes.indices.contains(routeIndex) { activeRoute = routes[routeIndex] } else { activeRoute = endpointRoute }
             proven = activeRoute
         }
-        let n = routes.count
+        let routeCount = routes.count
         routeLock.unlock()
         if let r = proven {
             let proto = connection.linia2NetProtocol
-            Tinode.linia2Event?("route-up", ["route": r.id, "proto": proto ?? "", "n": n])
+            Tinode.linia2Event?("route-up", ["route": r.id, "proto": proto ?? "", "n": routeCount])
             connectionListener?.onRouteUp(route: r, netProtocol: proto)
         }
         if Connection.isUrgentCallSignal(text) {
