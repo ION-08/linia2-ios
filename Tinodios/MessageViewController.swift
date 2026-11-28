@@ -1128,7 +1128,9 @@ extension MessageViewController: MessageViewLayoutDelegate {
             attr.deliveryMarkerFrame = .zero
         }
 
-        attr.timestampFrame = !isCentered ? CGRect(x: rightEdge.x - Constants.kTimestampWidth - Constants.kTimestampPadding, y: rightEdge.y, width: Constants.kTimestampWidth, height: Constants.kDeliveryMarkerSize) : .zero
+        // LINIA2 (1018): таймер исчезающего «⏱10:00» шире рамки времени (50 pt) — рамка по ширине таймера.
+        let tsW = max(Constants.kTimestampWidth, Self.linia2BurnStampWidth(message) ?? 0)
+        attr.timestampFrame = !isCentered ? CGRect(x: rightEdge.x - tsW - Constants.kTimestampPadding, y: rightEdge.y, width: tsW, height: Constants.kDeliveryMarkerSize) : .zero
 
         if isEdited {
             let x = attr.timestampFrame.origin != .zero ? attr.timestampFrame.origin.x - Constants.kEditedMarkerWidth - Constants.kEditedMarkerPadding : rightEdge.x
@@ -1295,7 +1297,12 @@ extension MessageViewController: MessageViewLayoutDelegate {
         // Дизайн: время (и галочки) — справа внизу без наложения на текст. Пробелы-«вырез» в конце строки
         // не переносятся, поэтому место считаем по последней строке: влезает — время на ней, иначе — своя строка.
         if message.isDeleted { return textSizeHelper.computeSize(for: attributedText, within: maxWidth) }
-        let timeW = ("00:00" as NSString).size(withAttributes: [.font: Constants.kTimestampFont]).width
+        var timeW = ("00:00" as NSString).size(withAttributes: [.font: Constants.kTimestampFont]).width
+        if let bw = Self.linia2BurnStampWidth(message) {
+            // LINIA2 (1018): исчезающее — вместо времени «⏱0:05» (шире «00:00»): место под таймер целиком
+            // + плашка (5 pt) + зазор ≥ 6 pt, чтобы таймер не налезал на текст.
+            timeW = bw + 5 + Linia2TimeGap.kMinGap
+        }
         // LINIA2: проверка после раскладки нашла наложение и пересчёт не помог — время на своей строке.
         if Linia2TimeGap.forcedBelow(topic: topicName, seq: message.seqId) {
             return textSizeHelper.computeSize(for: attributedText, within: maxWidth, trailingReserve: .greatestFiniteMagnitude, extraLine: 8)
@@ -1394,5 +1401,16 @@ extension MessageViewController {
     func linia2IsPureMedia(_ message: Message) -> Bool {
         guard !message.isDeleted, let m = message as? StoredMessage, m.isVisualMedia, !linia2IsRound(message) else { return false }
         return (message.content?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+extension MessageViewController {
+    /// LINIA2 (1018): ширина таймера исчезающего сообщения («⏱0:05», «⏱10:00») шрифтом времени — по самому
+    /// длинному значению его срока (эмодзи ⏱ шире цифр; запас 2 pt на подмену шрифта). nil — не исчезающее.
+    static func linia2BurnStampWidth(_ m: Message) -> CGFloat? {
+        guard let secs = Linia2Burn.burnSecs(m) else { return nil }
+        let digits = max(2, String(secs / 60).count)
+        let sample = "⏱" + String(repeating: "0", count: digits) + ":00"
+        return ceil((sample as NSString).size(withAttributes: [.font: Constants.kTimestampFont]).width) + 2
     }
 }

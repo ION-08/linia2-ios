@@ -1306,6 +1306,7 @@ final class Linia2PermissionsOnboarding {
         UNUserNotificationCenter.current().getNotificationSettings { st in
             DispatchQueue.main.async {
                 let ask = {
+                    Linia2AppLock.shared.expectSystemPrompt()
                     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
                         L2Log.event("l2_push_permission", ["granted": granted ? 1 : 0, "error": error != nil ? 1 : 0])
                         DispatchQueue.main.async { completion(granted) }
@@ -1341,6 +1342,7 @@ final class Linia2PermissionsOnboarding {
         explain(kind: "mic", title: "Микрофон",
                 text: "Микрофон нужен для звонков и голосовых сообщений — без него собеседник вас не услышит.",
                 proceed: {
+                    Linia2AppLock.shared.expectSystemPrompt()
                     s.requestRecordPermission { ok in
                         L2Log.event("l2_mic_permission", ["granted": ok ? 1 : 0, "where": "onboarding"])
                         DispatchQueue.main.async { done() }
@@ -1353,6 +1355,7 @@ final class Linia2PermissionsOnboarding {
         explain(kind: "camera", title: "Камера",
                 text: "Камера нужна для видеозвонков, видеосообщений и фото в чатах.",
                 proceed: {
+                    Linia2AppLock.shared.expectSystemPrompt()
                     AVCaptureDevice.requestAccess(for: .video) { ok in
                         L2Log.event("l2_camera_permission", ["granted": ok ? 1 : 0, "where": "onboarding"])
                         DispatchQueue.main.async { done() }

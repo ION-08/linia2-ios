@@ -47,7 +47,8 @@ private struct Linia2CallItem {
             direction = .outgoing
         }
         isVideo = !m.isAudioOnlyCall
-        self.state = state
+        // LINIA2 (1018): звонок без финальной замены (обрыв) старше 2 мин — не «идёт», а пропущен/не состоялся.
+        self.state = MsgServerData.WebRTC(rawValue: Linia2StaleCall.effective(state.rawValue, ts: m.ts, topic: topic, seq: m.seqId)) ?? state
         duration = Linia2CallItem.durationSeconds(m.head?["webrtc-duration"])
         if Linia2GuestLinks.isGuest(topic) || m.head?["linia2-guest"] != nil {
             guest = Linia2GuestLinks.info(fromHead: m.head, seq: m.seqId) ?? (name: "Гость по ссылке", link: "")

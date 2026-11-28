@@ -79,6 +79,7 @@ class MediaRecorder: NSObject {
         switch self.session.recordPermission {
         case .undetermined:
             self.delegate?.didFailRecording(recorder: self, MediaRecorderError.permissionRequested)
+            Linia2AppLock.shared.expectSystemPrompt()
             self.session.requestRecordPermission({response in
                 DispatchQueue.main.async {
                     if response {

@@ -69,7 +69,6 @@ final class Linia2AppLock {
     /// Ключ прежней настройки «Разблокировка по Face ID» — только чтобы стереть её у обновившихся.
     private let kBiometricsLegacy = "linia2.applock.biometrics"
     private let kPinLength = "linia2.applock.pinlength"
-    private let kLockAfter: TimeInterval = 30   // блокировать после 30 с в фоне
 
     private var lockWindow: UIWindow?
     private var coverWindow: UIWindow?
@@ -121,31 +120,63 @@ final class Linia2AppLock {
     func verify(pin: String) -> Bool { Linia2PinStore.verify(pin: pin) }
 
     // MARK: жизненный цикл
+    //
+    // LINIA2 (1018): PIN — СРАЗУ при любом уходе из приложения: блокировка/гашение экрана, «Домой»,
+    // переключатель приложений, другое приложение, Пункт управления / Центр уведомлений. Без задержки
+    // (раньше было 30 с в фоне — kLockAfter; из-за этого после блокировки экрана PIN не спрашивался).
+    // Блокируем уже в willResignActive — экран PIN на месте до того, как система снимет миниатюру
+    // для переключателя приложений (переписка на снимке не видна).
+    // Исключения: идёт разговор и экран звонка на экране (CallKit «Принять» — как раньше, PIN после
+    // звонка) и системный запрос разрешения, вызванный самим приложением (expectSystemPrompt).
+
+    /// До этого момента уход в неактивное состояние — это системное окно разрешения (микрофон, камера…),
+    /// а не уход из приложения: PIN не показываем.
+    private var promptUntil: Date?
+    /// Неактивны из-за системного окна разрешения (без ухода в фон).
+    private var resignedForPrompt = false
+
+    /// Перед системным запросом разрешения (requestRecordPermission / requestAccess / requestAuthorization):
+    /// окно разрешения делает приложение неактивным — это не уход из приложения.
+    func expectSystemPrompt() {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.expectSystemPrompt() }; return }
+        promptUntil = Date().addingTimeInterval(2)
+    }
 
     @objc private func willResignActive() {
-        // Снимок в переключателе приложений — без переписки (всегда, даже без PIN).
         guard !locked else { return }
+        if let until = promptUntil, until > Date() {
+            promptUntil = nil
+            resignedForPrompt = true
+            showCover()   // под системным окном — логотип; PIN не нужен (возврат без ухода в фон)
+            return
+        }
+        if isEnabled && !callScreenHasPriority {
+            lock()
+            if locked { return }
+        }
+        // Снимок в переключателе приложений — без переписки (всегда, даже без PIN; и при отложенной блокировке).
         showCover()
     }
 
     @objc private func didEnterBackground() {
+        resignedForPrompt = false
         if backgroundedAt == nil { backgroundedAt = Date() }
+        // Если в willResignActive не заблокировали (окно разрешения, переход из звонка) — блокировать сейчас.
+        if !locked && isEnabled && !callScreenHasPriority { lock() }
     }
 
     @objc private func willEnterForeground() {
         // Раньше, чем didBecomeActive, — содержимое не мелькает до экрана PIN.
         guard isEnabled, !locked else { return }
-        if let t = backgroundedAt, Date().timeIntervalSince(t) >= kLockAfter {
-            lock()
-        }
+        if backgroundedAt != nil { lock() }
     }
 
     @objc private func didBecomeActive() {
+        let wasPrompt = resignedForPrompt
+        resignedForPrompt = false
         defer { backgroundedAt = nil; hideCover() }
         guard isEnabled, !locked else { return }
-        if let t = backgroundedAt, Date().timeIntervalSince(t) >= kLockAfter {
-            lock()
-        }
+        if backgroundedAt != nil || (!wasPrompt && coverWindow != nil) { lock() }
     }
 
     // MARK: окна
@@ -628,7 +659,7 @@ final class Linia2AppLockSettingsViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == 0 ? "При открытии приложения и после 30 секунд в фоне потребуется PIN-код." : nil
+        section == 0 ? "PIN-код потребуется сразу при каждом возвращении в приложение: после блокировки экрана, сворачивания или переключения на другое приложение." : nil
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {

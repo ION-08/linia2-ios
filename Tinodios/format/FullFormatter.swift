@@ -211,7 +211,7 @@ class FullFormatter: AbstractFormatter {
         guard let data = data else {
             return handleUnknown(content: children, using: nil, draftyKey: nil)
         }
-        let state = data["state"]?.asString() ?? ""
+        let state = Linia2StaleCall.effective(data["state"]?.asString() ?? "")   // LINIA2: зависший «Соединение…»
         let duration = data["duration"]?.asInt() ?? 0
         let incoming = data["incoming"]?.asBool() ?? false
         let attachment = Attachment(content: .call(!incoming, state, duration))

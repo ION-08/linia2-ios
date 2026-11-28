@@ -112,6 +112,7 @@ class ContactsSynchronizer {
     func run() {
         switch self.authStatus {
         case .notDetermined:
+            Linia2AppLock.shared.expectSystemPrompt()
             self.store.requestAccess(for: .contacts,
                                      completionHandler: { [weak self] (granted, error) in
                 if granted {
