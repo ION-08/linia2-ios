@@ -172,6 +172,11 @@ extension MessageViewController {
         let maxY = linia2MaxOffsetY(cv)
         let beyond = cv.contentOffset.y > maxY + 2 || cv.contentOffset.y < -inset.top - 2
         guard cells.isEmpty || beyond else { return }
+        if !cells.isEmpty {
+            // Сообщения видны, но лента за пределами (после скрытия клавиатуры) — тихо вернуть в пределы.
+            cv.setContentOffset(CGPoint(x: cv.contentOffset.x, y: linia2ClampedOffsetY(cv, cv.contentOffset.y)), animated: true)
+            return
+        }
         let bar = inputAccessoryView
         Linia2LaunchLog.shared.step("kbd-heal", [
             "why": why, "n": n, "cells": cells.count, "off": Int(cv.contentOffset.y), "maxY": Int(maxY),
