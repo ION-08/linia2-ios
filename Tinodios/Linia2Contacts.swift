@@ -156,6 +156,14 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
 
     private var allTopics: [DefaultComTopic] = []
     private var sections: [Section] = []
+    /// L2_CSEARCH: «Найдены в Линии» — люди с сервера (fnd), которых нет в своих контактах; последняя секция.
+    private var found: [Linia2FoundPerson] = []
+    private var foundAll: [Linia2FoundPerson] = []
+    private var foundQuery = ""
+    private var foundBusy = false
+    private var foundWork: DispatchWorkItem?
+    private var foundGen = 0
+    private var foundSection: Int? { found.isEmpty ? nil : sections.count }
     private var listener: Linia2TinodeListener?
 
     override func viewDidLoad() {
@@ -188,6 +196,9 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
         addButton.addTarget(self, action: #selector(addTapped), for: .touchUpInside)
         searchField.delegate = self
         searchField.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
+        searchField.accessibilityIdentifier = "l2.contacts.search"
+        searchField.autocapitalizationType = .none
+        searchField.autocorrectionType = .no
         header = L2TableHeader([L2Header(title: "Контакты", buttons: [addButton]), searchField])
         header?.install(in: tableView)
         headerWidth = tableView.bounds.width
@@ -231,9 +242,14 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
         applyFilter()
     }
 
-    private func applyFilter() {
+    private var searchQuery: String {
         var q = (searchField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.hasPrefix("@") { q.removeFirst() }
+        while q.hasPrefix("@") { q.removeFirst() }
+        return q
+    }
+
+    private func applyFilter() {
+        let q = searchQuery
         let filtered = q.isEmpty ? allTopics : allTopics.filter { t in
             Linia2ContactInfo.name(of: t).lowercased().contains(q) ||
                 (Linia2ContactInfo.login(of: t)?.lowercased().contains(q) ?? false)
@@ -255,12 +271,16 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
                 return Section(key: key, topics: sorted)
             }
 
-        if allTopics.isEmpty {
+        let mine = Set(allTopics.map { $0.name })
+        found = q.count >= 2 && q == foundQuery ? foundAll.filter { !mine.contains($0.id) } : []
+        if !q.isEmpty && sections.isEmpty && found.isEmpty {
+            tableView.backgroundView = foundBusy && q.count >= 2
+                ? l2EmptyState("Ищем в Линии…", "Поиск по имени, логину и @псевдониму", symbol: "magnifyingglass")
+                : l2EmptyState("Ничего не найдено", "Попробуйте изменить запрос", symbol: "magnifyingglass")
+        } else if allTopics.isEmpty && found.isEmpty {
             tableView.backgroundView = l2EmptyState("Контактов пока нет",
                                                     "Нажмите «добавить», чтобы найти собеседника по логину",
                                                     symbol: "person.2")
-        } else if sections.isEmpty {
-            tableView.backgroundView = l2EmptyState("Ничего не найдено", "Попробуйте изменить запрос", symbol: "magnifyingglass")
         } else {
             tableView.backgroundView = nil
         }
@@ -286,7 +306,35 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
     // MARK: Действия
 
     @objc private func searchChanged() {
+        scheduleRemoteSearch()
         applyFilter()
+    }
+
+    /// L2_CSEARCH: от 2 символов — поиск на сервере с задержкой ввода 300 мс (ответ разбирается вне главного потока).
+    private func scheduleRemoteSearch() {
+        foundWork?.cancel()
+        foundGen += 1
+        let q = searchQuery
+        guard q.count >= 2 else {
+            foundBusy = false
+            foundAll = []
+            foundQuery = ""
+            return
+        }
+        if q == foundQuery && !foundBusy { return }
+        foundBusy = true
+        let gen = foundGen
+        let work = DispatchWorkItem { [weak self] in
+            Linia2PeopleSearch.search(q) { [weak self] people in
+                guard let self = self, gen == self.foundGen else { return }
+                self.foundBusy = false
+                self.foundQuery = q
+                self.foundAll = people ?? []
+                self.applyFilter()
+            }
+        }
+        foundWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
@@ -302,20 +350,25 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
 
     // MARK: UITableViewDataSource / Delegate
 
-    func numberOfSections(in tableView: UITableView) -> Int { sections.count }
+    func numberOfSections(in tableView: UITableView) -> Int { sections.count + (found.isEmpty ? 0 : 1) }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        sections[section].topics.count
+        section == foundSection ? found.count : sections[section].topics.count
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if indexPath.section == foundSection {
+            let cell = (tableView.dequeueReusableCell(withIdentifier: Linia2FoundPersonCell.reuseId) as? Linia2FoundPersonCell) ?? Linia2FoundPersonCell(style: .default, reuseIdentifier: Linia2FoundPersonCell.reuseId)
+            cell.configure(found[indexPath.row])
+            return cell
+        }
         guard let cell = tableView.dequeueReusableCell(withIdentifier: Linia2ContactCell.reuseId, for: indexPath) as? Linia2ContactCell else { return UITableViewCell() }
         cell.configure(sections[indexPath.section].topics[indexPath.row])
         return cell
     }
 
     func sectionIndexTitles(for tableView: UITableView) -> [String]? {
-        sections.count > 1 ? sections.map { $0.key } : nil
+        sections.count > 1 && found.isEmpty ? sections.map { $0.key } : nil
     }
 
     func tableView(_ tableView: UITableView, sectionForSectionIndexTitle title: String, at index: Int) -> Int {
@@ -328,7 +381,8 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
         let v = UIView()
         v.backgroundColor = L2.background
         let l = UILabel()
-        l.text = sections[section].key
+        l.text = section == foundSection ? "Найдены в Линии" : sections[section].key
+        l.accessibilityIdentifier = section == foundSection ? "l2.contacts.foundHeader" : nil
         l.font = L2.rounded(15, .bold)
         l.textColor = L2.accent
         l.translatesAutoresizingMaskIntoConstraints = false
@@ -343,6 +397,11 @@ final class Linia2ContactsViewController: UIViewController, UITableViewDataSourc
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         view.endEditing(true)
+        if indexPath.section == foundSection {
+            L2.haptic()
+            Linia2PeopleSearch.open(found[indexPath.row], from: navigationController)
+            return
+        }
         let topic = sections[indexPath.section].topics[indexPath.row]
         navigationController?.pushViewController(Linia2ContactCardViewController(topicName: topic.name), animated: true)
     }

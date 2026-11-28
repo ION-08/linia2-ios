@@ -1038,6 +1038,29 @@ final class TinodiosUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "вылет после «О звонке»")
     }
 
+    /// L2_CSEARCH: «Контакты» → поиск «@admin» находит пользователя на сервере (раньше — «Контактов пока нет»).
+    func test43_ContactsSearchByAliasFindsUser() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.contacts").tap(); sleep(2)
+        let field = wait(app.textFields["l2.contacts.search"].firstMatch, "поле поиска контактов")
+        field.tap()
+        dismissKeyboardTips()
+        field.typeText("@admin")
+        let found = app.cells.matching(identifier: "l2.contacts.found").matching(NSPredicate(format: "label CONTAINS[c] 'admin' OR label CONTAINS[c] 'Администратор'")).firstMatch
+        let own = app.cells.matching(NSPredicate(format: "label CONTAINS[c] '@admin' OR label CONTAINS[c] 'Администратор'")).firstMatch
+        let deadline = Date().addingTimeInterval(20)
+        while !found.exists && !own.exists && Date() < deadline { usleep(500_000) }
+        screenshot("contacts-search-admin")
+        XCTAssertTrue(found.exists || own.exists, "поиск «@admin» не нашёл пользователя")
+        XCTAssertFalse(labelContains("Контактов пока нет").exists, "при поиске показано «Контактов пока нет»")
+        if found.exists {
+            XCTAssertTrue(any("l2.contacts.foundHeader").exists, "нет заголовка «Найдены в Линии»")
+            found.tap(); sleep(2)
+            XCTAssertEqual(app.state, .runningForeground, "вылет при открытии найденного")
+            back()
+        }
+    }
+
     // MARK: - 8. Обход всех экранов без вылетов
 
     func test29_AllScreensNoCrash() {
