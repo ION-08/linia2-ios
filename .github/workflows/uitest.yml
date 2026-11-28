@@ -223,7 +223,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
             ENABLE_TESTABILITY=YES \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-            2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|Test Case .* (passed|failed|skipped)|crash|\*\* TEST' || true
+            2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E 'error:|L2-TIME|Test Case .* (passed|failed|skipped)|crash|\*\* TEST' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
 
       # Запуск при новых сообщениях (вылет сборки 1005): холодный старт, нажатие на уведомление, фон короткий/длинный.

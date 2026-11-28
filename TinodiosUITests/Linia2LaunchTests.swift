@@ -14,8 +14,9 @@
 //  test5 — старт после обновления: база «старой версии» (-l2-simulate-upgrade: открытый текст, флаг миграции снят)
 //          → PIN → интерфейс сразу, вкладки отзываются, пока база шифруется в фоне → plain=0, mig=1; без «Связь
 //          с сервером потеряна»; после перезапуска переписка читается.
-//  test6 — старт при недоступном сервере (L2_TEST_UNREACHABLE=8): интерфейс с кэшем (вкладки, чат в списке) ≤ 3 с
-//          от запуска, без ошибки первые 5 с (только «Подключение…»), затем подключение (conn=1) без перезапуска.
+//  test6 — старт при недоступном сервере (L2_TEST_UNREACHABLE=8): интерфейс ≤ 2 с и список чатов из базы
+//          (conn=0) ≤ 3 с от старта процесса (часы приложения), после PIN строка списка ≤ 3 с, всего < 12 с;
+//          без ошибки первые 5 с (только «Подключение…»), затем подключение (conn=1) без перезапуска.
 //  test7 — повторный VoIP push по завершённому звонку (L2_TEST_VOIP_REPLAY=1, без CallKit): «started» → входящий;
 //          повтор того же topic+seq — без второго; «hang-up» — входящий закрыт; снова «started» по тому же звонку
 //          и устаревший «started» — экран звонка не появляется, приложение живо и отзывается.
@@ -387,7 +388,7 @@ final class Linia2LaunchTests: Linia2CallTestBase {
     /// Значения тестового крючка (msgs, plain, ui, lost, conn, mig, vpush, vign, vshown, vstep, …).
     private func hook(_ step: String) -> [String: Int] {
         let e = any("l2.test.state")
-        guard e.waitForExistence(timeout: 10), let v = e.value as? String else {
+        guard e.exists || e.waitForExistence(timeout: 10), let v = e.value as? String else {
             XCTFail("нет тестового крючка l2.test.state — \(step)")
             return [:]
         }
@@ -486,15 +487,38 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         app.launchEnvironment["L2_TEST_UNREACHABLE"] = "8"
         let t0 = Date()
         app.launch()
-        // Интерфейс (вкладки под экраном PIN) — из кэша, без сервера: ≤ 3 с от запуска.
-        let s0 = waitHook("старт", timeout: 5) { ($0["ui"] ?? -1) >= 0 }
+        // app.launch() возвращается, когда XCUITest настроил сеанс автоматизации (на CI — 2–9 с, это не время
+        // приложения). Время приложения — по его собственным часам (крючок): ui, list — мс от старта процесса.
+        let tReady = Date()
+        let s0 = waitHook("старт", timeout: 5) { ($0["ui"] ?? -1) >= 0 && ($0["list"] ?? -1) >= 0 }
         XCTAssertGreaterThanOrEqual(s0["ui"] ?? -1, 0, "интерфейс не построен")
-        XCTAssertLessThanOrEqual(s0["ui"] ?? 99_999, 3000, "интерфейс построен дольше 3 с")
+        XCTAssertLessThanOrEqual(s0["ui"] ?? 99_999, 2000, "интерфейс построен дольше 2 с")
+        // Список чатов из локальной базы готов (под экраном PIN) без сервера: ≤ 3 с от старта процесса.
+        XCTAssertGreaterThanOrEqual(s0["list"] ?? -1, 0, "список чатов из базы не построен без сервера")
+        XCTAssertLessThanOrEqual(s0["list"] ?? 99_999, 3000, "список чатов из базы построен дольше 3 с")
         XCTAssertEqual(s0["conn"], 0, "сервер должен быть недоступен первые 8 с")
         passPin(required: true, "недоступный-сервер")
-        wait(tab("l2.tab.chats"), "вкладки без сервера", timeout: 3)
-        wait(app.cells.firstMatch, "список чатов из кэша без сервера", timeout: 3)
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 12, "интерфейс с кэшем не показан вовремя")
+        // От снятия PIN до вкладок и строки списка — без ожидания сети: ≤ 3 с (опрос каждые 100 мс,
+        // а не waitForExistence — тот первый раз проверяет только через 1 с).
+        let tPin = Date()
+        let cell = app.cells.firstMatch, chats = tab("l2.tab.chats")
+        while Date().timeIntervalSince(tPin) < 3 && !(chats.exists && cell.exists) { usleep(100_000) }
+        let pinToList = Date().timeIntervalSince(tPin)
+        XCTAssertTrue(chats.exists, "вкладки без сервера")
+        XCTAssertTrue(cell.exists, "список чатов из кэша без сервера")
+        XCTAssertLessThan(pinToList, 3, "после PIN список чатов из кэша не показан за 3 с")
+        let total = Date().timeIntervalSince(tReady)
+        XCTAssertLessThan(total, 12, "интерфейс с кэшем не показан вовремя")
+        let s1h = hook("после-PIN")   // unl — мс до снятия PIN (часы приложения)
+        let launch = any("l2.test.launch")
+        let steps = launch.exists ? (launch.value as? String ?? "") : ""
+        let a = XCTAttachment(string: steps)
+        a.name = "launch-steps"
+        a.lifetime = .keepAlways
+        add(a)
+        print(String(format: "L2-TIME test6: ui=%dms list=%dms unlock=%dms pin→list=%.2fs total=%.2fs (XCUITest launch %.2fs) | %@",
+                     s0["ui"] ?? -1, s0["list"] ?? -1, s1h["unl"] ?? -1, pinToList, total,
+                     tReady.timeIntervalSince(t0), steps))
         // Первые 5 с после запуска — никаких ошибок.
         while Date().timeIntervalSince(t0) < 5 {
             XCTAssertFalse(lostToast.exists, "ошибка соединения в первые 5 с")

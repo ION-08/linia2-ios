@@ -156,6 +156,9 @@ class ChatListViewController: UITableViewController, ChatListDisplayLogic {
             linia2ChatsLogged = true
             Linia2LaunchLog.shared.step("chatlist", ["n": topics.count, "arch": archivedTopics?.count ?? 0])
         }
+        if Linia2TestProbe.listMs < 0, !topics.isEmpty {
+            Linia2TestProbe.listMs = Int(Date().timeIntervalSince(AppDelegate.launchedAt) * 1000)
+        }
         self.linia2All = topics
         self.topics = linia2Filtered(topics)
         self.archivedTopics = archivedTopics

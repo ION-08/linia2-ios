@@ -258,6 +258,7 @@ final class Linia2AppLock {
 
     private func unlock() {
         Linia2LaunchLog.shared.step("unlock")
+        if Linia2TestProbe.unlockMs < 0 { Linia2TestProbe.unlockMs = Int(Date().timeIntervalSince(AppDelegate.launchedAt) * 1000) }
         DispatchQueue.main.async { Linia2LaunchLog.shared.step("unlock-runloop") }
         locked = false
         lockWindow?.isHidden = true

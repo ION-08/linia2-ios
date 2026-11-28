@@ -10,7 +10,7 @@
 //    pinms — время ответа экрана PIN на последний ввод;  wipes — стираний в этом запуске;  kdf — scrypt по RFC 7914.
 //  Баг 1006: vpush/vdup/vign/vshown/vstep — VoIP push (всего / повтор того же звонка / отброшен / показан входящий /
 //    шаг сценария L2_TEST_VOIP_REPLAY); ui — мс от запуска до интерфейса; lost — показов «Связь потеряна»;
-//    conn — вошли на сервер; mig — миграция базы (−1 не нужна, 0 идёт, 1 готово).
+//    conn — вошли на сервер; list — мс до списка чатов из базы (≥1 строка); unl — мс до снятия PIN; mig — миграция базы (−1 не нужна, 0 идёт, 1 готово).
 //  Код паники: queued — неотправленных (outbox) в базе; oldf — файлов, оставшихся от состояния до стирания;
 //    copyrows/copyplain/copyread — копия базы, снятая перед стиранием: значений / открытых / прочитанных новым ключом.
 //    «l2.test.tree» — дерево файлов (Documents, Library, Caches, tmp, App Group) до и после.
@@ -31,6 +31,14 @@ import TinodiosDB
 final class Linia2TestHookView: UIView {
     override var accessibilityValue: String? {
         get { Linia2TestHook.state() }
+        set {}
+    }
+}
+
+/// «l2.test.launch» — «чёрный ящик» текущего запуска: шаги «имя:мс» (для отчёта теста).
+final class Linia2TestLaunchView: UIView {
+    override var accessibilityValue: String? {
+        get { Linia2LaunchLog.shared.debugSteps() }
         set {}
     }
 }
@@ -77,10 +85,16 @@ enum Linia2TestHook {
         tv.accessibilityIdentifier = "l2.test.tree"
         tv.accessibilityLabel = "test-tree"
         tv.backgroundColor = .clear
+        let lv = Linia2TestLaunchView(frame: w.bounds)
+        lv.isAccessibilityElement = true
+        lv.accessibilityIdentifier = "l2.test.launch"
+        lv.accessibilityLabel = "test-launch"
+        lv.backgroundColor = .clear
         let box = UIView(frame: w.bounds)
         box.backgroundColor = .clear
         box.addSubview(v)
         box.addSubview(tv)
+        box.addSubview(lv)
         vc.view = box
         w.rootViewController = vc
         w.isHidden = false
@@ -277,7 +291,8 @@ enum Linia2TestHook {
             ("wipes", Linia2TestProbe.wipes), ("kdf", kdfOK),
             ("vpush", Linia2TestProbe.voipPushes), ("vdup", Linia2TestProbe.voipDuplicates),
             ("vign", Linia2TestProbe.voipIgnored), ("vshown", Linia2TestProbe.incomingShown), ("vstep", voipStep),
-            ("ui", Linia2TestProbe.uiReadyMs), ("lost", Linia2TestProbe.lostToasts),
+            ("ui", Linia2TestProbe.uiReadyMs), ("list", Linia2TestProbe.listMs), ("unl", Linia2TestProbe.unlockMs),
+            ("lost", Linia2TestProbe.lostToasts),
             ("conn", Cache.tinode.isConnectionAuthenticated ? 1 : 0), ("mig", Linia2TestProbe.migrated),
             ("hupms", Linia2TestProbe.lastHangupCloseMs), ("rend", Linia2TestProbe.remoteEnds),
             ("eng", Linia2TestProbe.callEngine), ("nbg", Linia2TestProbe.nativeBg), ("wsw", Linia2TestProbe.webSwitches),

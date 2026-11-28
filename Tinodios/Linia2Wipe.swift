@@ -433,6 +433,9 @@ enum Linia2TestProbe {
     static var incomingShown = 0
     // Запуск (баг 1006): время до интерфейса (мс от старта процесса), показанных «Связь потеряна», миграция базы.
     static var uiReadyMs = -1
+    // Offline-first: мс от старта процесса до списка чатов из базы (≥1 строка) и до снятия PIN.
+    static var listMs = -1
+    static var unlockMs = -1
     static var lostToasts = 0
     static var migrated = -1
     // Завершение звонка: мс от «Завершить» до закрытия экрана; число завершений собеседником.

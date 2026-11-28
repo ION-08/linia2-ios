@@ -371,6 +371,17 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
         }
     }
 
+    /// Автотесты (-l2-uitest): шаги текущего запуска «имя:мс» (с длительностью «/dur», если есть).
+    func debugSteps() -> String {
+        queue.sync {
+            guard let cur = curURL, let data = try? Data(contentsOf: cur) else { return "" }
+            return Self.parse(data).filter { !(($0["step"] as? String) ?? "").hasPrefix("net-") }.map { e in
+                let d = (e["dur"] as? Int).map { "/\($0)" } ?? ""
+                return "\(e["step"] as? String ?? "?"):\(e["ms"] as? Int ?? -1)\(d)"
+            }.joined(separator: " ")
+        }
+    }
+
     /// Шаг с замером длительности блока.
     @discardableResult
     func measure<T>(_ name: String, _ block: () -> T) -> T {
