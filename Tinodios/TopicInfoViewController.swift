@@ -131,16 +131,7 @@ class TopicInfoViewController: UITableViewController {
         mutedSwitch.isOn = topic.isMuted
         archivedSwitch.isOn = topic.isArchived
 
-        if topic.online {
-            self.lastSeenTimestampLabel?.text = NSLocalizedString("online now", comment: "The topic or user is currently online")
-        } else if let ts = topic?.lastSeen?.when {
-            var date: String
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .short
-            date = formatter.localizedString(for: ts, relativeTo: Date())
-
-            self.lastSeenTimestampLabel?.text = date
-        }
+        linia2ShowSeen()
 
         if self.topic.isGrpType {
             subscriptions = topic.getSubscriptions()
@@ -511,5 +502,24 @@ extension TopicInfoViewController {
             stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -20),
         ])
+    }
+}
+
+// MARK: - L2_LASTSEEN: «в сети» / «сегодня в 10:15» / «вчера в 22:04» / «27 нояб. в 9:30», обновление раз в минуту
+
+extension TopicInfoViewController: Linia2SeenRefreshable {
+    fileprivate func linia2ShowSeen() {
+        guard let topic = topic else { return }
+        if topic.online {
+            lastSeenTimestampLabel?.text = "в сети"
+        } else if let ts = topic.lastSeen?.when {
+            lastSeenTimestampLabel?.text = Linia2ContactInfo.lastSeenWhen(ts)
+        }
+        if topic.isP2PType { Linia2SeenTicker.shared.register(self) }
+    }
+
+    func linia2RefreshSeen() {
+        guard viewIfLoaded?.window != nil else { return }
+        linia2ShowSeen()
     }
 }
