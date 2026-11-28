@@ -331,6 +331,7 @@ final class Linia2WelcomeViewController: Linia2FormViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        Linia2Splash.ready("welcome")
         UIView.animate(withDuration: 0.5, delay: 0, options: .curveEaseOut) {
             self.stack.alpha = 1
             self.stack.transform = .identity

@@ -167,6 +167,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         _ = AppDelegate.launchedAt
+        Linia2Splash.prepare()   // LINIA2: логотип заставки декодируется вне главного потока
         Linia2LaunchLog.shared.start()   // LINIA2: «чёрный ящик» запуска (файл App Group → call-diag type=launch)
         Cache.log.info("App launched with options: %@", launchOptions ?? [:])
         Linia2ConnectionNotice.quietPeriod(10)   // LINIA2: при запуске — без «Связь потеряна» (только «Подключение…»)
@@ -237,6 +238,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             }
             self.nwReachability = reachability
         }
+        // LINIA2: заставка с бегущим импульсом — последним шагом (рисуется вместе с первым кадром, запуск не ждёт);
+        // убирается, как только показан PIN / вкладки / «Добро пожаловать».
+        Linia2Splash.show()
         return true
     }
 

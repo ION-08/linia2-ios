@@ -82,6 +82,7 @@ final class Linia2TabBarController: UITabBarController, UINavigationControllerDe
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         updateBarVisibility(animated: false)
+        Linia2Splash.ready("tabs")
     }
 
     /// LINIA2: безопасное переключение вкладок (быстрые нажатия, во время загрузки и анимаций):

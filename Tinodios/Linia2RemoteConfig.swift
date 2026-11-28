@@ -628,7 +628,7 @@ final class Linia2Failover: TinodeEventListener {
     private var timer: Timer?
     private let monitor = NWPathMonitor()
     private var networkOK = true
-    private var banner: UILabel?
+    private var banner: Linia2ConnectionPill?
 
     func start() {
         Cache.tinode.addListener(self)
@@ -820,13 +820,7 @@ final class Linia2Failover: TinodeEventListener {
         guard let window = Linia2Root.window else { return }
         if !show { banner?.removeFromSuperview(); banner = nil; return }
         let l = banner ?? {
-            let l = PaddedLabelL2()
-            l.font = L2.font(13, .semibold)
-            l.textColor = L2.textPrimary
-            l.backgroundColor = L2.surface2.withAlphaComponent(0.95)
-            l.layer.cornerRadius = 14
-            l.clipsToBounds = true
-            l.textAlignment = .center
+            let l = Linia2ConnectionPill()
             l.accessibilityIdentifier = "l2.connection.status"
             l.translatesAutoresizingMaskIntoConstraints = false
             window.addSubview(l)
@@ -836,8 +830,52 @@ final class Linia2Failover: TinodeEventListener {
             banner = l
             return l
         }()
-        l.text = networkOK ? L2T("l2.net.connecting", "Подключение…") : L2T("l2.net.offline", "Нет соединения")
+        // «Подключение…» — с маленькой пульсирующей линией логотипа; «Нет соединения» — без неё.
+        l.set(text: networkOK ? L2T("l2.net.connecting", "Подключение…") : L2T("l2.net.offline", "Нет соединения"),
+              pulse: networkOK)
         window.bringSubviewToFront(l)
+    }
+}
+
+/// Плашка состояния соединения: [~ импульс] «Подключение…». Тихо, касания проходят насквозь.
+final class Linia2ConnectionPill: UIView {
+    private let label = UILabel()
+    private let pulse = Linia2PulseLine()
+    private let stack = UIStackView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = L2.surface2.withAlphaComponent(0.95)
+        layer.cornerRadius = 14
+        clipsToBounds = true
+        isAccessibilityElement = true
+        accessibilityTraits = [.staticText, .updatesFrequently]
+        label.font = L2.font(13, .semibold)
+        label.textColor = L2.textPrimary
+        label.textAlignment = .center
+        pulse.lineColor = L2.accent
+        pulse.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([pulse.widthAnchor.constraint(equalToConstant: 22),
+                                     pulse.heightAnchor.constraint(equalToConstant: 13)])
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 6
+        stack.addArrangedSubview(pulse)
+        stack.addArrangedSubview(label)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+                                     stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+                                     stack.centerYAnchor.constraint(equalTo: centerYAnchor)])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func set(text: String, pulse show: Bool) {
+        label.text = text
+        accessibilityLabel = text
+        pulse.isHidden = !show
     }
 }
 

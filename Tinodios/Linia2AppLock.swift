@@ -333,6 +333,11 @@ final class Linia2PinViewController: UIViewController {
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .default }   // Дизайн: по теме (в светлой «белые часы» были невидимы)
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        Linia2Splash.ready("pin")   // заставка запуска — сразу прочь, PIN на экране
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = L2.background
