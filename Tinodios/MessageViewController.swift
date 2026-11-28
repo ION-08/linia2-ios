@@ -441,11 +441,6 @@ class MessageViewController: UIViewController {
         let kbGuide = view.keyboardLayoutGuide
         // Плавающая клавиатура iPad: панель остаётся внизу, guide «отпускает» её (followsUndockedKeyboard = false).
         kbGuide.followsUndockedKeyboard = false
-        // Сначала — в иерархию: ограничения ленты и кнопки «к последнему» ссылаются на подложку
-        // (ограничение между видами без общего предка — исключение и вылет в loadView).
-        view.addSubview(dock)
-        view.addSubview(sendMessageBar)
-        view.addSubview(forwardMessageBar)
         self.collectionViewBottomAnchor = collectionView.bottomAnchor.constraint(equalTo: dock.topAnchor)
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -490,9 +485,9 @@ class MessageViewController: UIViewController {
             self.goToLatestButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -8)])
 
         // Панели — поверх ленты (вертикальный ползунок записи голосового выходит выше панели).
-        view.bringSubviewToFront(dock)
+        view.addSubview(dock)
         for bar in [sendMessageBar as UIView, forwardMessageBar as UIView] {
-            view.bringSubviewToFront(bar)
+            view.addSubview(bar)
             NSLayoutConstraint.activate([
                 bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
