@@ -102,7 +102,6 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
         aliasField.spellCheckingType = .no
         aliasField.keyboardType = .asciiCapable
         aliasField.returnKeyType = .done
-        aliasField.textContentType = .username
         aliasField.accessibilityIdentifier = "l2.profile.alias"
         aliasField.addTarget(self, action: #selector(aliasChanged), for: .editingChanged)
         let at = UILabel()
