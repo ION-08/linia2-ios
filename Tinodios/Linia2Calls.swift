@@ -260,9 +260,8 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
         let item = items[indexPath.row]
         let t = topic(item.topicName)
         cell.configure(item: item, pub: t?.pub, timeText: Linia2CallsViewController.timeText(item.date))
-        cell.onInfo = item.guest != nil ? { [weak self] in
-            self?.navigationController?.pushViewController(Linia2GuestLinksViewController(), animated: true)
-        } : { Linia2Root.openChat(item.topicName) }
+        // L2_CALLINFO: ⓘ — лист «О звонке» (раньше открывался чат).
+        cell.onInfo = { [weak self] in self?.showInfo(item) }
         return cell
     }
 
@@ -283,6 +282,21 @@ final class Linia2CallsViewController: UIViewController, UITableViewDataSource, 
     }
 
     // MARK: Действия
+
+    private func showInfo(_ item: Linia2CallItem) {
+        let t = topic(item.topicName)
+        let blocked = t.map { Linia2Moderation.isBlocked($0) } ?? false
+        let info = Linia2CallInfoViewController(item: item, pub: t?.pub, blocked: blocked)
+        info.onAction = { [weak self] action in
+            switch action {
+            case .audio: Linia2Root.openChat(item.topicName, call: .audio)
+            case .video: Linia2Root.openChat(item.topicName, call: .video)
+            case .chat: Linia2Root.openChat(item.topicName)
+            case .links: self?.navigationController?.pushViewController(Linia2GuestLinksViewController(), animated: true)
+            }
+        }
+        present(info, animated: true)
+    }
 
     @objc private func newCallTapped() {
         L2.haptic()
@@ -373,7 +387,8 @@ private final class Linia2CallCell: UITableViewCell {
 
         infoButton.setImage(L2.symbol("info.circle", 22, .regular), for: .normal)
         infoButton.tintColor = L2.textPrimary
-        infoButton.accessibilityLabel = "Открыть чат"
+        infoButton.accessibilityLabel = "О звонке"
+        infoButton.accessibilityIdentifier = "l2.calls.info"
         infoButton.translatesAutoresizingMaskIntoConstraints = false
         infoButton.addTarget(self, action: #selector(infoTapped), for: .touchUpInside)
 
@@ -504,6 +519,250 @@ private final class Linia2CallCell: UITableViewCell {
     }
 }
 
+// MARK: - L2_CALLINFO: лист «О звонке» (как в вебе apply-callinfo.py)
+
+private final class Linia2CallInfoViewController: UIViewController {
+    enum Action { case audio, video, chat, links }
+    var onAction: ((Action) -> Void)?
+
+    private let item: Linia2CallItem
+    private let pub: TheCard?
+    private let blocked: Bool
+
+    private static let whenFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "d MMMM y 'г.', HH:mm"
+        return f
+    }()
+
+    init(item: Linia2CallItem, pub: TheCard?, blocked: Bool) {
+        self.item = item
+        self.pub = pub
+        self.blocked = blocked
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .pageSheet
+        if let sheet = sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    /// «2:05», «1:02:05»; без разговора — «—».
+    static func durationText(_ secs: Int?) -> String {
+        guard let d = secs, d > 0 else { return "—" }
+        let h = d / 3600, m = d % 3600 / 60, s = d % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = L2.background
+        view.accessibilityIdentifier = "l2.callinfo.sheet"
+
+        let title = UILabel()
+        title.text = "О звонке"
+        title.font = L2.font(18, .bold)
+        title.textColor = L2.textPrimary
+        title.accessibilityIdentifier = "l2.callinfo.title"
+        title.accessibilityTraits = .header
+        let close = UIButton(type: .system)
+        close.setImage(L2.symbol("xmark", 15, .bold), for: .normal)
+        close.tintColor = L2.textSecondary
+        close.backgroundColor = L2.surface
+        close.layer.cornerRadius = 15
+        close.accessibilityLabel = "Закрыть"
+        close.accessibilityIdentifier = "l2.callinfo.close"
+        close.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) }, for: .touchUpInside)
+
+        // Аватар и имя.
+        let avatar = RoundImageView()
+        avatar.translatesAutoresizingMaskIntoConstraints = false
+        avatar.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        avatar.heightAnchor.constraint(equalToConstant: 72).isActive = true
+        var name = (pub?.fn?.isEmpty == false ? pub?.fn : nil) ?? "Неизвестный контакт"
+        if let g = item.guest { name = "🔗 " + g.name }
+        if pub?.photo != nil || (item.guest == nil && pub != nil) {
+            avatar.set(pub: pub, id: item.topicName, deleted: false)
+            avatar.letterTileFont = L2.rounded(28, .semibold)
+        } else {
+            avatar.initials = nil
+            avatar.image = nil
+            avatar.backgroundColor = L2Avatar.color(for: item.topicName)
+            let letters = UILabel()
+            letters.text = L2Avatar.letters(for: pub?.fn)
+            letters.font = L2.font(26, .semibold)
+            letters.textColor = .white
+            letters.textAlignment = .center
+            letters.translatesAutoresizingMaskIntoConstraints = false
+            avatar.addSubview(letters)
+            NSLayoutConstraint.activate([
+                letters.centerXAnchor.constraint(equalTo: avatar.centerXAnchor),
+                letters.centerYAnchor.constraint(equalTo: avatar.centerYAnchor),
+            ])
+        }
+        avatar.isAccessibilityElement = false
+        let nameLabel = UILabel()
+        nameLabel.text = name
+        nameLabel.font = L2.font(19, .bold)
+        nameLabel.textColor = L2.textPrimary
+        nameLabel.textAlignment = .center
+        nameLabel.numberOfLines = 2
+        nameLabel.accessibilityIdentifier = "l2.callinfo.name"
+        let head = UIStackView(arrangedSubviews: [avatar, nameLabel])
+        head.axis = .vertical
+        head.alignment = .center
+        head.spacing = 10
+
+        // Строки.
+        let out = item.direction == .outgoing
+        let dir: String
+        if item.guest != nil { dir = "Звонок по ссылке" }
+        else if item.isMissed { dir = "Пропущенный" }
+        else if item.isDeclinedIncoming { dir = "Отклонённый" }
+        else { dir = out ? "Исходящий" : "Входящий" }
+        var res = ""
+        if out && (item.duration ?? 0) == 0 {
+            switch item.state {
+            case .kMissed?: res = "нет ответа"
+            case .kDeclined?: res = "отклонён"
+            case .kBusy?: res = "занято"
+            default: break
+            }
+        }
+        let rows = UIStackView()
+        rows.axis = .vertical
+        rows.spacing = 0
+        rows.backgroundColor = L2.surface
+        rows.layer.cornerRadius = 14
+        rows.isLayoutMarginsRelativeArrangement = true
+        rows.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14)
+        func row(_ key: String, _ value: String, id: String, danger: Bool = false) {
+            if !rows.arrangedSubviews.isEmpty {
+                let line = UIView()
+                line.backgroundColor = L2.separator
+                line.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale).isActive = true
+                rows.addArrangedSubview(line)
+            }
+            let k = UILabel()
+            k.text = key
+            k.font = L2.font(15)
+            k.textColor = L2.textSecondary
+            k.setContentHuggingPriority(.required, for: .horizontal)
+            k.setContentCompressionResistancePriority(.required, for: .horizontal)
+            let v = UILabel()
+            v.text = value
+            v.font = L2.font(15, .semibold)
+            v.textColor = danger ? L2.danger : L2.textPrimary
+            v.textAlignment = .right
+            v.numberOfLines = 0
+            v.accessibilityIdentifier = id
+            let r = UIStackView(arrangedSubviews: [k, v])
+            r.axis = .horizontal
+            r.spacing = 12
+            r.alignment = .firstBaseline
+            r.isLayoutMarginsRelativeArrangement = true
+            r.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0)
+            r.isAccessibilityElement = true
+            r.accessibilityLabel = key + ": " + value
+            r.accessibilityIdentifier = id + ".row"
+            rows.addArrangedSubview(r)
+        }
+        row("Тип", item.isVideo ? "Видеозвонок" : "Аудиозвонок", id: "l2.callinfo.type")
+        row("Звонок", dir + (res.isEmpty ? "" : " · " + res), id: "l2.callinfo.dir", danger: item.isMissed)
+        if item.date > Date.distantPast {
+            row("Дата и время", Self.whenFormatter.string(from: item.date), id: "l2.callinfo.when")
+        }
+        row("Длительность", Self.durationText(item.duration), id: "l2.callinfo.duration")
+
+        // Кнопки.
+        let acts = UIStackView()
+        acts.axis = .horizontal
+        acts.spacing = 10
+        acts.distribution = .fillEqually
+        func act(_ symbol: String, _ label: String, id: String, _ action: Action) {
+            var cfg = UIButton.Configuration.filled()
+            cfg.baseBackgroundColor = L2.surface
+            cfg.baseForegroundColor = L2.accent
+            cfg.image = L2.symbol(symbol, 20, .semibold)
+            cfg.imagePlacement = .top
+            cfg.imagePadding = 6
+            cfg.cornerStyle = .large
+            cfg.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 4, bottom: 12, trailing: 4)
+            var t = AttributedString(label)
+            t.font = L2.font(13, .semibold)
+            t.foregroundColor = L2.textPrimary
+            cfg.attributedTitle = t
+            let b = UIButton(configuration: cfg)
+            b.accessibilityIdentifier = id
+            b.accessibilityLabel = label
+            b.heightAnchor.constraint(greaterThanOrEqualToConstant: 74).isActive = true
+            b.addAction(UIAction { [weak self] _ in
+                guard let self = self else { return }
+                L2.haptic()
+                let cb = self.onAction
+                self.dismiss(animated: true) { cb?(action) }
+            }, for: .touchUpInside)
+            acts.addArrangedSubview(b)
+        }
+        var note: UILabel?
+        if item.guest == nil && Linia2Config.shared.feature("calls") {
+            if blocked {
+                let n = UILabel()
+                n.text = "Собеседник заблокирован — позвонить нельзя."
+                n.font = L2.font(15)
+                n.textColor = L2.textSecondary
+                n.textAlignment = .center
+                n.numberOfLines = 0
+                n.accessibilityIdentifier = "l2.callinfo.blocked"
+                note = n
+            } else {
+                act("phone.fill", "Позвонить", id: "l2.callinfo.call", .audio)
+                if Linia2Config.shared.feature("videoCalls") { act("video.fill", "Видео", id: "l2.callinfo.video", .video) }
+            }
+        }
+        if item.guest != nil {
+            act("link", "Мои ссылки", id: "l2.callinfo.links", .links)
+        } else {
+            act("bubble.left.fill", "Написать", id: "l2.callinfo.chat", .chat)
+        }
+
+        var parts: [UIView] = [head, rows]
+        if let n = note { parts.append(n) }
+        parts.append(acts)
+        let content = UIStackView(arrangedSubviews: parts)
+        content.axis = .vertical
+        content.spacing = 18
+        content.setCustomSpacing(20, after: head)
+        let scroll = UIScrollView()
+        scroll.alwaysBounceVertical = true
+        for v in [title, close, scroll] as [UIView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(v)
+        }
+        content.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(content)
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: view.topAnchor, constant: 22),
+            title.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            close.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            close.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            close.widthAnchor.constraint(equalToConstant: 30),
+            close.heightAnchor.constraint(equalToConstant: 30),
+            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            content.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 4),
+            content.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
+            content.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 20),
+            content.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -20),
+        ])
+    }
+}
+
 // MARK: - Выбор собеседника для нового звонка
 
 private final class Linia2CallContactPicker: UITableViewController {
@@ -566,5 +825,71 @@ private final class Linia2CallContactPicker: UITableViewController {
             pop.sourceRect = cell.bounds
         }
         present(sheet, animated: true)
+    }
+}
+
+// MARK: - L2_CALLENC: плашка «🔒 Зашифровано» под статусом звонка (только оформление; WebRTC шифрует медиа всегда — DTLS-SRTP)
+
+private final class Linia2EncryptedBadge: UIView {
+    private let label = UILabel()
+    private var timer: Timer?
+    /// Подсказки о разрешениях кладутся туда же (под статус) — пока они видны, плашку прячем, чтобы не наложилась.
+    private static let overlapIds: Set<String> = ["l2.call.permissionHint", "l2.call.micPill"]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        layer.cornerRadius = 11
+        isUserInteractionEnabled = false
+        label.text = "🔒 " + L2T("l2.call.encrypted", "Зашифровано")
+        label.font = L2.font(12, .semibold)
+        label.textColor = L2.hex(0xC9F2E5)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+        ])
+        isAccessibilityElement = true
+        accessibilityLabel = "Зашифровано"
+        accessibilityIdentifier = "l2.call.encrypted"
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        timer?.invalidate()
+        timer = nil
+        guard window != nil else { return }
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updateOverlap() }
+        t.tolerance = 0.3
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+        updateOverlap()
+    }
+
+    private func updateOverlap() {
+        guard let sv = superview else { return }
+        let covered = sv.subviews.contains { v in
+            !v.isHidden && v.alpha > 0.01 && Self.overlapIds.contains(v.accessibilityIdentifier ?? "")
+        }
+        if isHidden != covered { isHidden = covered }
+    }
+}
+
+extension CallViewController {
+    /// Плашка под строкой статуса (stateLabel); звонковую логику не трогает.
+    func linia2AddEncryptedBadge() {
+        guard stateLabel.superview === view, !view.subviews.contains(where: { $0 is Linia2EncryptedBadge }) else { return }
+        let badge = Linia2EncryptedBadge()
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(badge)
+        NSLayoutConstraint.activate([
+            badge.topAnchor.constraint(equalTo: stateLabel.bottomAnchor, constant: 6),
+            badge.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+        ])
     }
 }

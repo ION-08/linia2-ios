@@ -2675,6 +2675,7 @@ extension CallViewController {
         speakerToggleButton.accessibilityIdentifier = "l2.call.speaker"
         // «Динамик» доступен сразу (и во время дозвона): переключение выхода не зависит от соединения.
         speakerToggleButton.isEnabled = true
+        linia2AddEncryptedBadge()   // L2_CALLENC
         linia2AddUITestHooks()
     }
 
