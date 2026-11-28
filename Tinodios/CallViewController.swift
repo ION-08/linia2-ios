@@ -1587,6 +1587,9 @@ class CallViewController: UIViewController {
     /// Пришло «ringing» (у собеседника звонит) — гудки должны звучать до ответа.
     private var linia2Ringing = false
     private var linia2RingbackRestarts = 0
+    /// LINIA2_RINGBACK (1020): гудки у звонящего — с начала вызова до «accepted»/отмены (не только после «ringing»).
+    private var linia2RingbackWanted = false
+    private var linia2RingbackStarted: Date?
     /// Пошли медиаданные (первый звук / первый кадр видео собеседника) — с этого момента таймер.
     private var linia2MediaAt: Date?
     /// LINIA2 (1019): начало этапа «Соединение…» (после ответа) — для строки этапа и «резервный канал K из N».
@@ -2249,7 +2252,7 @@ class CallViewController: UIViewController {
                 return
             }
             ownsCall = true
-            playSoundEffect("dialing")
+            linia2StartRingback()
             // LINIA2 (1018): соединение — сразу, во время гудков: сбор кандидатов и выделение TURN (iceCandidatePoolSize)
             // идут до ответа; по «accepted» — только offer (раньше pc и TURN создавались после ответа, +0,5–1,5 с).
             // offer до ответа не уходит (canSendOffer). Не вышло — создастся по «accepted», как раньше.
@@ -2303,6 +2306,8 @@ class CallViewController: UIViewController {
         do {
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.numberOfLoops = loop ? -1 : 0
+            audioPlayer?.volume = 1
+            audioPlayer?.prepareToPlay()
             audioPlayer?.play()
         } catch {
             Cache.log.error("CallVC - Unable to play sound effect '%@': %@", effect, error.localizedDescription)
@@ -2493,6 +2498,11 @@ extension CallViewController: TinodeVideoCallDelegate {
 
     func handleAcceptedMsg() {
         assert(Thread.isMainThread)
+        if linia2RingbackWanted, let t0 = linia2RingbackStarted {
+            diag?.add(["type": "ringback", "state": "stop", "ms": Int(Date().timeIntervalSince(t0) * 1000),
+                       "played": Int((audioPlayer?.currentTime ?? 0) * 1000), "audio": CallManager.linia2AudioActive ? 1 : 0])
+        }
+        linia2RingbackWanted = false
         self.playSoundEffect(nil)
 
         // Stop animation, hide peer name & avatar.
@@ -2572,8 +2582,33 @@ extension CallViewController: TinodeVideoCallDelegate {
         linia2Ringing = true
         if first { diag?.add(["type": "ringing", "video": !isAudioOnlyCall]) }
         self.dialingAnimation(on: true)
-        self.playSoundEffect("call-out", loop: true)
+        // LINIA2_RINGBACK: гудки уже идут с начала вызова — не перезапускать (был слышен обрыв гудка).
+        linia2RingbackWanted = true
+        if audioPlayer?.isPlaying != true { self.playSoundEffect("call-out", loop: true) }
     }
+
+    /// LINIA2_RINGBACK (1020): гудки у звонящего сразу при вызове (аудио и видео) до ответа или отмены.
+    /// Причина тишины в 1019 (звонок 28.11, iOS 27.0, call-diag): CallKit не активировал аудиосессию для исходящего
+    /// (нет события audio/activated до самого соединения; звук включил запасной ensureAudioEnabled через 2 с после
+    /// connected) — AVAudioPlayer «играл» (isPlaying = true, перезапусков не было) в неактивную сессию, гудков не
+    /// было слышно. Гудки ждали ещё и «ringing» от собеседника. Теперь: гудки с начала вызова; если CallKit не включил
+    /// звук за 0,8 с — сессию для гудков включаем сами (WebRTC-аудио не трогаем); включил — перезапуск гудков.
+    private func linia2StartRingback() {
+        linia2RingbackWanted = true
+        linia2RingbackStarted = Date()
+        playSoundEffect("call-out", loop: true)
+        diag?.add(["type": "ringback", "state": "start", "audio": CallManager.linia2AudioActive ? 1 : 0,
+                   "playing": audioPlayer?.isPlaying == true ? 1 : 0, "video": !isAudioOnlyCall])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self = self, self.linia2RingbackWanted, !self.linia2Accepted, !self.closed else { return }
+            guard !CallManager.linia2AudioActive else { return }
+            let ok = CallManager.linia2ActivateForRingback(speaker: !self.isAudioOnlyCall || self.audioOutput == .speaker)
+            self.diag?.add(["type": "ringback", "state": "manual-session", "ok": ok ? 1 : 0,
+                            "route": AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none"])
+            self.playSoundEffect("call-out", loop: true)
+        }
+    }
+
 
     func linia2SignalingDown(reason: String) {
         guard started, !closed, !connectionLost else { return }
@@ -3212,6 +3247,10 @@ extension CallViewController {
         observers.append(nc.addObserver(forName: .linia2CallAudioActivated, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             CallManager.setOutputPort(self.audioOutput)
+            // LINIA2_RINGBACK: CallKit включил звук (активация прерывает плеер) — гудки заново, если ещё не ответили.
+            if self.linia2RingbackWanted, !self.linia2Accepted, !self.closed, self.callDirection == .outgoing {
+                self.playSoundEffect("call-out", loop: true)
+            }
             // Вариант Б: CallKit включил звук — странице: play() звука собеседника, проверить/перезапросить микрофон.
             self.webRTCClient.web?.linia2AudioActivated()
             self.linia2UpdateRoute()
@@ -3231,7 +3270,7 @@ extension CallViewController {
     private func linia2Tick() {
         // LINIA2 (1018): гудки до ответа не должны пропадать (перенастройка аудиосессии CallKit/камерой
         // останавливала AVAudioPlayer) — проверяем раз в секунду и запускаем снова.
-        if linia2Ringing, !linia2Accepted, !closed, callDirection == .outgoing, audioPlayer?.isPlaying != true {
+        if linia2Ringing || linia2RingbackWanted, !linia2Accepted, !closed, callDirection == .outgoing, audioPlayer?.isPlaying != true {
             linia2RingbackRestarts += 1
             if linia2RingbackRestarts <= 3 { diag?.add(["type": "ringback", "state": "restart", "n": linia2RingbackRestarts]) }
             playSoundEffect("call-out", loop: true)

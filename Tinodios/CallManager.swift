@@ -186,6 +186,21 @@ class CallManager {
         }
     }
 
+    /// LINIA2_RINGBACK (1020): CallKit не активировал аудиосессию исходящего звонка (iOS 27.0) — включить её для
+    /// гудков (AVAudioPlayer). Аудиомодуль WebRTC не включается (isAudioEnabled — как было; его включит CallKit
+    /// didActivate или ensureAudioEnabled после соединения). Звонок на WKWebView — не трогаем.
+    @discardableResult
+    public static func linia2ActivateForRingback(speaker: Bool) -> Bool {
+        guard !linia2WebAudio, !linia2AudioActive else { return false }
+        var ok = true
+        audioSessionChange { s in
+            try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+            do { try s.setActive(true) } catch { ok = false; throw error }
+            if !Linia2CallCenter.hasExternalOutput() { try? s.overrideOutputAudioPort(speaker ? .speaker : .none) }
+        }
+        return ok
+    }
+
     /// Запасной путь: CallKit не активировал звук (сбой) — включаем сами.
     public static func ensureAudioEnabled() {
         if linia2WebAudio { return }   // WebKit управляет звуком сам (CallKit активировал AVAudioSession)
