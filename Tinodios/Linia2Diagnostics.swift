@@ -351,6 +351,11 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
     func step(_ name: String, _ extra: [String: Any] = [:]) {
         let ms = Int(Date().timeIntervalSince(started) * 1000)
         let main = Thread.isMainThread ? 1 : 0
+        if !name.hasPrefix("net-") {
+            stepsLock.lock()
+            if stepsMem.count < 150 { stepsMem.append("\(name):\(ms)" + ((extra["dur"] as? Int).map { "/\($0)" } ?? "")) }
+            stepsLock.unlock()
+        }
         queue.async {
             // LINIA2 (сборка 1011): цикл переподключения забивал все 400 мест событиями net-* — отметки
             // сторожа главного потока (main-stall / main-blocked) и этапы после цикла терялись.
@@ -371,15 +376,13 @@ final class Linia2LaunchLog: NSObject, MXMetricManagerSubscriber {
         }
     }
 
-    /// Автотесты (-l2-uitest): шаги текущего запуска «имя:мс» (с длительностью «/dur», если есть).
+    /// Автотесты (-l2-uitest): шаги текущего запуска «имя:мс[/длительность]» — из памяти, без чтения файла
+    /// (значение читается при каждом снимке доступности XCUITest).
+    private let stepsLock = NSLock()
+    private var stepsMem: [String] = []
     func debugSteps() -> String {
-        queue.sync {
-            guard let cur = curURL, let data = try? Data(contentsOf: cur) else { return "" }
-            return Self.parse(data).filter { !(($0["step"] as? String) ?? "").hasPrefix("net-") }.map { e in
-                let d = (e["dur"] as? Int).map { "/\($0)" } ?? ""
-                return "\(e["step"] as? String ?? "?"):\(e["ms"] as? Int ?? -1)\(d)"
-            }.joined(separator: " ")
-        }
+        stepsLock.lock(); defer { stepsLock.unlock() }
+        return stepsMem.joined(separator: " ")
     }
 
     /// Шаг с замером длительности блока.
