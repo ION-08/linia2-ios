@@ -16,6 +16,10 @@ on:
         description: "Дизайн-контроль: только снимки экранов (Linia2DesignShots) на SE / 16 / 16 Pro Max × тема × шрифт"
         type: boolean
         default: false
+      store_shots:
+        description: "Скриншоты для App Store (Linia2StoreShots) на демо-данных: iPhone 16 Pro Max, тёмная + светлая → артефакт store-shots"
+        type: boolean
+        default: false
       launch_only:
         description: "Только запуск приложения (Linia2LaunchTests, в т.ч. шторм смены сети) — e2e-часть"
         type: boolean
@@ -34,14 +38,14 @@ on:
         value: ${{ jobs.uitest.outputs.crashed }}
 
 concurrency:
-  group: uitest-${{ github.workflow }}-${{ github.ref }}-${{ inputs.design || 'main' }}
+  group: uitest-${{ github.workflow }}-${{ github.ref }}-${{ inputs.design || 'main' }}-${{ inputs.store_shots || 'x' }}
   cancel-in-progress: true
 
 jobs:
   uitest:
     # Push с [release] тестирует release.yml (2 круга подряд) — отдельный прогон не нужен (общий тестовый сервер).
     # Ручной запуск с design=true — только job design.
-    if: ${{ (github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]')) && !(github.event_name == 'workflow_dispatch' && inputs.design) }}
+    if: ${{ (github.workflow != 'UI tests' || github.event_name != 'push' || !contains(github.event.head_commit.message, '[release]')) && !(github.event_name == 'workflow_dispatch' && (inputs.design || inputs.store_shots)) }}
     # macos-15: симуляторы iOS 18 уже установлены (на macos-26 их приходится скачивать ~30+ мин).
     # Сборка для TestFlight остаётся на macos-26 / Xcode 26 (testflight.yml).
     runs-on: macos-15
@@ -667,3 +671,173 @@ jobs:
         with:
           name: design-shots
           pattern: design-shots-*
+
+  # Скриншоты для App Store: Linia2StoreShots на демо-данных (ci/seed-store.mjs — вымышленные люди и переписка).
+  # Запуск: Actions → UI tests → Run workflow → store_shots = true. Итог — артефакт store-shots
+  # (PNG promax-<тема>-<экран>.png, 1320×2868). Загрузка в App Store Connect — asc-screenshots.yml (run_id этого прогона).
+  # Для каждой темы — свои пользователи и чистая установка приложения (непрочитанные, журнал звонков — как у нового).
+  store:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.store_shots }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      API: https://v2.chat-linia.site/invite/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
+          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"; xcodebuild -version
+
+      - name: Кэш сборки (Pods, CocoaPods specs, DerivedData)
+        uses: actions/cache@v4
+        with:
+          path: |
+            Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods/repos
+            ~/Library/Developer/Xcode/DerivedData
+          key: ios-build-${{ runner.os }}-uitest-${{ hashFiles('Podfile.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ios-build-${{ runner.os }}-uitest-${{ hashFiles('Podfile.lock') }}-
+            ios-build-${{ runner.os }}-uitest-
+
+      - name: Подготовка
+        run: |
+          cp ci/GoogleService-Info.stub.plist GoogleService-Info.plist
+          which pod || sudo gem install cocoapods --no-document
+          pod install --repo-update
+
+      - name: Симулятор iPhone 16 Pro Max (6.9")
+        run: |
+          pick() { xcrun simctl list runtimes available | grep -o "com.apple.CoreSimulator.SimRuntime.iOS-$1-[0-9-]*" | sort -V | tail -1; }
+          RT=$(pick 18); [ -n "$RT" ] || RT=$(pick 17)
+          [ -n "$RT" ] || { echo "::error::нет симулятора iOS 18/17"; exit 1; }
+          UDID=""
+          for DT in iPhone-16-Pro-Max iPhone-15-Pro-Max; do
+            UDID=$(xcrun simctl create "L2 store $DT" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
+          done
+          [ -n "$UDID" ] || { echo "::error::не удалось создать симулятор на $RT"; exit 1; }
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          echo "Симулятор: $(xcrun simctl list devices | grep "$UDID" | sed 's/^ *//')" | tee -a "$GITHUB_STEP_SUMMARY"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
+          for k in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do
+            xcrun simctl spawn "$UDID" defaults write com.apple.keyboard.preferences $k -bool true || true
+          done
+          xcrun simctl status_bar "$UDID" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 \
+            --cellularMode active --cellularBars 4 --operatorName "" --batteryState charged --batteryLevel 100 || true
+
+      - name: Сборка
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -workspace Tinodios.xcworkspace -scheme Tinodios -configuration Release \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            ENABLE_TESTABILITY=YES \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E 'error:|\*\* TEST BUILD' || true
+          grep -q '\*\* TEST BUILD SUCCEEDED \*\*' "$RUNNER_TEMP/build.log"
+
+      - name: Снимки (тёмная, светлая)
+        env:
+          CI_TOKEN: ${{ secrets.CI_TOKEN }}
+        run: |
+          [ -n "$CI_TOKEN" ] || { echo "::error::нет секрета CI_TOKEN"; exit 1; }
+          XR=$(find ~/Library/Developer/Xcode/DerivedData -name '*.xctestrun' -path '*Build/Products*' -print 2>/dev/null | head -1)
+          [ -n "$XR" ] || { echo "::error::нет .xctestrun"; exit 1; }
+          ST="$RUNNER_TEMP/store"; mkdir -p "$ST/png"
+          cat > "$ST/del.mjs" <<'JS'
+          const [login, pass] = process.argv.slice(2);
+          const ws = new WebSocket('wss://v2.chat-linia.site/v0/channels?apikey=AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K');
+          const send = o => ws.send(JSON.stringify(o));
+          ws.onopen = () => send({hi:{id:'1',ver:'0.25'}});
+          ws.onmessage = ev => { const m = JSON.parse(ev.data);
+            if (m.meta && m.meta.sub) for (const s of m.meta.sub) if (s.topic && s.topic !== 'me') send({del:{id:'t'+s.topic,topic:s.topic,what:'topic',hard:true}});
+            if (!m.ctrl) return;
+            if (m.ctrl.id==='1') send({login:{id:'2',scheme:'basic',secret:Buffer.from(login+':'+pass).toString('base64')}});
+            else if (m.ctrl.id==='2') { if (m.ctrl.code>=300) { console.log(login, 'вход', m.ctrl.code); process.exit(0); } send({sub:{id:'4',topic:'me',get:{what:'sub'}}}); }
+            else if (m.ctrl.id==='4') { setTimeout(() => send({del:{id:'3',what:'user',hard:true}}), 1500); }
+            else if (m.ctrl.id==='3') { console.log(login, 'удалён', m.ctrl.code); process.exit(0); } };
+          setTimeout(()=>{ console.log(login, 'таймаут'); process.exit(0); }, 15000);
+          JS
+          RUN="${{ github.run_id }}${{ github.run_attempt }}"; RUN="${RUN: -9}"
+          TI=0
+          for THEME in dark light; do
+            TI=$((TI + 1)); TAG="promax-$THEME"
+            # Пользователи: 0 — A (телефон, «Алексей Иванов»), 1..4 — собеседники.
+            for i in 0 1 2 3 4; do
+              curl -sf -X POST "$API/ci/setup" -H "Authorization: Bearer $CI_TOKEN" -H 'Content-Type: application/json' \
+                   -d "{\"run\":\"${RUN}${TI}${i}\"}" -o "$ST/u$i.json" || { echo "::error::ci/setup $i"; exit 1; }
+            done
+            python3 - "$ST" <<'PY'
+          import json, sys
+          st = sys.argv[1]
+          with open(f"{st}/users.env", "w") as out:
+              for i in range(5):
+                  d = json.load(open(f"{st}/u{i}.json"))
+                  p = "L2_" if i == 0 else f"L2_S{i}_"
+                  print(f"::add-mask::{d['password']}")
+                  out.write(f"export {p}LOGIN='{d['login']}' {p}PASSWORD='{d['password']}'\n")
+                  open(f"{st}/u{i}.json", "w").close()
+          PY
+            . "$ST/users.env"
+            node ci/seed-store.mjs || echo "::warning::демо-данные ($THEME) подготовлены не полностью"
+            xcrun simctl uninstall "$UDID" info.codix.liniya2 || true
+            xcrun simctl ui "$UDID" appearance "$THEME" || true
+            xcrun simctl ui "$UDID" content_size large || true
+            TEST_RUNNER_L2_LOGIN="$L2_LOGIN" TEST_RUNNER_L2_PASSWORD="$L2_PASSWORD" TEST_RUNNER_L2_THEME="$THEME" \
+              xcodebuild test-without-building -xctestrun "$XR" -destination "platform=iOS Simulator,id=$UDID" \
+                -only-testing:TinodiosUITests/Linia2StoreShots -resultBundlePath "$ST/$TAG.xcresult" \
+                2>&1 | tee "$ST/$TAG.log" | grep -E 'error:|Test Case .* (passed|failed)|\*\* TEST' || true
+            OUT="$ST/att-$TAG"; mkdir -p "$OUT"
+            xcrun xcresulttool export attachments --path "$ST/$TAG.xcresult" --output-path "$OUT" >/dev/null 2>&1 || true
+            python3 - "$OUT" "$TAG" "$ST/png" <<'PY'
+          import json, os, re, shutil, sys
+          src, tag, dst = sys.argv[1:4]
+          try:
+              manifest = json.load(open(os.path.join(src, "manifest.json")))
+          except Exception:
+              manifest = []
+          n = 0
+          def walk(o):
+              global n
+              if isinstance(o, dict):
+                  f = o.get("exportedFileName")
+                  if f:
+                      name = o.get("suggestedHumanReadableName") or o.get("name") or f
+                      m = re.search(r"store-([A-Za-z0-9-]+?)(?:_\d+_[0-9A-Fa-f-]+)?\.(png|jpe?g|heic)$", name) or re.search(r"store-([A-Za-z0-9-]+)", name)
+                      if m and os.path.exists(os.path.join(src, f)):
+                          shutil.copy(os.path.join(src, f), os.path.join(dst, f"{tag}-{m.group(1)}" + os.path.splitext(f)[1])); n += 1
+                  for v in o.values(): walk(v)
+              elif isinstance(o, list):
+                  for v in o: walk(v)
+          walk(manifest)
+          print(tag, "снимков:", n)
+          PY
+            for i in 0 1 2 3 4; do
+              p="L2_"; [ $i -gt 0 ] && p="L2_S${i}_"
+              l=$(eval echo "\$${p}LOGIN"); w=$(eval echo "\$${p}PASSWORD")
+              [ -n "$l" ] && node "$ST/del.mjs" "$l" "$w" || true
+            done
+            : > "$ST/users.env"
+          done
+          N=$(ls "$ST/png" | wc -l | tr -d ' ')
+          echo "### Скриншоты App Store: $N" >> "$GITHUB_STEP_SUMMARY"
+          ls "$ST/png" | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: store-shots
+          path: ${{ runner.temp }}/store/png
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: store-logs
+          path: ${{ runner.temp }}/store/*.log
+          if-no-files-found: ignore

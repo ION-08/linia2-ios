@@ -250,3 +250,119 @@ final class Linia2DesignShots: Linia2CallTestBase {
         }
     }
 }
+
+//
+//  Linia2StoreShots — скриншоты для App Store на демо-данных (ci/seed-store.mjs: «Анна Смирнова», «Михаил Петров»,
+//  «Елена Козлова», «Дмитрий Орлов», группа «Команда проекта»). Каждый снимок — XCTAttachment «store-<имя>».
+//  В CI: uitest.yml, job «store» (запуск вручную с store_shots=true), iPhone 16 Pro Max (6.9") и iPhone 14 Plus (6.5"),
+//  тёмная и светлая тема; PNG — в артефакте store-shots. Код паники и служебные экраны не снимаются.
+//  Окружение (TEST_RUNNER_*): L2_LOGIN / L2_PASSWORD — пользователь «Алексей Иванов»; L2_THEME = dark | light.
+//
+
+final class Linia2StoreShots: Linia2CallTestBase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        continueAfterFailure = true
+        if let theme = env["L2_THEME"], theme == "dark" || theme == "light" {
+            app.launchArguments += ["-l2-theme", theme]
+        }
+    }
+
+    override class func setUp() {
+        super.setUp()
+        UserDefaults.standard.removeObject(forKey: "l2.calltests.login")
+    }
+
+    private func shot(_ name: String) {
+        sleep(1)
+        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        a.name = "store-\(name)"
+        a.lifetime = .keepAlways
+        add(a)
+    }
+
+    private func login() { ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD")) }
+
+    private func goBack() {
+        if any("l2.chat.back").exists { any("l2.chat.back").tap(); sleep(1); return }
+        let b = app.navigationBars.buttons.element(boundBy: 0)
+        if b.exists { b.tap() }
+        sleep(1)
+    }
+
+    private func hideKeyboard() {
+        guard app.keyboards.firstMatch.exists else { return }
+        let feed = app.collectionViews.firstMatch
+        feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        sleep(1)
+    }
+
+    func test1_ChatList() {
+        login()
+        tab("l2.tab.chats").tap()
+        _ = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Анна Смирнова")).firstMatch.waitForExistence(timeout: 30)
+        sleep(3)
+        shot("chats")
+    }
+
+    func test2_Chat() {
+        login()
+        openChat(with: "Анна Смирнова")
+        hideKeyboard()
+        sleep(4)   // фото и голосовое догружаются
+        shot("chat")
+    }
+
+    func test3_CallsTab() {
+        login()
+        // Журнал звонков строится из локальной базы: сначала открыть чаты, где были звонки.
+        for name in ["Михаил Петров", "Елена Козлова", "Дмитрий Орлов", "Анна Смирнова"] {
+            openChat(with: name); sleep(1); goBack()
+        }
+        let t = tab("l2.tab.calls")
+        guard t.waitForExistence(timeout: 10) else { XCTFail("нет вкладки «Звонки»"); return }
+        t.tap(); sleep(3)
+        shot("calls")
+    }
+
+    func test4_Group() {
+        login()
+        openChat(with: "Команда проекта")
+        hideKeyboard()
+        sleep(2)
+        shot("group")
+    }
+
+    func test5_Privacy() {
+        login()
+        let t = tab("l2.tab.settings")
+        guard t.waitForExistence(timeout: 10) else { XCTFail("нет вкладки «Настройки»"); return }
+        t.tap(); sleep(2)
+        shot("x-settings")
+        let p = app.staticTexts["Конфиденциальность"].firstMatch
+        guard p.waitForExistence(timeout: 5) else { XCTFail("нет пункта «Конфиденциальность»"); return }
+        p.tap(); sleep(2)
+        shot("privacy")
+        goBack()
+    }
+
+    func test6_CallScreen() {
+        login()
+        openChat(with: "Анна Смирнова")
+        for (video, name) in [(false, "call"), (true, "x-call-video")] {
+            let b = app.buttons[video ? "l2.chat.video" : "l2.chat.call"].firstMatch
+            guard b.waitForExistence(timeout: 5) else { XCTFail("нет кнопки звонка"); continue }
+            b.tap()
+            dismissSpringboardAlerts()
+            if any("l2.call.micAllow").waitForExistence(timeout: 3) { any("l2.call.micAllow").tap(); sleep(1); dismissSpringboardAlerts() }
+            guard any("l2.call.state").waitForExistence(timeout: 20) else { XCTFail("нет экрана звонка"); continue }
+            sleep(3)
+            shot(name)
+            if any("l2.call.hangup").exists { any("l2.call.hangup").tap() }
+            let end = Date().addingTimeInterval(15)
+            while any("l2.call.hangup").exists && Date() < end { usleep(500_000) }
+            sleep(2)
+        }
+    }
+}
