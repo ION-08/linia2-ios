@@ -24,6 +24,10 @@ on:
         description: "Только «гость по ссылке → iOS» (e2e-часть, Linia2GuestLinkCallTests + guest-to-ios.mjs)"
         type: boolean
         default: false
+      device:
+        description: "Модель симулятора для ручного запуска (напр. iPhone-SE-3rd-generation, iPhone-16-Pro-Max); пусто — iPhone 16 Pro"
+        type: string
+        default: ""
       tests:
         description: "Только эти XCUITest (класс/метод через пробел, напр. TinodiosUITests/test25b_InputBarAboveKeyboard) + юнит-тесты, машина main"
         type: string
@@ -150,7 +154,7 @@ jobs:
           fi
           [ -n "$RT" ] || { echo "::error::Нет симулятора iOS 18/17 — тесты не запущены, загрузки в TestFlight не будет"; xcrun simctl list runtimes; exit 1; }
           UDID=""
-          for DT in iPhone-16-Pro iPhone-16 iPhone-15-Pro iPhone-15; do
+          for DT in ${{ inputs.device }} iPhone-16-Pro iPhone-16 iPhone-15-Pro iPhone-15; do
             UDID=$(xcrun simctl create "L2 $DT" "com.apple.CoreSimulator.SimDeviceType.$DT" "$RT" 2>/dev/null) && break || UDID=""
           done
           [ -n "$UDID" ] || { echo "::error::не удалось создать iPhone на $RT"; exit 1; }

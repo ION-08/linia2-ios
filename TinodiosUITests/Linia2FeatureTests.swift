@@ -273,6 +273,45 @@ final class TinodiosUITestsFeatures: Linia2CallTestBase {
         }
     }
 
+    // MARK: - Камера (LINIA2_CAMERA, 1020)
+
+    /// «Сделать фото» в шторке вложений: снимок (в симуляторе — подменный, как с камеры iPhone: повёрнутый,
+    /// 16 бит на канал) → предпросмотр → «Отправить» → у собеседника пришло сообщение с изображением.
+    /// В 1019 снимок камеры молча отбрасывался (fixedOrientation не перерисовывал HDR / 16-битный снимок).
+    func testC1_CameraPhotoSent() throws {
+        let (b, topic) = try peer()
+        app.launchArguments.append("-l2-fake-camera")
+        openPeerChat()
+        let caption = "Фото \(Self.stamp)"
+        wait(app.buttons["l2.chat.attach"].firstMatch, "кнопка вложения").tap()
+        wait(app.buttons["Фото или видео"].firstMatch, "«Фото или видео»").tap()
+        wait(app.buttons["Сделать фото"].firstMatch, "«Сделать фото»").tap()
+        let send = wait(any("l2.preview.send"), "предпросмотр фото с кнопкой «Отправить»", timeout: 15)
+        screenshot("camera-preview")
+        let cap = any("l2.preview.caption")
+        let typed = cap.exists
+        if typed {
+            cap.tap()
+            cap.typeText(caption)
+        }
+        send.tap()
+        wait(app.textViews["l2.chat.input"].firstMatch, "возврат в чат после отправки", timeout: 15)
+        // Сервер: у собеседника последнее сообщение — с изображением (IM).
+        var found = false
+        let end = Date().addingTimeInterval(40)
+        while Date() < end && !found {
+            b.fetchLatest(topic)
+            found = b.datas.contains { d in
+                guard let c = d["content"] as? [String: Any], let ents = c["ent"] as? [[String: Any]] else { return false }
+                let txt = c["txt"] as? String ?? ""
+                return ents.contains { ($0["tp"] as? String) == "IM" } && (!typed || txt.contains(caption))
+            }
+            if !found { sleep(3) }
+        }
+        screenshot("camera-sent")
+        XCTAssertTrue(found, "фото с камеры не пришло собеседнику")
+    }
+
     // MARK: - Голосовые: одно за другим, никогда одновременно
 
     /// WAV 8 кГц, 8 бит, моно — тишина заданной длительности (VLC играет без сети).

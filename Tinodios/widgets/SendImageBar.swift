@@ -102,6 +102,9 @@ class SendImageBar: UIView {
         }
 
         sendButton.isEnabled = true
+        sendButton.accessibilityIdentifier = "l2.preview.send"   // LINIA2_UITEST_IDS
+        sendButton.accessibilityLabel = "Отправить"
+        inputField.accessibilityIdentifier = "l2.preview.caption"
         toggleNotAvailableOverlay(visible: false)
     }
 

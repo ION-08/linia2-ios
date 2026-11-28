@@ -57,6 +57,16 @@ open class ImagePicker: NSObject {
 
         if let action = self.action(for: .camera, title: Linia2Texts.t("Take photo")) {
             alertController.addAction(action)
+        } else if Linia2TestHook.enabled && ProcessInfo.processInfo.arguments.contains("-l2-fake-camera") {
+            // Автотесты: в симуляторе камеры нет — «снимок» как с камеры iPhone (повёрнутый, HDR / 16 бит на канал).
+            alertController.addAction(UIAlertAction(title: Linia2Texts.t("Take photo"), style: .default) { [weak self] _ in
+                guard let self = self else { return }
+                let info: [UIImagePickerController.InfoKey: Any] = [.mediaType: kUTTypeImage as String,
+                                                                     .originalImage: ImagePicker.linia2FakeCameraImage()]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    self.didPickImage(nil, didFinishPickingMediaWithInfo: info, camera: true)
+                }
+            })
         }
         if let action = self.action(for: .savedPhotosAlbum, title: Linia2Texts.t("Camera roll")) {
             alertController.addAction(action)
@@ -81,9 +91,52 @@ open class ImagePicker: NSObject {
         self.presentationController?.present(alertController, animated: false)
     }
 
-    private func pickerController(_ controller: UIImagePickerController, didSelect media: ImagePickerMediaType?) {
-        controller.dismiss(animated: true, completion: nil)
-        self.delegate?.didSelect(media: media)
+    private func pickerController(_ controller: UIImagePickerController?, didSelect media: ImagePickerMediaType?) {
+        // LINIA2_CAMERA (1020): результат — после закрытия пикера (переход на предпросмотр во время анимации
+        // закрытия камеры мог не выполниться).
+        guard let controller = controller, controller.presentingViewController != nil else {
+            self.delegate?.didSelect(media: media)
+            return
+        }
+        controller.dismiss(animated: true) { [weak self] in
+            self?.delegate?.didSelect(media: media)
+        }
+    }
+
+    /// LINIA2_CAMERA (1020): снимок в обычный 8-битный sRGB «как на экране», ориентация вверх, длинная сторона ≤ maxSide.
+    /// Снимки камеры iPhone — повёрнутые (orientation .right) и с iOS 17+ HDR / 10–16 бит на канал: прежний
+    /// fixedOrientation рисовал их через CGContext с форматом исходника (8-битный premultipliedLast) — CGContext
+    /// не создавался, картинка становилась nil и выбор молча отбрасывался: «фото сделано, но не отправилось».
+    /// Из галереи фото обычно уже «вверх» — fixedOrientation возвращал их без перерисовки, поэтому там работало.
+    static func linia2Normalized(_ img: UIImage, maxSide: CGFloat = 2048) -> UIImage? {
+        let w = img.size.width * img.scale, h = img.size.height * img.scale
+        guard w >= 1, h >= 1 else { return nil }
+        let k = min(1, maxSide / max(w, h))
+        let size = CGSize(width: max(1, (w * k).rounded(.down)), height: max(1, (h * k).rounded(.down)))
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = true
+        fmt.preferredRange = .standard
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    /// Автотесты: картинка как с камеры — 16 бит на канал (extended range) и orientation .right.
+    static func linia2FakeCameraImage() -> UIImage {
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = true
+        fmt.preferredRange = .extended
+        let size = CGSize(width: 1600, height: 1200)
+        let base = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            for i in 0..<16 {
+                UIColor(hue: CGFloat(i) / 16, saturation: 0.6, brightness: 0.9, alpha: 1).setFill()
+                ctx.fill(CGRect(x: CGFloat(i) * size.width / 16, y: 0, width: size.width / 16 + 1, height: size.height))
+            }
+        }
+        guard let cg = base.cgImage else { return base }
+        return UIImage(cgImage: cg, scale: 1, orientation: .right)
     }
 
     private static func extractFileNameAndMimeType(fromURL url: NSURL?) -> (NSString?, String?) {
@@ -103,21 +156,32 @@ open class ImagePicker: NSObject {
         return (fname, mimeType)
     }
 
-    private func didPickImage(_ picker: UIImagePickerController,
-                              didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-        guard let image = (info[self.pickerController.allowsEditing ? .editedImage : .originalImage] as? UIImage)?.fixedOrientation() else {
+    private func didPickImage(_ picker: UIImagePickerController?,
+                              didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any], camera: Bool? = nil) {
+        let isCamera = camera ?? (self.pickerController.sourceType == .camera)
+        let picked = (info[self.pickerController.allowsEditing ? .editedImage : .originalImage] as? UIImage)
+            ?? (info[.originalImage] as? UIImage) ?? (info[.editedImage] as? UIImage)
+        // LINIA2_CAMERA: снимок камеры — всегда перерисовка в 8-битный sRGB (см. linia2Normalized); прочие — как раньше,
+        // а если fixedOrientation не справился (HDR / 16 бит) — тоже перерисовка, а не молчаливый отказ.
+        let fixed: UIImage? = isCamera ? nil : picked?.fixedOrientation()
+        guard let src = picked, let image = fixed ?? ImagePicker.linia2Normalized(src) else {
+            Linia2LaunchLog.shared.step("photo-pick-fail", ["camera": isCamera ? 1 : 0, "img": picked == nil ? 0 : 1])
+            if picked != nil { DispatchQueue.main.async { UiUtils.showToast(message: "Не удалось обработать фото.") } }
             return self.pickerController(picker, didSelect: nil)
         }
 
         var mimeType: String? = nil
         var fname: NSString? = nil
-        if self.pickerController.sourceType == .camera {
+        if isCamera {
             // Images taken by camera won't have .imageURL or .referenceURL.
-            // Generate the file name from the timestamp and set the mime type to "image/png".
-            if let metadata = info[.mediaMetadata] as? [NSString: Any], let exif = metadata["{Exif}"] as? [NSString: Any] {
-                fname = ((exif["DateTimeOriginal"] as? NSString ?? "unknown").replacingOccurrences(of: " ", with: "-") + ".png") as NSString
-                mimeType = "image/png"
-            }
+            // LINIA2_CAMERA: JPEG (PNG снимка камеры — в 10 раз больше) и имя файла всегда (без EXIF имя было пустым —
+            // сервер не принимает выгрузку без имени файла).
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd-HHmmss"
+            fname = "IMG-\(f.string(from: Date())).jpg" as NSString
+            mimeType = "image/jpeg"
+            Linia2LaunchLog.shared.step("photo-camera", ["w": Int(image.size.width * image.scale), "h": Int(image.size.height * image.scale)])
         } else {
             let imageUrl = info[.imageURL] as? NSURL
 
