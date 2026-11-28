@@ -134,6 +134,7 @@ final class Linia2CallDiag {
     private var timer: Timer?
     private var ended = false
     private let started = Date()
+    private var acceptedAt: Date?
     /// Дополнительные поля для stats (состояние переподключения) — с главного потока.
     var stateProvider: (() -> [String: Any])?
 
@@ -165,12 +166,18 @@ final class Linia2CallDiag {
         var e = ev
         e["t"] = Int(Date().timeIntervalSince1970 * 1000)
         e["ms"] = Int(Date().timeIntervalSince(started) * 1000)   // от начала звонка на устройстве
+        // LINIA2 (1018): «msAcc» — от ответа (звонящий: «accepted», принимающий: «accept-sent»): до/после по шагам
+        // cam-ready, pc, gather-complete, offer-sent/answer, ice checking/connected, first-video-frame, first-audio.
+        let ty = (ev["type"] as? String) ?? ""
+        if acceptedAt == nil && (ty == "accepted" || ty == "accept-sent") { acceptedAt = Date() }
+        if let a = acceptedAt { e["msAcc"] = Int(Date().timeIntervalSince(a) * 1000) }
         events.append(e)
         let s = seqProvider()
         if s > 0 { seq = s }
         // LINIA2: ключевые шаги сигнализации — сразу на сервер: если поток звонка зависнет или приложение
         // закроется, видно, до какого шага дошли (раньше уходили только «start», stats и «end»).
-        let key: Set<String> = ["pair", "pc", "accept-sent", "accepted", "offer", "answer", "offer-sent", "answer-sent", "error", "ice"]
+        let key: Set<String> = ["pair", "pc", "accept-sent", "accepted", "offer", "answer", "offer-sent", "answer-sent", "error", "ice",
+                                "ringing", "first-video-frame", "first-audio"]
         if events.count >= 40 || key.contains((ev["type"] as? String) ?? "") { flush() }
     }
 

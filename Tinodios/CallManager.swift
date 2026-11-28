@@ -291,6 +291,7 @@ class CallManager {
         // LINIA2_E2E: в автотестах (симулятор) входящий звонок — своим окном вместо CallKit.
         if !CallManager.useCallKit {
             tinode.videoCall(topic: topicName, seq: seq, event: "ringing")
+            Linia2CallCenter.shared.prewarmIncoming(topic: topicName, seq: seq)
             let timeout = (tinode.getServerParam(for: "callTimeout")?.asInt() ?? CallManager.kCallTimeout) + 5
             self.timer = self.makeCallTimeoutTimer(withDeadline: TimeInterval(timeout))
             DispatchQueue.main.async {
@@ -341,6 +342,8 @@ class CallManager {
                 }
                 CallManager.activateAudioSession(withSpeaker: !audioOnly)
                 tinode.videoCall(topic: topicName, seq: seq, event: "ringing")
+                // LINIA2 (1018): соединение заранее, пока звонит (до «Принять»): сбор кандидатов и TURN.
+                Linia2CallCenter.shared.prewarmIncoming(topic: topicName, seq: seq)
                 // Без ответа — снять (reportCall .unanswered): таймаут сервера + 5 с, не дольше 45 с.
                 let timeout = min((tinode.getServerParam(for: "callTimeout")?.asInt() ?? CallManager.kCallTimeout) + 5, 45)
                 self.timer = self.makeCallTimeoutTimer(withDeadline: TimeInterval(timeout))
@@ -635,6 +638,7 @@ class CallManager {
         guard let call = self.callInProgress, call.topic == topic, call.seq == seq, !call.accepted else {
             return
         }
+        Linia2CallCenter.shared.dropPrewarmed()
         // LINIA2: входящий снят другой стороной — для CallKit это «завершён собеседником», а не наш отбой.
         if !currentCallIsOutgoing {
             endRemotely(topic: topic, seq: seq, why: "dismiss", reason: reason)
@@ -810,6 +814,7 @@ extension CallManager: CallManagerImpl {
 
     func completeCallInProgress(reportToSystem: Bool, reportToPeer: Bool) {
         guard let call = self.callInProgress else { return }
+        Linia2CallCenter.shared.dropPrewarmed()
         Cache.log.info("Completing call: topic=%@, seq=%d", call.topic, call.seq)
         L2Log.event("l2_call_end", ["kind": call.audioOnly ? "audio" : "video", "accepted": call.accepted ? 1 : 0,
                                     "dir": call.from == Cache.tinode.myUid ? "out" : "in", "by_me": reportToPeer ? 1 : 0])

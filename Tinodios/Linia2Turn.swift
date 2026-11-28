@@ -34,6 +34,9 @@ final class Linia2Turn {
         }
     }
 
+    /// LINIA2 (1018): есть действующие данные TURN — соединение можно создать заранее без ожидания сервера.
+    var hasFresh: Bool { queue.sync { validUntil.timeIntervalSinceNow > 60 && !servers.isEmpty } }
+
     /// Обновляет данные в фоне, если их нет или скоро истекут.
     func prefetch() {
         queue.async { self.fetchIfNeeded(completion: nil) }
