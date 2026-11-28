@@ -270,7 +270,7 @@ jobs:
 
       - name: Итог звонка iOS ↔ веб
         id: webpeer
-        if: ${{ (!cancelled() && env.L2_WEB_PEER == '1') && matrix.suite == 'main' }}
+        if: ${{ (!cancelled() && env.L2_WEB_PEER == '1') && matrix.suite == 'main' && !inputs.launch_only }}
         run: |
           for i in $(seq 1 60); do [ -f "$RUNNER_TEMP/out/web/call-peer.rc" ] && break; sleep 5; done
           RC=$(cat "$RUNNER_TEMP/out/web/call-peer.rc" 2>/dev/null || echo 99)
