@@ -353,9 +353,18 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         XCTAssertNotEqual(app.state, .notRunning, "приложение упало в фоне после push")
         app.activate()
         waitForeground("возврат-из-фона")
-        passPin(required: false, "короткий-фон")
+        // 1018: PIN — сразу при любом уходе из приложения (без «30 с в фоне»).
+        passPin(required: true, "короткий-фон")
         watchAlive("после-короткого-фона", seconds: 5)
         screenshot("after-short-background")
+        // И мгновенный возврат (как после гашения/блокировки экрана): «Домой» → сразу назад → PIN.
+        XCUIDevice.shared.press(.home)
+        let bg2 = Date().addingTimeInterval(10)
+        while Date() < bg2 && app.state == .runningForeground { usleep(200_000) }
+        app.activate()
+        waitForeground("мгновенный-возврат")
+        passPin(required: true, "мгновенный-возврат")
+        watchAlive("после-мгновенного-возврата", seconds: 3)
     }
 
     // MARK: - (d) длинный фон (> таймаута PIN), push, нажатие
@@ -366,7 +375,7 @@ final class Linia2LaunchTests: Linia2CallTestBase {
         guard let peerUid = c.uid else { XCTFail("нет uid собеседника"); return }
         tab("l2.tab.chats").tap()
         XCUIDevice.shared.press(.home)
-        sleep(35)   // PIN — после 30 с в фоне (Linia2AppLock.kLockAfter)
+        sleep(5)   // 1018: PIN — сразу при уходе из приложения (задержки больше нет)
         let tag = "L4-" + Self.stamp
         let seq = sendBotMessages(c, to: topic, tag: tag)
         try requestPush(pushPayload(topic: peerUid, from: peerUid, seq: seq), name: "long")
@@ -382,7 +391,7 @@ final class Linia2LaunchTests: Linia2CallTestBase {
 
         // И ещё раз: длинный фон → просто вернуться (без уведомления) → PIN → живо.
         XCUIDevice.shared.press(.home)
-        sleep(33)
+        sleep(3)
         app.activate()
         waitForeground("возврат-после-второго-фона")
         passPin(required: true, "второй-длинный-фон")

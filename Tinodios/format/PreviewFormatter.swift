@@ -128,7 +128,7 @@ class PreviewFormatter: AbstractFormatter {
             return handleUnknown(content: children, using: nil, draftyKey: nil)
         }
 
-        let state = data["state"]?.asString() ?? ""
+        let state = Linia2StaleCall.effective(data["state"]?.asString() ?? "")   // LINIA2: зависший «Соединение…»
         let incoming = data["incoming"]?.asBool() ?? false
         let duration = data["duration"]?.asInt() ?? 0
         let annotation = duration > 0 ? AbstractFormatter.millisToTime(millis: duration) : AbstractFormatter.callStatusText(incoming: incoming, event: state)

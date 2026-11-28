@@ -315,15 +315,56 @@ extension UIFont {
     }
 }
 
+/// LINIA2 (1018): зависший статус звонка («Входящий звонок · Соединение…» навсегда). Сообщение звонка
+/// (head webrtc=started) сервер заменяет финальным (missed/declined/finished/disconnected); если замена не пришла
+/// (обрыв), звонок старше kAge и не текущий на этом устройстве считается завершённым: started → missed
+/// («Пропущенный» у входящего, «Отменён» у исходящего), accepted → disconnected («Не состоялся»).
+/// Только для показа — в базе ничего не меняется (придёт настоящая замена — покажется она).
+enum Linia2StaleCall {
+    static let kAge: TimeInterval = 120
+    private static let kCtx = "l2.stalecall.ctx"
+
+    static func effective(_ state: String, ts: Date?, topic: String?, seq: Int) -> String {
+        let started = MsgServerData.WebRTC.kStarted.rawValue, accepted = MsgServerData.WebRTC.kAccepted.rawValue
+        guard state == started || state == accepted, let ts = ts, Date().timeIntervalSince(ts) > kAge else { return state }
+        if Thread.isMainThread {
+            if let c = Cache.callManager.callInProgress, c.topic == topic, c.seq == seq || c.seq <= 0 { return state }
+        } else if CallManager.state.inConversation || CallManager.state.uuid != nil {
+            return state   // вне главного потока текущий звонок не прочитать — не трогаем
+        }
+        return state == started ? MsgServerData.WebRTC.kMissed.rawValue : MsgServerData.WebRTC.kDisconnected.rawValue
+    }
+
+    /// Состояние для форматтера: контекст сообщения задаётся на время форматирования (поток форматтера).
+    static func effective(_ state: String) -> String {
+        guard let c = Thread.current.threadDictionary[kCtx] as? StoredMessage else { return state }
+        return effective(state, ts: c.ts, topic: c.topic, seq: c.seqId)
+    }
+
+    /// Звонок ещё может «зависнуть» (started/accepted моложе kAge) — показ не кэшировать.
+    static func mayChange(_ m: StoredMessage) -> Bool {
+        guard let st = m.webrtcCallState, st == .kStarted || st == .kAccepted, let ts = m.ts else { return false }
+        return Date().timeIntervalSince(ts) <= kAge
+    }
+
+    static func with<T>(_ m: StoredMessage, _ body: () -> T) -> T {
+        let d = Thread.current.threadDictionary
+        let prev = d[kCtx]
+        d[kCtx] = m
+        defer { d[kCtx] = prev }
+        return body()
+    }
+}
+
 extension StoredMessage {
     static var previewFormatter: AbstractFormatter?
 
     /// Generate and cache NSAttributedString representation of Drafty content.
     func attributedContent(fitIn size: CGSize, withDefaultAttributes attributes: [NSAttributedString.Key: Any]? = nil) -> NSAttributedString? {
-        guard cachedContent == nil else { return cachedContent }
+        guard cachedContent == nil || Linia2StaleCall.mayChange(self) else { return cachedContent }
         if !isDeleted {
             guard let content = content else { return nil }
-            cachedContent = FullFormatter(defaultAttributes: attributes ?? [:]).toAttributed(content, fitIn: size)
+            cachedContent = Linia2StaleCall.with(self) { FullFormatter(defaultAttributes: attributes ?? [:]).toAttributed(content, fitIn: size) }
         } else {
             cachedContent = StoredMessage.contentDeletedMessage(withAttributes: attributes)
         }
@@ -332,14 +373,15 @@ extension StoredMessage {
 
     /// Generate and cache NSAttributedString preview of Drafty content.
     func attributedPreview(fitIn size: CGSize, withDefaultAttributes attributes: [NSAttributedString.Key: Any]? = nil) -> NSAttributedString? {
-        guard cachedPreview == nil else { return cachedPreview }
+        guard cachedPreview == nil || Linia2StaleCall.mayChange(self) else { return cachedPreview }
         if !isDeleted {
             guard var content = content else { return nil }
             if StoredMessage.previewFormatter == nil {
                 StoredMessage.previewFormatter = PreviewFormatter(defaultAttributes: [:])
             }
             content = content.preview(previewLen: UiUtils.kPreviewLength)
-            cachedPreview = StoredMessage.previewFormatter!.toAttributed(content, fitIn: size)
+            let formatter = StoredMessage.previewFormatter!
+            cachedPreview = Linia2StaleCall.with(self) { formatter.toAttributed(content, fitIn: size) }
         } else {
             cachedPreview = StoredMessage.contentDeletedMessage(withAttributes: attributes)
         }

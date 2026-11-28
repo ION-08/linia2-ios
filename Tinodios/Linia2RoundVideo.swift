@@ -747,11 +747,13 @@ enum Linia2Permissions {
                 DispatchQueue.main.async { completion(.granted) }
                 return
             }
+            Linia2AppLock.shared.expectSystemPrompt()
             AVAudioSession.sharedInstance().requestRecordPermission { ok in
                 DispatchQueue.main.async { completion(ok ? .granted : .denied) }
             }
         }
         if cam == .notDetermined {
+            Linia2AppLock.shared.expectSystemPrompt()
             AVCaptureDevice.requestAccess(for: .video) { ok in
                 if ok { askMic() } else { DispatchQueue.main.async { completion(.denied) } }
             }
