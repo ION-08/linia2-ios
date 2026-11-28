@@ -103,6 +103,32 @@ enum Linia2Round {
         return max(0, Int(ceil(left / 86400)))
     }
 
+    /// L2_RVLEFT: момент исчезновения (время сообщения + head linia2-ttl), nil — срока нет.
+    static func expiry(_ m: Message) -> Date? {
+        guard let v = m.head?[Linia2Disappearing.kHeader], let ts = m.ts else { return nil }
+        var secs: Double = 0
+        switch v {
+        case .int(let i): secs = Double(i)
+        case .int64(let i): secs = Double(i)
+        case .double(let d): secs = d
+        case .string(let s): secs = Double(s) ?? 0
+        default: return nil
+        }
+        guard secs > 0 else { return nil }
+        return ts.addingTimeInterval(secs)
+    }
+
+    /// «исчезнет через 6 дн.» (целые сутки, вниз) … «исчезнет через 3 ч» … «скоро исчезнет»; срок вышел — nil.
+    static func leftText(until expiry: Date?, now: Date = Date()) -> String? {
+        guard let e = expiry else { return nil }
+        let left = e.timeIntervalSince(now)
+        guard left > 0 else { return nil }
+        let prefix = L2T("l2.round.left", "исчезнет через")
+        if left >= 86400 { return prefix + " " + String(Int(left / 86400)) + " дн." }
+        if left >= 3600 { return prefix + " " + String(Int(left / 3600)) + " ч" }
+        return L2T("l2.round.soon", "скоро исчезнет")
+    }
+
     static var cacheDir: URL { Linia2Storage.roundDir }
 }
 
@@ -112,6 +138,19 @@ final class Linia2RoundVideoView: UIView {
     static let kDiameter: CGFloat = 220
     private static var cache: [String: Linia2RoundVideoView] = [:]
     private static var order: [String] = []
+
+    /// L2_RVLEFT: один общий таймер раз в минуту обновляет подписи «исчезнет через …» у живых кружков (их ≤ 16).
+    private static var leftTimer: Timer?
+    private static func startLeftTimer() {
+        guard leftTimer == nil else { return }
+        let t = Timer(timeInterval: 60, repeats: true) { _ in
+            let now = Date()
+            for v in Linia2RoundVideoView.cache.values where v.expiry != nil && v.window != nil { v.refreshLeft(now: now) }
+        }
+        t.tolerance = 10
+        RunLoop.main.add(t, forMode: .common)
+        leftTimer = t
+    }
 
     /// Один вид на сообщение (чтобы перерисовка ячейки не обрывала звук).
     static func view(for key: String) -> Linia2RoundVideoView {
@@ -132,6 +171,8 @@ final class Linia2RoundVideoView: UIView {
     private let badge = PaddedLabelL2()
     /// «исчезнет через N дн.» — под кругом (кладётся в ячейку рядом с кругом).
     let leftLabel = UILabel()
+    /// Когда кружок исчезнет (для ежеминутного обновления подписи).
+    private var expiry: Date?
     /// WebM (веб без MP4) AVPlayer не играет — по нажатию открывается обычный просмотр видео (VLC).
     var onOpenFallback: (() -> Void)?
     private var isWebM = false
@@ -183,6 +224,14 @@ final class Linia2RoundVideoView: UIView {
         if let o = endObs { NotificationCenter.default.removeObserver(o) }
     }
 
+    /// Подпись под кругом по сроку; меняет текст, только если он изменился (без лишней перерисовки).
+    fileprivate func refreshLeft(now: Date) {
+        let text = Linia2Round.leftText(until: expiry, now: now)
+        if leftLabel.text != text { leftLabel.text = text }
+        let a11y = "Видео-кружок" + (text.map { ", " + $0 } ?? "")
+        if accessibilityLabel != a11y { accessibilityLabel = a11y }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         layer.cornerRadius = bounds.width / 2
@@ -197,12 +246,9 @@ final class Linia2RoundVideoView: UIView {
         let ms = entity.data?["duration"]?.asInt() ?? 0
         badge.text = ms > 0 ? String(format: "%d:%02d", ms / 60000, (ms / 1000) % 60) : nil
         badge.isHidden = ms <= 0
-        if let d = Linia2Round.daysLeft(message) {
-            leftLabel.text = L2T("l2.round.left", "исчезнет через") + " " + String(max(1, d)) + " дн."
-        } else {
-            leftLabel.text = nil
-        }
-        accessibilityLabel = "Видео-кружок" + (leftLabel.text.map { ", " + $0 } ?? "")
+        expiry = Linia2Round.expiry(message)
+        refreshLeft(now: Date())
+        if expiry != nil { Self.startLeftTimer() }
         if poster.image == nil, let p = entity.data?["preview"]?.asData() { poster.image = UIImage(data: p) }
         isWebM = Linia2Round.isWebM(entity)
         if isWebM {

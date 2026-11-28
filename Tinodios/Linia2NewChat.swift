@@ -549,7 +549,7 @@ final class Linia2NewChatViewController: UIViewController, UITableViewDataSource
 
     /// Запрос к fnd: как в FindInteractor — одиночное слово превращается в «alias:x,x»;
     /// дополнительно ищем по тегу basic:логин (его выставляет наш сервер авторизации).
-    private static func tagQuery(_ raw: String) -> String {
+    static func tagQuery(_ raw: String) -> String {
         // LINIA2: «@ann» = «ann»; теги в Tinode — в нижнем регистре; слова имени ищутся каждое отдельно.
         let words = raw.lowercased().split(whereSeparator: { " ,".contains($0) })
             .map { $0.hasPrefix("@") ? String($0.dropFirst()) : String($0) }.filter { !$0.isEmpty && !$0.contains(":") }
@@ -1053,5 +1053,128 @@ final class Linia2NewChatViewController: UIViewController, UITableViewDataSource
         }
         tableView.reloadRows(at: [indexPath], with: .none)
         updateGroupState()
+    }
+}
+
+// MARK: - L2_CSEARCH: поиск людей на сервере для вкладки «Контакты» (как веб: fnd «alias:x,basic:x,x»)
+
+struct Linia2FoundPerson {
+    let id: String
+    let name: String
+    let login: String?
+    let pub: TheCard?
+    let sub: Subscription<TheCard, [String]>?
+}
+
+enum Linia2PeopleSearch {
+    /// Найти людей по запросу (≥ 2 символов, «@x» = «x»). completion — на главном потоке; nil — нет связи / ошибка.
+    /// Ответ берётся из самого {meta} (без слушателя fnd — им пользуется экран «Добавить контакт»).
+    static func search(_ raw: String, completion: @escaping ([Linia2FoundPerson]?) -> Void) {
+        let tinode = Cache.tinode
+        guard tinode.isConnected else { completion(nil); return }
+        let fnd = tinode.getOrCreateFndTopic()
+        let query = Linia2NewChatViewController.tagQuery(raw)
+        let start: PromisedReply<ServerMessage> = fnd.attached ? PromisedReply<ServerMessage>(value: ServerMessage()) : fnd.subscribe(set: nil, get: nil)
+        start.thenApply { _ in
+            return fnd.setMeta(pub: query, priv: nil)
+        }.thenApply { _ in
+            return fnd.getMeta(query: MsgGetMeta.sub())
+        }.then(onSuccess: { msg in
+            var out: [Linia2FoundPerson] = []
+            for s in msg?.meta?.sub ?? [] {
+                guard let sub = s as? Subscription<TheCard, [String]>,
+                      let uid = sub.user ?? sub.topic, uid.hasPrefix("usr"), !tinode.isMe(uid: uid),
+                      !out.contains(where: { $0.id == uid }) else { continue }
+                let lg = Linia2PeopleSearch.login(fromTags: sub.priv)
+                var name = sub.pub?.fn?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if name.isEmpty { name = lg ?? "Без имени" }
+                out.append(Linia2FoundPerson(id: uid, name: name, login: lg, pub: sub.pub, sub: sub))
+            }
+            out.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            DispatchQueue.main.async { completion(out) }
+            return nil
+        }, onFailure: { _ in
+            DispatchQueue.main.async { completion(nil) }
+            return nil
+        })
+    }
+
+    private static func login(fromTags tags: [String]?) -> String? {
+        guard let tags = tags else { return nil }
+        for prefix in ["alias:", "basic:"] {
+            if let tag = tags.first(where: { $0.hasPrefix(prefix) }) {
+                let value = String(tag.dropFirst(prefix.count))
+                if !value.isEmpty { return value }
+            }
+        }
+        return tags.first(where: { !$0.isEmpty && !$0.contains(":") })
+    }
+
+    /// Открыть карточку найденного (как «Добавить контакт»: топик создаётся локально, подписка — в контакты).
+    static func open(_ p: Linia2FoundPerson, from nav: UINavigationController?) {
+        let tinode = Cache.tinode
+        if !tinode.isTopicTracked(topicName: p.id) {
+            guard let topic = tinode.newTopic(for: p.id) as? DefaultComTopic else {
+                UiUtils.showToast(message: "Не удалось открыть контакт. Попробуйте ещё раз")
+                return
+            }
+            topic.pub = p.pub
+            topic.persist()
+        }
+        if let sub = p.sub, BaseDb.sharedInstance.userDb != nil {
+            ContactsManager.default.processSubscription(sub: sub)
+        }
+        nav?.pushViewController(Linia2ContactCardViewController(topicName: p.id), animated: true)
+    }
+}
+
+/// Строка «Найдены в Линии» во вкладке «Контакты» (вид как у Linia2ContactCell).
+final class Linia2FoundPersonCell: UITableViewCell {
+    static let reuseId = "Linia2FoundPersonCell"
+
+    private let avatar = RoundImageView()
+    private let nameLabel = UILabel()
+    private let subtitleLabel = UILabel()
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = L2.background
+        contentView.backgroundColor = L2.background
+        let sel = UIView()
+        sel.backgroundColor = L2.surface
+        selectedBackgroundView = sel
+        avatar.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.font = L2.font(17, .semibold)
+        nameLabel.textColor = L2.textPrimary
+        subtitleLabel.font = L2.font(15)
+        subtitleLabel.textColor = L2.textSecondary
+        let texts = UIStackView(arrangedSubviews: [nameLabel, subtitleLabel])
+        texts.axis = .vertical
+        texts.spacing = 3
+        texts.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(avatar)
+        contentView.addSubview(texts)
+        NSLayoutConstraint.activate([
+            avatar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            avatar.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            avatar.widthAnchor.constraint(equalToConstant: 52),
+            avatar.heightAnchor.constraint(equalToConstant: 52),
+            avatar.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 10),
+            texts.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 14),
+            texts.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -28),
+            texts.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+        ])
+        separatorInset = UIEdgeInsets(top: 0, left: 86, bottom: 0, right: 0)
+        accessibilityIdentifier = "l2.contacts.found"
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    func configure(_ p: Linia2FoundPerson) {
+        nameLabel.text = p.name
+        subtitleLabel.text = p.login.map { "@" + $0 }
+        subtitleLabel.isHidden = p.login == nil
+        avatar.set(pub: p.pub, id: p.id, deleted: false)
+        accessibilityLabel = p.name + (p.login.map { ", @" + $0 } ?? "")
     }
 }

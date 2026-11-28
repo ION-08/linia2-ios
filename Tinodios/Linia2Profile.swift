@@ -22,6 +22,17 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
     private let contactsStack = UIStackView()
     private var aliasCard: UIView?
     private var loaded = false
+    /// L2_PROFEDIT: «✓ Сохранено» после успешного сохранения.
+    private let doneLabel = UILabel()
+    /// Сохранённые значения — «Сохранить» показывается только при отличии полей от них.
+    private var orig = (fn: "", note: "", alias: "")
+    /// Проверка занятости псевдонима (fnd «alias:<x>»): для какого значения, итог, идёт ли.
+    private var check = (value: "", taken: false, busy: false)
+    private var checkTimer: Timer?
+    private var saving = false
+    private var doneTimer: Timer?
+    static let aliasRegex = "^[a-z0-9_]{3,32}$"
+    static let aliasHelp = "Латиница, цифры и _, от 3 до 32 символов. По псевдониму вас смогут найти."
 
     private var me: DefaultMeTopic? { Cache.tinode.getMeTopic() }
 
@@ -107,8 +118,10 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
         aliasHint.font = L2.font(13)
         aliasHint.textColor = L2.textSecondary
         aliasHint.numberOfLines = 0
-        aliasHint.text = "По псевдониму вас смогут найти собеседники. Латинские буквы и цифры."
+        aliasHint.text = Self.aliasHelp
+        aliasHint.accessibilityIdentifier = "l2.profile.aliasHint"
         stack.addArrangedSubview(aliasHint)
+        nameField.addTarget(self, action: #selector(fieldsChanged), for: .editingChanged)
 
         // Описание.
         aboutView.backgroundColor = .clear
@@ -137,12 +150,24 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
 
         saveButton.accessibilityIdentifier = "l2.profile.save"
         saveButton.addTarget(self, action: #selector(saveTapped), for: .touchUpInside)
+        saveButton.isHidden = true
+        // «✓ Сохранено» — вместо кнопки после сохранения (L2_PROFEDIT, как в вебе).
+        let doneText = NSMutableAttributedString(attributedString: NSAttributedString(attachment: NSTextAttachment(image: L2.symbol("checkmark", 15, .bold)?.withTintColor(L2.accent, renderingMode: .alwaysOriginal) ?? UIImage())))
+        doneText.append(NSAttributedString(string: " Сохранено", attributes: [.foregroundColor: L2.accent, .font: L2.font(16, .semibold)]))
+        doneLabel.attributedText = doneText
+        doneLabel.textAlignment = .center
+        doneLabel.accessibilityIdentifier = "l2.profile.saved"
+        doneLabel.accessibilityLabel = "Сохранено"
+        doneLabel.isHidden = true
+        let saveBar = UIStackView(arrangedSubviews: [saveButton, doneLabel])
+        saveBar.axis = .vertical
+        saveBar.spacing = 0
         stack.setCustomSpacing(20, after: stack.arrangedSubviews.last ?? aboutView)
-        stack.addArrangedSubview(saveButton)
+        stack.addArrangedSubview(saveBar)
 
         // Контакты.
         let contactsTitle = sectionTitle("Контакты")
-        stack.setCustomSpacing(30, after: saveButton)
+        stack.setCustomSpacing(30, after: saveBar)
         stack.addArrangedSubview(contactsTitle)
         contactsStack.axis = .vertical
         contactsStack.spacing = 12
@@ -245,12 +270,27 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
             UiUtils.showToast(message: "Профиль ещё загружается, попробуйте через пару секунд.", level: .warning)
             return
         }
-        nameField.text = me.pub?.fn
-        aliasField.text = me.alias
         let note = me.pub?.note ?? ""
-        aboutView.text = note == Tinode.kNullValue ? "" : note
+        orig = (fn: (me.pub?.fn ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                note: (note == Tinode.kNullValue ? "" : note).trimmingCharacters(in: .whitespacesAndNewlines),
+                alias: Self.aliasOf(me.tags))
+        nameField.text = orig.fn
+        aliasField.text = orig.alias
+        aboutView.text = orig.note
         updatePlaceholder()
         reloadAvatarAndContacts()
+        updateState()
+        // Теги me могли ещё не прийти или устареть — подтянуть с сервера и показать текущий псевдоним.
+        Self.fetchTags(me) { [weak self] tags in
+            guard let self = self, let tags = tags else { return }
+            let a0 = Self.aliasOf(tags)
+            if a0 != self.orig.alias {
+                let untouched = self.aliasValue == self.orig.alias
+                self.orig.alias = a0
+                if untouched { self.aliasField.text = a0 }
+            }
+            self.updateState()
+        }
     }
 
     private func reloadAvatarAndContacts() {
@@ -294,107 +334,271 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
     // MARK: Действия
 
     @objc private func aliasChanged() {
-        let a = Self.cleanAlias(aliasField.text)
-        let ok = Tinode.isValidTagValueFormat(tag: a)
-        setAliasInvalid(!ok)
-        aliasHint.textColor = ok ? L2.textSecondary : L2.danger
-        aliasHint.text = ok ? "По псевдониму вас смогут найти собеседники. Латинские буквы и цифры."
-            : "Недопустимый псевдоним: используйте латинские буквы и цифры."
+        var v = aliasField.text ?? ""
+        while v.hasPrefix("@") { v.removeFirst() }
+        if v != aliasField.text { aliasField.text = v }
+        check = (value: "", taken: false, busy: false)
+        checkTimer?.invalidate()
+        checkTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in self?.runCheck(nil) }
+        updateState()
+    }
+
+    @objc private func fieldsChanged() {
+        updateState()
     }
 
     @objc private func textViewBegan(_ n: Notification) {
         DispatchQueue.main.async { [weak self] in self?.revealFirstResponder() }
     }
 
+    // MARK: L2_PROFEDIT: состояние формы, проверка и сохранение (повторяет веб apply-profedit.py)
+
+    private var aliasValue: String { Self.cleanAlias(aliasField.text).lowercased() }
+    private var nameValue: String { (nameField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var noteValue: String { (aboutView.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    static func aliasOf(_ tags: [String]?) -> String {
+        guard let t = (tags ?? []).first(where: { $0.hasPrefix(Tinode.kTagAlias) }) else { return "" }
+        return String(t.dropFirst(Tinode.kTagAlias.count))
+    }
+
+    static func aliasFormatError(_ a: String) -> String? {
+        if a.isEmpty || a.range(of: aliasRegex, options: .regularExpression) != nil { return nil }
+        if a.count < 3 { return "Не короче 3 символов" }
+        if a.range(of: "[^a-z0-9_]", options: .regularExpression) != nil { return "Только латинские буквы, цифры и _" }
+        return "Не длиннее 32 символов"
+    }
+
+    private enum AliasState { case ok, free, pending, bad(String) }
+
+    private func aliasState() -> AliasState {
+        let a = aliasValue
+        if a.isEmpty { return .ok }
+        if let e = Self.aliasFormatError(a) { return .bad(e) }
+        if a == orig.alias { return .ok }
+        if check.value == a && !check.busy { return check.taken ? .bad("Псевдоним занят") : .free }
+        return .pending
+    }
+
+    private var isDirty: Bool { nameValue != orig.fn || noteValue != orig.note || aliasValue != orig.alias }
+
+    private func updateState() {
+        let st = aliasState()
+        var ok = true, pending = false
+        switch st {
+        case .bad(let msg):
+            ok = false
+            aliasHint.text = msg
+            aliasHint.textColor = L2.danger
+        case .pending:
+            pending = true
+            aliasHint.text = "Проверяем…"
+            aliasHint.textColor = L2.textSecondary
+        case .free:
+            aliasHint.text = "Псевдоним свободен"
+            aliasHint.textColor = L2.accent
+        case .ok:
+            aliasHint.text = Self.aliasHelp
+            aliasHint.textColor = L2.textSecondary
+        }
+        setAliasInvalid(!ok)
+        let dirty = isDirty
+        if saveButton.isHidden == dirty { saveButton.isHidden = !dirty }
+        if dirty { doneLabel.isHidden = true }
+        saveButton.isEnabled = !saving && ok && !pending && !nameValue.isEmpty
+        saveButton.alpha = saveButton.isEnabled || saving ? 1 : 0.55
+    }
+
+    /// Проверить занятость текущего псевдонима; completion — на главном потоке.
+    private func runCheck(_ completion: (() -> Void)?) {
+        checkTimer?.invalidate()
+        let a = aliasValue
+        if a.isEmpty || a == orig.alias || Self.aliasFormatError(a) != nil || (check.value == a && !check.busy) {
+            updateState()
+            completion?()
+            return
+        }
+        check = (value: a, taken: false, busy: true)
+        updateState()
+        Self.aliasTaken(a) { [weak self] taken in
+            guard let self = self else { return }
+            if self.check.value == a {
+                // Нет ответа — не мешаем: сервер всё равно не примет занятый псевдоним.
+                self.check = (value: a, taken: taken ?? false, busy: false)
+            }
+            self.updateState()
+            completion?()
+        }
+    }
+
+    /// Занят ли псевдоним: точный поиск fnd «alias:<x>»; nil — не удалось проверить. completion — на главном потоке.
+    static func aliasTaken(_ alias: String, completion: @escaping (Bool?) -> Void) {
+        let tinode = Cache.tinode
+        guard tinode.isConnected, let myUid = tinode.myUid else { completion(nil); return }
+        let fnd = tinode.getOrCreateFndTopic()
+        let tag = Tinode.kTagAlias + alias
+        let start: PromisedReply<ServerMessage> = fnd.attached ? PromisedReply<ServerMessage>(value: ServerMessage()) : fnd.subscribe(set: nil, get: nil)
+        start.thenApply { _ in
+            return fnd.setMeta(desc: MetaSetDesc(pub: tag, priv: nil))
+        }.thenApply { _ in
+            return fnd.getMeta(query: MsgGetMeta.sub())
+        }.then(onSuccess: { msg in
+            var taken = false
+            if msg?.ctrl?.code != 204 {
+                for s in msg?.meta?.sub ?? [] {
+                    guard let uid = s.user ?? s.topic, uid != myUid else { continue }
+                    let tags = (s as? Subscription<TheCard, [String]>)?.priv ?? []   // в fnd private — совпавшие теги
+                    if tags.isEmpty || tags.contains(tag) { taken = true }
+                }
+            }
+            DispatchQueue.main.async { completion(taken) }
+            return nil
+        }, onFailure: { _ in
+            DispatchQueue.main.async { completion(nil) }
+            return nil
+        })
+    }
+
+    /// Свежие теги me с сервера (nil — не получили). completion — на главном потоке.
+    /// strict — только ответ сервера (для проверки после сохранения), иначе при пустом ответе — кэш me.tags.
+    static func fetchTags(_ me: DefaultMeTopic, strict: Bool = false, completion: @escaping ([String]?) -> Void) {
+        me.getMeta(query: me.metaGetBuilder().withTags().build()).then(onSuccess: { msg in
+            let tags = msg?.meta?.tags ?? (strict ? [] : (me.tags ?? []))
+            DispatchQueue.main.async { completion(tags) }
+            return nil
+        }, onFailure: { _ in
+            DispatchQueue.main.async { completion(nil) }
+            return nil
+        })
+    }
+
+    /// Новые теги: свой alias: заменить; при превышении лимита — убрать самые короткие теги поиска без префикса.
+    static func tagsWithAlias(_ current: [String], alias: String) -> [String] {
+        var tags = current.filter { !$0.hasPrefix(Tinode.kTagAlias) }
+        if !alias.isEmpty { tags.append(Tinode.kTagAlias + alias) }
+        while tags.count > Linia2SearchTags.maxTags {
+            let plain = tags.filter { !$0.contains(":") }
+            guard let victim = plain.min(by: { $0.count < $1.count }), let i = tags.firstIndex(of: victim) else { break }
+            tags.remove(at: i)
+        }
+        return tags
+    }
+
     @objc private func saveTapped() {
-        view.endEditing(true)
-        guard let me = me else {
+        guard !saving, isDirty else { return }
+        guard me != nil else {
             UiUtils.showToast(message: "Профиль ещё загружается, попробуйте через пару секунд.", level: .warning)
             return
         }
-        let name = (nameField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
+        runCheck { [weak self] in self?.doSave() }
+    }
+
+    private func doSave() {
+        guard !saving, isDirty, let me = me else { return }
+        let st = aliasState()
+        updateState()
+        if case .bad = st { aliasField.becomeFirstResponder(); return }
+        if case .pending = st { return }
+        if nameValue.isEmpty {
+            nameField.becomeFirstResponder()
             UiUtils.showToast(message: "Укажите имя.")
             return
         }
-        let alias = Self.cleanAlias(aliasField.text)
-        guard Tinode.isValidTagValueFormat(tag: alias) else {
-            setAliasInvalid(true)
-            UiUtils.showToast(message: "Недопустимый псевдоним: используйте латинские буквы и цифры.")
-            return
-        }
-
-        // Как в AccountGeneralSettingsViewController.doneEditingClicked.
-        var pub: TheCard? = nil
-        if name != me.pub?.fn {
-            pub = TheCard(fn: name)
-        }
-        let desc = (aboutView.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let oldNote = me.pub?.note ?? ""
-        let oldDesc = oldNote == Tinode.kNullValue ? "" : oldNote
-        if desc != oldDesc {
-            let card = pub ?? TheCard()
-            card.note = desc.isEmpty ? Tinode.kNullValue : desc
-            pub = card
-        }
-        var tags: [String]? = nil
-        if alias != (me.alias ?? "") {
-            if !alias.isEmpty {
-                tags = Tinode.setUniqueTag(tags: me.tags, uniqueTag: "\(Tinode.kTagAlias)\(alias)")
-            } else {
-                tags = Tinode.clearTagPrefix(tags: me.tags, prefix: Tinode.kTagAlias)
-            }
-            if let t = tags, t.sorted() == (me.tags ?? []).sorted() {
-                tags = nil
-            }
-        }
-
-        // LINIA2: теги поиска пересчитывает сервер при смене имени (Tinode не принимает от клиента теги без префикса).
-
-        if pub == nil && tags == nil {
-            UiUtils.showToast(message: "Изменений нет", level: .info)
-            return
-        }
-
+        view.endEditing(true)
+        saving = true
         setBusy(true, button: saveButton, title: "Сохранить")
-        let desc2: MetaSetDesc<TheCard, PrivateType>? = pub != nil ? MetaSetDesc<TheCard, PrivateType>(pub: pub, priv: nil) : nil
-        me.setMeta(meta: MsgSetMeta<TheCard, PrivateType>(desc: desc2, tags: tags)).then(
+        saveButton.setTitle("Сохраняем…", for: .normal)
+        let nfn = String(nameValue.prefix(60)), nnote = String(noteValue.prefix(360)), a = aliasValue
+        let descChanged = nfn != orig.fn || nnote != orig.note
+        let aliasChanged = a != orig.alias
+
+        func finish(_ error: String?) {
+            saving = false
+            setBusy(false, button: saveButton, title: "Сохранить")
+            if let e = error {
+                updateState()
+                UiUtils.showToast(message: "Не удалось сохранить: " + e)
+                return
+            }
+            updateState()
+            doneLabel.isHidden = false
+            doneTimer?.invalidate()
+            doneTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+                guard let self = self, !self.isDirty else { return }
+                self.doneLabel.isHidden = true
+            }
+            L2.haptic()
+        }
+
+        func saveAlias() {
+            guard aliasChanged else { finish(nil); return }
+            Self.fetchTags(me) { [weak self] cur in
+                guard let self = self else { return }
+                guard let cur = cur else { finish("нет связи с сервером"); return }
+                let tags = Self.tagsWithAlias(cur, alias: a)
+                me.setMeta(meta: MsgSetMeta<TheCard, PrivateType>(desc: nil, tags: tags)).then(onSuccess: { _ in
+                    DispatchQueue.main.async {
+                        Self.fetchTags(me, strict: true) { [weak self] now in
+                            guard let self = self else { return }
+                            if Self.aliasOf(now) != a {
+                                finish(a.isEmpty ? "псевдоним не удалился" : "псевдоним не сохранился")
+                            } else {
+                                self.orig.alias = a
+                                finish(nil)
+                            }
+                        }
+                    }
+                    return nil
+                }, onFailure: { err in
+                    DispatchQueue.main.async {
+                        if let e = err as? TinodeError, case .serverResponseError(let code, _, _) = e, code == 409 {
+                            self.check = (value: a, taken: true, busy: false)
+                            finish("псевдоним занят")
+                        } else {
+                            finish(Self.errorText(err))
+                        }
+                    }
+                    return nil
+                })
+            }
+        }
+
+        guard descChanged else { saveAlias(); return }
+        let card = TheCard()
+        if nfn != orig.fn { card.fn = nfn }
+        if nnote != orig.note { card.note = nnote.isEmpty ? Tinode.kNullValue : nnote }
+        me.setMeta(meta: MsgSetMeta<TheCard, PrivateType>(desc: MetaSetDesc<TheCard, PrivateType>(pub: card, priv: nil), tags: nil)).then(
             onSuccess: { [weak self] msg in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.setBusy(false, button: self.saveButton, title: "Сохранить")
-                    if let code = msg?.ctrl?.code, code >= 300 {
-                        UiUtils.showToast(message: "Не удалось сохранить профиль (\(code)).")
-                    } else {
-                        UiUtils.showToast(message: "Профиль сохранён", level: .info)
-                        self.reloadData()
+                    if let code = msg?.ctrl?.code, code >= 300, code != 304 {
+                        finish("ошибка \(code)")
+                        return
                     }
+                    self.orig.fn = nfn
+                    self.orig.note = nnote
+                    saveAlias()
                 }
                 return nil
             },
-            onFailure: { [weak self] err in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    self.setBusy(false, button: self.saveButton, title: "Сохранить")
-                    UiUtils.showToast(message: Self.errorText(err, tagsChanged: tags != nil))
-                }
+            onFailure: { err in
+                DispatchQueue.main.async { finish(Self.errorText(err)) }
                 return nil
             })
     }
 
-    private static func errorText(_ err: Error, tagsChanged: Bool) -> String {
+    private static func errorText(_ err: Error) -> String {
         if let e = err as? TinodeError {
             switch e {
             case .notConnected:
-                return Linia2API.networkError
+                return "нет связи с сервером"
             case .serverResponseError(let code, _, _):
-                if code == 409 && tagsChanged { return "Этот псевдоним уже занят. Выберите другой." }
-                return "Не удалось сохранить профиль (\(code)). Попробуйте ещё раз."
+                return "ошибка \(code)"
             default:
                 break
             }
         }
-        return "Не удалось сохранить профиль. Проверьте интернет и попробуйте ещё раз."
+        return "нет связи с сервером"
     }
 
     // MARK: Фото
@@ -511,29 +715,33 @@ final class Linia2ProfileViewController: Linia2FormViewController, UITextFieldDe
 
     // MARK: UITextFieldDelegate / UITextViewDelegate
 
+    /// Return в имени или псевдониме — сохранить (как Enter в вебе); без изменений — к следующему полю / скрыть клавиатуру.
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        if textField === nameField {
+        if isDirty {
+            saveTapped()
+        } else if textField === nameField {
             aliasField.becomeFirstResponder()
         } else {
             textField.resignFirstResponder()
         }
-        return true
+        return false
     }
 
     func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
         let newLength = (textField.text ?? "").count + (string.count - range.length)
         if textField === aliasField {
-            return newLength <= UiUtils.kMaxAliasLength
+            return newLength <= 33   // «@» + 32
         }
         return newLength <= UiUtils.kMaxTitleLength
     }
 
     func textViewDidChange(_ textView: UITextView) {
         updatePlaceholder()
+        updateState()
     }
 
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-        return (textView.text ?? "").count + (text.count - range.length) <= UiUtils.kMaxTopicDescriptionLength
+        return (textView.text ?? "").count + (text.count - range.length) <= 360
     }
 }
 

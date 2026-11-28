@@ -964,6 +964,103 @@ final class TinodiosUITests: XCTestCase {
         screenshot("call-ended")
     }
 
+    // MARK: - 7б. Профиль: псевдоним сохраняется (L2_PROFEDIT); «Звонки» → ⓘ «О звонке» (L2_CALLINFO)
+
+    private func openProfile() -> XCUIElement {
+        tab("l2.tab.settings").tap(); sleep(1)
+        wait(any("l2.settings.profile"), "карточка профиля").tap(); sleep(2)
+        return wait(app.textFields["l2.profile.alias"].firstMatch, "поле псевдонима")
+    }
+
+    private func fieldText(_ f: XCUIElement) -> String {
+        let v = (f.value as? String) ?? ""
+        return v == f.placeholderValue || v == "псевдоним" ? "" : v
+    }
+
+    private func replaceText(_ f: XCUIElement, with text: String) {
+        f.tap()
+        dismissKeyboardTips()
+        let cur = fieldText(f)
+        if !cur.isEmpty { f.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: cur.count + 2)) }
+        if !text.isEmpty { f.typeText(text) }
+    }
+
+    /// Ввести псевдоним, сохранить Return и дождаться «✓ Сохранено».
+    private func saveAlias(_ field: XCUIElement, _ alias: String, _ what: String) {
+        replaceText(field, with: alias)
+        wait(any("l2.profile.save"), "кнопка «Сохранить» после изменения (\(what))", timeout: 5)
+        field.typeText("\n")   // Return сохраняет
+        wait(any("l2.profile.saved"), "«Сохранено» (\(what))", timeout: 30)
+        XCTAssertFalse(any("l2.profile.save").exists, "кнопка «Сохранить» осталась после сохранения (\(what))")
+    }
+
+    func test41_ProfileAliasSaves() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        var field = openProfile()
+        sleep(2)   // свежие теги с сервера
+        let original = fieldText(field)
+        XCTAssertFalse(any("l2.profile.save").exists, "«Сохранить» видно без изменений")
+        // Ошибки формата.
+        replaceText(field, with: "ab")
+        XCTAssertTrue(labelContains("Не короче 3 символов").waitForExistence(timeout: 3), "нет ошибки «Не короче 3 символов»")
+        replaceText(field, with: original)
+        let alias = "ci_ios_" + String(Int(Date().timeIntervalSince1970) % 1000000)
+        saveAlias(field, alias, "новый")
+        screenshot("profile-alias-saved")
+        back()
+        field = openProfile()
+        let deadline = Date().addingTimeInterval(10)
+        while fieldText(field) != alias && Date() < deadline { sleep(1) }
+        XCTAssertEqual(fieldText(field), alias, "псевдоним не сохранился после повторного открытия профиля")
+        // Вернуть как было.
+        if original != alias { saveAlias(field, original, "возврат") }
+        back()
+    }
+
+    func test42_CallInfoSheet() throws {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.calls").tap(); sleep(2)
+        let info = app.buttons["l2.calls.info"].firstMatch
+        guard info.waitForExistence(timeout: 8) else { throw XCTSkip("в журнале звонков нет записей") }
+        info.tap()
+        wait(any("l2.callinfo.title"), "лист «О звонке»", timeout: 8)
+        let type = wait(any("l2.callinfo.type.row"), "строка «Тип»").label
+        XCTAssertTrue(type.contains("Аудиозвонок") || type.contains("Видеозвонок"), "тип звонка: \(type)")
+        let dir = wait(any("l2.callinfo.dir.row"), "строка «Звонок»").label
+        XCTAssertTrue(["Входящий", "Исходящий", "Пропущенный", "Отклонённый", "Звонок по ссылке"].contains { dir.contains($0) }, "направление: \(dir)")
+        let dur = wait(any("l2.callinfo.duration.row"), "строка «Длительность»").label
+        XCTAssertTrue(dur.contains("—") || dur.range(of: "[0-9]+:[0-9]{2}", options: .regularExpression) != nil, "длительность: \(dur)")
+        XCTAssertTrue(any("l2.callinfo.when.row").exists, "нет даты и времени")
+        XCTAssertTrue(any("l2.callinfo.chat").exists || any("l2.callinfo.links").exists, "нет кнопки «Написать»")
+        screenshot("call-info")
+        any("l2.callinfo.close").tap(); sleep(1)
+        XCTAssertFalse(any("l2.callinfo.title").exists, "лист «О звонке» не закрылся")
+        XCTAssertEqual(app.state, .runningForeground, "вылет после «О звонке»")
+    }
+
+    /// L2_CSEARCH: «Контакты» → поиск «@admin» находит пользователя на сервере (раньше — «Контактов пока нет»).
+    func test43_ContactsSearchByAliasFindsUser() {
+        ensureLoggedIn(requireEnv("L2_LOGIN"), requireEnv("L2_PASSWORD"))
+        tab("l2.tab.contacts").tap(); sleep(2)
+        let field = wait(app.textFields["l2.contacts.search"].firstMatch, "поле поиска контактов")
+        field.tap()
+        dismissKeyboardTips()
+        field.typeText("@admin")
+        let found = app.cells.matching(identifier: "l2.contacts.found").matching(NSPredicate(format: "label CONTAINS[c] 'admin' OR label CONTAINS[c] 'Администратор'")).firstMatch
+        let own = app.cells.matching(NSPredicate(format: "label CONTAINS[c] '@admin' OR label CONTAINS[c] 'Администратор'")).firstMatch
+        let deadline = Date().addingTimeInterval(20)
+        while !found.exists && !own.exists && Date() < deadline { usleep(500_000) }
+        screenshot("contacts-search-admin")
+        XCTAssertTrue(found.exists || own.exists, "поиск «@admin» не нашёл пользователя")
+        XCTAssertFalse(labelContains("Контактов пока нет").exists, "при поиске показано «Контактов пока нет»")
+        if found.exists {
+            XCTAssertTrue(any("l2.contacts.foundHeader").exists, "нет заголовка «Найдены в Линии»")
+            found.tap(); sleep(2)
+            XCTAssertEqual(app.state, .runningForeground, "вылет при открытии найденного")
+            back()
+        }
+    }
+
     // MARK: - 8. Обход всех экранов без вылетов
 
     func test29_AllScreensNoCrash() {
