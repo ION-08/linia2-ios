@@ -255,6 +255,16 @@ class WebRTCClient: NSObject {
     /// ufrag (4 символа) последнего своего и чужого описания.
     var diagLocalUfrag = "-"
     var diagRemoteUfrag = "-"
+    /// LINIA2 (качество звука): моменты для диагностики «сколько до звука» — создание соединения, checking, connected.
+    private var qPcAt: Date?
+    private var qCheckingAt: Date?
+    private var qConnectedAt: Date?
+    private var qFirstAudioSent = false
+    /// Последний RTT выбранной пары (с) — ptime при пересогласовании и битрейт видео.
+    var linia2LastRtt: Double = 0
+    private var qVideoCapped = false
+    /// qPcAt для потока signaling (пишется один раз на главном до создания событий ICE).
+    private var linia2PcAtSnapshot: Date? { diagLock.lock(); defer { diagLock.unlock() }; return qPcAt }
 
     func diagNoteLocalSent(_ c: RTCIceCandidate, sent: Bool) {
         let type = Self.candKind(c.sdp).components(separatedBy: "/").first ?? "?"
@@ -309,6 +319,19 @@ class WebRTCClient: NSObject {
         for (_, st) in report.statistics {
             let v = st.values
             func n(_ k: String) -> Int { (v[k] as? NSNumber)?.intValue ?? 0 }
+            func d(_ k: String) -> Double { (v[k] as? NSNumber)?.doubleValue ?? 0 }
+            if st.type == "inbound-rtp", ((v["kind"] as? String) ?? (v["mediaType"] as? String)) == "audio" {
+                // LINIA2 (качество звука): джиттер, средняя задержка буфера, «додуманные» сэмплы (пропуски звука), потери.
+                f["a_jit"] = Int(d("jitter") * 1000)
+                let emitted = d("jitterBufferEmittedCount")
+                if emitted > 0 { f["a_jbd"] = Int(d("jitterBufferDelay") / emitted * 1000) }
+                f["a_conc"] = n("concealedSamples")
+                f["a_concEv"] = n("concealmentEvents")
+                f["a_samples"] = n("totalSamplesReceived")
+                f["a_lost"] = n("packetsLost")
+                f["a_pkts"] = n("packetsReceived")
+                f["a_fec"] = n("fecPacketsReceived")
+            }
             if st.type == "candidate-pair" {
                 states[(v["state"] as? String) ?? "?", default: 0] += 1
                 reqS += n("requestsSent"); respR += n("responsesReceived")
@@ -605,8 +628,12 @@ class WebRTCClient: NSObject {
         // приходил (в потоке signaling), пока поток ещё не добавлен, senders были пусты — и offer не
         // создавался вовсе (веб принимал звонок и ждал offer, звонок обрывался по таймауту).
         // LINIA2: Unified Plan (как в браузерах) — треки через addTrack с общим streamId; addStream есть только в Plan B.
-        _ = localPeer!.add(audioTrack, streamIds: ["ARDAMS"])
-        _ = localPeer!.add(videoTrack, streamIds: ["ARDAMS"])
+        let aSender = localPeer!.add(audioTrack, streamIds: ["ARDAMS"])
+        let vSender = localPeer!.add(videoTrack, streamIds: ["ARDAMS"])
+        linia2TuneSenders(audio: aSender, video: vSender)
+        diagLock.lock(); qPcAt = Date(); diagLock.unlock()
+        qCheckingAt = nil; qConnectedAt = nil; qFirstAudioSent = false; qVideoCapped = false
+        linia2ProbeFirstAudio(localPeer!, attempt: 0)
 
         if dataChannel {
             let chanConfig = RTCDataChannelConfiguration()
@@ -647,13 +674,13 @@ class WebRTCClient: NSObject {
                 return
             }
 
-            peerConnection.setLocalDescription(sdp, completionHandler: { (error) in
+            self.linia2SetLocal(peerConnection, sdp, completion: { (msdp, error) in
                 if let error = error {
                     Cache.log.error("WebRTCClient - failed to set local SDP (offer) %@", error.localizedDescription)
                     self.delegate?.closeCall()
                     return
                 }
-                self.delegate?.sendOffer(withDescription: sdp)
+                self.delegate?.sendOffer(withDescription: msdp)
             })
         })
     }
@@ -676,7 +703,7 @@ class WebRTCClient: NSObject {
                     return
                 }
 
-                peerConnection.setLocalDescription(sdp, completionHandler: { [weak self](error) in
+                self.linia2SetLocal(peerConnection, sdp, completion: { [weak self](msdp, error) in
                     if let error = error {
                         Cache.log.error("WebRTCClient - failed to set local SDP (answer) %@", error.localizedDescription)
                         if self?.linia2Established ?? false {
@@ -686,7 +713,7 @@ class WebRTCClient: NSObject {
                         }
                         return
                     }
-                    self?.delegate?.sendAnswer(withDescription: sdp)
+                    self?.delegate?.sendAnswer(withDescription: msdp)
                     self?.delegate?.markConnectionSetupComplete()
                     DispatchQueue.main.async { self?.delegate?.linia2NegotiationDone(remoteOffer: true) }
                 })
@@ -741,14 +768,14 @@ class WebRTCClient: NSObject {
                     DispatchQueue.main.async { self.delegate?.linia2NegotiationFailed("restartOffer") }
                     return
                 }
-                pc.setLocalDescription(sdp, completionHandler: { [weak self] error in
+                self.linia2SetLocal(pc, sdp, completion: { [weak self] msdp, error in
                     guard let self = self else { return }
                     if let error = error {
                         Cache.log.error("WebRTCClient - ICE restart setLocalDescription failed %@", error.localizedDescription)
                         DispatchQueue.main.async { self.delegate?.linia2NegotiationFailed("restartSetLocal") }
                         return
                     }
-                    self.delegate?.sendOffer(withDescription: sdp)
+                    self.delegate?.sendOffer(withDescription: msdp)
                 })
             })
         }
@@ -850,6 +877,139 @@ extension WebRTCClient: RTCDataChannelDelegate {
     }
 }
 
+// MARK: LINIA2 — качество звука (Opus, приоритеты, диагностика первого звука)
+extension WebRTCClient {
+    /// Параметры Opus в локальном offer/answer (их читает кодер собеседника): FEC против потерь, DTX в тишине,
+    /// до 32 кбит/с, моно; ptime 20 мс (40 мс — при RTT > 300 мс, только при пересогласовании, когда RTT известен).
+    static func linia2MungeOpus(_ sdp: String, rtt: Double) -> String {
+        let nl = sdp.contains("\r\n") ? "\r\n" : "\n"
+        var lines = sdp.components(separatedBy: nl)
+        var pt: String?
+        for l in lines where l.hasPrefix("a=rtpmap:") && l.lowercased().contains(" opus/48000") {
+            pt = String(l.dropFirst("a=rtpmap:".count).prefix { $0 != " " })
+            break
+        }
+        guard let opus = pt else { return sdp }
+        let want: [(String, String)] = [("useinbandfec", "1"), ("usedtx", "1"), ("maxaveragebitrate", "32000"), ("stereo", "0")]
+        let ptime = rtt > 0.3 ? 40 : 20
+        let fmtpPrefix = "a=fmtp:" + opus + " "
+        if let i = lines.firstIndex(where: { $0.hasPrefix(fmtpPrefix) }) {
+            var params = String(lines[i].dropFirst(fmtpPrefix.count)).components(separatedBy: ";")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            for (k, v) in want {
+                if let j = params.firstIndex(where: { $0.lowercased().hasPrefix(k + "=") }) { params[j] = k + "=" + v } else { params.append(k + "=" + v) }
+            }
+            lines[i] = fmtpPrefix + params.joined(separator: ";")
+        } else if let r = lines.firstIndex(where: { $0.hasPrefix("a=rtpmap:" + opus + " ") }) {
+            lines.insert(fmtpPrefix + want.map { $0.0 + "=" + $0.1 }.joined(separator: ";"), at: r + 1)
+        }
+        // a=ptime — в аудио-секции (от m=audio до следующей m=).
+        if let m = lines.firstIndex(where: { $0.hasPrefix("m=audio") }) {
+            var end = lines.count
+            if let n = lines[(m + 1)...].firstIndex(where: { $0.hasPrefix("m=") }) { end = n }
+            if let p = lines[m..<end].firstIndex(where: { $0.hasPrefix("a=ptime:") }) {
+                lines[p] = "a=ptime:\(ptime)"
+            } else {
+                // перед завершающей пустой строкой, если секция последняя
+                var at = end
+                while at > m + 1 && lines[at - 1].isEmpty { at -= 1 }
+                lines.insert("a=ptime:\(ptime)", at: at)
+            }
+        }
+        return lines.joined(separator: nl)
+    }
+
+    /// setLocalDescription с параметрами Opus; если изменённое описание не принято — исходное (звонок важнее).
+    func linia2SetLocal(_ pc: RTCPeerConnection, _ sdp: RTCSessionDescription,
+                        completion: @escaping (RTCSessionDescription, Error?) -> Void) {
+        let m = linia2Opus(sdp)
+        pc.setLocalDescription(m, completionHandler: { [weak self] error in
+            guard error != nil, m !== sdp else { completion(m, error); return }
+            self?.onDiagEvent?(["type": "error", "where": "opusMunge", "err": String((error?.localizedDescription ?? "").prefix(80))])
+            pc.setLocalDescription(sdp, completionHandler: { error2 in completion(sdp, error2) })
+        })
+    }
+
+    func linia2Opus(_ d: RTCSessionDescription) -> RTCSessionDescription {
+        let m = Self.linia2MungeOpus(d.sdp, rtt: linia2LastRtt)
+        return m == d.sdp ? d : RTCSessionDescription(type: d.type, sdp: m)
+    }
+
+    /// Аудио — высокий сетевой приоритет (DSCP) и доля полосы; видео — держать частоту кадров (снижать разрешение).
+    func linia2TuneSenders(audio: RTCRtpSender?, video: RTCRtpSender?) {
+        if let a = audio {
+            let p = a.parameters
+            if !p.encodings.isEmpty {
+                for e in p.encodings { e.networkPriority = .high; e.bitratePriority = 4.0 }
+                a.parameters = p
+            }
+        }
+        if let v = video {
+            let p = v.parameters
+            p.degradationPreference = NSNumber(value: RTCDegradationPreference.maintainFramerate.rawValue)
+            for e in p.encodings { e.networkPriority = .low }
+            v.parameters = p
+        }
+    }
+
+    /// Видео при RTT > 400 мс — не больше 300 кбит/с (звук важнее); при RTT < 250 мс — снова без ограничения.
+    func linia2AdaptVideo(rtt: Double) {
+        guard web == nil, let pc = localPeer, rtt > 0 else { return }
+        linia2LastRtt = rtt
+        let cap: Bool
+        if rtt > 0.4 { cap = true } else if rtt < 0.25 { cap = false } else { return }
+        guard cap != qVideoCapped else { return }
+        qVideoCapped = cap
+        for s in pc.senders where s.track?.kind == "video" {
+            let p = s.parameters
+            guard !p.encodings.isEmpty else { continue }
+            for e in p.encodings { e.maxBitrateBps = cap ? NSNumber(value: 300_000) : nil }
+            s.parameters = p
+        }
+        onDiagEvent?(["type": "video-cap", "on": cap, "rtt": Int(rtt * 1000)])
+    }
+
+    /// Время до первого входящего аудиопакета: опрос stats каждые 250 мс (до 40 с) — событие «first-audio»
+    /// с отсчётами от создания соединения, ICE checking и connected и выбранной парой.
+    func linia2ProbeFirstAudio(_ pc: RTCPeerConnection, attempt: Int) {
+        guard localPeer === pc, !qFirstAudioSent, attempt < 160 else { return }
+        pc.statistics { [weak self] report in
+            guard let self = self else { return }
+            var got = false
+            var cands: [String: [String: NSObject]] = [:]
+            var sel: [String: NSObject]?
+            for (id, st) in report.statistics {
+                let v = st.values
+                if st.type == "inbound-rtp", ((v["kind"] as? String) ?? (v["mediaType"] as? String)) == "audio",
+                   ((v["packetsReceived"] as? NSNumber)?.intValue ?? 0) > 0 { got = true }
+                if st.type == "local-candidate" || st.type == "remote-candidate" { cands[id] = v }
+                if st.type == "candidate-pair", (v["state"] as? String) == "succeeded", (v["nominated"] as? NSNumber)?.boolValue ?? false { sel = v }
+            }
+            DispatchQueue.main.async {
+                guard self.localPeer === pc, !self.qFirstAudioSent else { return }
+                guard got else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.linia2ProbeFirstAudio(pc, attempt: attempt + 1) }
+                    return
+                }
+                self.qFirstAudioSent = true
+                let now = Date()
+                func ms(_ d: Date?) -> Int { d.map { Int(now.timeIntervalSince($0) * 1000) } ?? -1 }
+                var ev: [String: Any] = ["type": "first-audio", "fromPcMs": ms(self.qPcAt),
+                                         "fromCheckingMs": ms(self.qCheckingAt), "fromConnectedMs": ms(self.qConnectedAt),
+                                         "pcToCheckingMs": self.qPcAt.flatMap { a in self.qCheckingAt.map { Int($0.timeIntervalSince(a) * 1000) } } ?? -1,
+                                         "checkingToConnectedMs": self.qCheckingAt.flatMap { a in self.qConnectedAt.map { Int($0.timeIntervalSince(a) * 1000) } } ?? -1,
+                                         "audioOn": RTCAudioSession.sharedInstance().isAudioEnabled]
+                if let p = sel {
+                    let l = cands[(p["localCandidateId"] as? String) ?? ""] ?? [:]
+                    let r = cands[(p["remoteCandidateId"] as? String) ?? ""] ?? [:]
+                    ev["sel"] = "\((l["candidateType"] as? String) ?? "?")->\((r["candidateType"] as? String) ?? "?")"
+                }
+                self.onDiagEvent?(ev)
+            }
+        }
+    }
+}
+
 // MARK: Preparation/setup.
 extension WebRTCClient {
     // TODO: ICE/WebRTC config should be obtained from the server.
@@ -874,6 +1034,13 @@ extension WebRTCClient {
         config.bundlePolicy = .maxBundle
         config.rtcpMuxPolicy = .require
         config.continualGatheringPolicy = .gatherContinually
+        // LINIA2 (быстрый старт): сбор кандидатов (host/srflx/relay — TURN в Германии, ~2 RTT) начинается сразу при
+        // создании соединения, а не после setLocalDescription. У принимающего соединение создаётся ДО «accept» —
+        // к приходу offer кандидаты уже готовы и уходят вместе с answer. Политика — все кандидаты (не только relay).
+        config.iceCandidatePoolSize = 1
+        config.iceTransportPolicy = .all
+        // Звук: после всплеска задержки (TURN, мобильная сеть) буфер джиттера быстрее догоняет «живой» звук.
+        config.audioJitterBufferFastAccelerate = true
         // Use ECDSA encryption.
         config.keyType = .ECDSA
 
@@ -1057,11 +1224,35 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
-        onDiagEvent?(["type": "ice", "state": Self.iceName(newState)])
+        var iceEv: [String: Any] = ["type": "ice", "state": Self.iceName(newState)]
+        if let t0 = linia2PcAtSnapshot { iceEv["pcMs"] = Int(Date().timeIntervalSince(t0) * 1000) }   // от создания соединения
+        onDiagEvent?(iceEv)
+        let stAt = Date()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if newState == .checking, self.qCheckingAt == nil { self.qCheckingAt = stAt }
+            if (newState == .connected || newState == .completed) && self.qConnectedAt == nil { self.qConnectedAt = stAt }
+        }
         if newState == .connected || newState == .completed { linia2Established = true }
         if newState == .connected || newState == .failed {
             let r = newState == .connected ? "connected" : "failed"
             DispatchQueue.main.async { [weak self] in self?.diagReportPair(r) }
+            if newState == .connected {
+                // Приоритеты отправителей — ещё раз после согласования (до него параметры могли не примениться).
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.localPeer === peerConnection else { return }
+                    self.linia2TuneSenders(audio: peerConnection.senders.first { $0.track?.kind == "audio" },
+                                           video: peerConnection.senders.first { $0.track?.kind == "video" })
+                }
+                // Повторная проверка выбранной пары: libwebrtc продолжает проверять все пары и переходит с relay
+                // на прямую (srflx/host), если она заработала — видно по «sel» в событиях pair +5 с / +20 с.
+                for d in [5.0, 20.0] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { [weak self] in
+                        guard let self = self, self.localPeer === peerConnection else { return }
+                        self.diagReportPair("connected+\(Int(d))s")
+                    }
+                }
+            }
         }
         // LINIA2: состояние — экрану звонка (переподключение при обрыве, ICE restart).
         DispatchQueue.main.async { [weak self] in
@@ -2882,6 +3073,7 @@ extension CallViewController {
                 self.lastStats = (lost, received)
                 // Автотесты: байты аудио в обе стороны (звук идёт и к нам, и от нас).
                 self.stateLabel.accessibilityValue = "arx=\(Int(audioRx)) atx=\(Int(audioTx))"
+                self.webRTCClient.linia2AdaptVideo(rtt: rtt)
                 let poor = loss > 0.10 || rtt > 0.8
                 self.lastStatsPoor = poor
                 self.isPoorConnection = poor || self.unstableUntil != nil
