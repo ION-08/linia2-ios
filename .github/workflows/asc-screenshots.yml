@@ -1,6 +1,6 @@
 # Скриншоты App Store: берёт PNG из артефакта store-shots прогона «UI tests» (store_shots=true) и загружает их
 # в версию в состоянии PREPARE_FOR_SUBMISSION для локалей ru и en-US:
-#   6.9" (1320×2868) — набор APP_IPHONE_67 (в API слот 6.9" называется так; если API отвергнет — пробуем APP_IPHONE_69);
+#   6.9" (1320×2868) — набор APP_IPHONE_69 (если API его не знает — APP_IPHONE_67, он тоже принимает 1320×2868);
 #   6.5" (1284×2778) — те же снимки, масштаб 97,3 % с обрезкой 6 px сверху и снизу, набор APP_IPHONE_65.
 # Альфа-канал убирается (Apple не принимает PNG с альфой). Загрузка — reservation → PUT частей → PATCH uploaded + MD5.
 # Ничего не отправляет на модерацию. Запуск: gh workflow run asc-screenshots.yml -f run_id=<id прогона store-shots>.
@@ -121,7 +121,7 @@ jobs:
           sum(`Версия ${ver.attributes.versionString} (${ver.attributes.appStoreState})`);
           const locs = (await api(`/v1/appStoreVersions/${ver.id}/appStoreVersionLocalizations?limit=50`)).j?.data || [];
           sum('Локали версии: ' + locs.map(l => l.attributes.locale).join(', '));
-          const groups = [['out/69', ['APP_IPHONE_67', 'APP_IPHONE_69'], '6.9"']];
+          const groups = [['out/69', ['APP_IPHONE_69', 'APP_IPHONE_67'], '6.9"']];
           if (e.SIX5 === 'true') groups.push(['out/65', ['APP_IPHONE_65'], '6.5"']);
           let bad = 0;
 
