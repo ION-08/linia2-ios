@@ -87,6 +87,10 @@ public class SubscriberDb {
             t.column(subscriptionClass)
         })
         try! self.db.run(self.table.createIndex(topicId, ifNotExists: true))
+        // LINIA2: пустая таблица (новая база) — уникальный индекс сразу; существующая — ensureUniqueSubscriptions в фоне.
+        if (try? self.db.scalar("SELECT count(*) FROM \(SubscriberDb.kTableName)") as? Int64) == 0 {
+            _ = try? self.db.run(Linia2SubsSQL.createUniqueIndex)
+        }
     }
 
     // Deletes all records from `subscribers` table.
@@ -94,6 +98,10 @@ public class SubscriberDb {
         try! self.db.run(self.table.delete())
     }
 
+    /// LINIA2 (вылет 1013/1014: повторяющиеся подписки в базе): вставка — это upsert по (топик, user).
+    /// Поиск существующей строки и запись идут в одной точке сохранения: SQLite.Connection выполняет её
+    /// целиком на своей последовательной очереди, поэтому параллельные вызовы (разбор входящих, главный поток,
+    /// повторный {meta sub} после переподключения) не создают вторую строку, даже если кэш Topic.subs её «потерял».
     func insert(for topicId: Int64, with status: BaseDb.Status, using sub: SubscriptionProto) -> Int64 {
         var rowId: Int64 = -1
         let savepointName = "SubscriberDb.insert"
@@ -101,9 +109,25 @@ public class SubscriberDb {
             try self.db.savepoint(savepointName) {
                 let ss = StoredSubscription()
                 let userDb = baseDb.userDb!
-                ss.userId = userDb.getId(for: sub.user)
-                if (ss.userId ?? -1) <= 0 {
-                    ss.userId = userDb.insert(sub: sub)
+                var existingId: Int64? = nil
+                if let uid = sub.user ?? sub.topic, !uid.isEmpty {
+                    for row in try self.db.prepare(Linia2SubsSQL.findExisting, topicId, uid) {
+                        if let sid = row[0] as? Int64, let uidRow = row[1] as? Int64 {
+                            existingId = sid
+                            ss.userId = uidRow
+                        }
+                    }
+                }
+                if existingId != nil {
+                    ss.id = existingId
+                    ss.topicId = topicId
+                    sub.payload = ss
+                    _ = userDb.update(sub: sub)
+                } else {
+                    ss.userId = userDb.getId(for: sub.user)
+                    if (ss.userId ?? -1) <= 0 {
+                        ss.userId = userDb.insert(sub: sub)
+                    }
                 }
                 // Still not okay?
                 if (ss.userId ?? -1) <= 0 {
@@ -112,8 +136,6 @@ public class SubscriberDb {
                 var setters = [Setter]()
 
                 ss.topicId = topicId
-                setters.append(self.topicId <- ss.topicId)
-                setters.append(self.userId <- ss.userId)
                 setters.append(self.mode <- sub.acs?.serialize())
                 setters.append(self.updated <- sub.updated ?? Date())
                 setters.append(self.status <- status.rawValue)
@@ -127,7 +149,14 @@ public class SubscriberDb {
                     setters.append(self.userAgent <- seen.ua)
                 }
                 setters.append(self.subscriptionClass <- String(describing: type(of: sub as Any)))
-                rowId = try db.run(self.table.insert(setters))
+                if let sid = existingId {
+                    _ = try db.run(self.table.filter(self.id == sid).update(setters))
+                    rowId = sid
+                } else {
+                    setters.append(self.topicId <- ss.topicId)
+                    setters.append(self.userId <- ss.userId)
+                    rowId = try db.run(self.table.insert(setters))
+                }
                 ss.id = rowId
                 sub.payload = ss
             }
@@ -139,6 +168,29 @@ public class SubscriberDb {
         }
         return rowId
     }
+
+    /// LINIA2: удалить дубли и подписки без user, затем уникальный индекс (topic_id, user_id). Одна транзакция
+    /// (новая подписка не вклинится между чисткой и индексом). Вызывать в фоне. Возвращает число удалённых строк
+    /// (0 — индекс уже был), -1 — ошибка (повторим при следующем запуске).
+    public func ensureUniqueSubscriptions() -> Int {
+        do {
+            if let n = try self.db.scalar(Linia2SubsSQL.hasUniqueIndex) as? Int64, n > 0 { return 0 }
+            var removed = 0
+            try self.db.transaction {
+                try self.db.run(Linia2SubsSQL.deleteOrphans)
+                removed += self.db.changes
+                try self.db.run(Linia2SubsSQL.deleteDuplicates)
+                removed += self.db.changes
+                try self.db.run(Linia2SubsSQL.createUniqueIndex)
+            }
+            BaseDb.log.info("SubscriberDb - unique index created, %d duplicate/orphan rows removed", removed)
+            return removed
+        } catch {
+            BaseDb.log.error("SubscriberDb - ensureUniqueSubscriptions failed: %@", error.localizedDescription)
+            return -1
+        }
+    }
+
     func update(using sub: SubscriptionProto) -> Bool {
         guard let ss = sub.payload as? StoredSubscription, let recordId = ss.id, recordId >= 0 else {
             return false
@@ -173,6 +225,10 @@ public class SubscriberDb {
             self.db.releaseSavepoint(withName: savepointName)
             BaseDb.log.error("SubscriberDb - update operation failed: subId = %lld, error = %@", recordId, error.localizedDescription)
             return false
+        }
+        // LINIA2: строки уже нет (дубль удалён миграцией ensureUniqueSubscriptions) — записать через upsert.
+        if updated == 0, let tid = ss.topicId {
+            return self.insert(for: tid, with: .synced, using: sub) > 0
         }
         return updated > 0
     }

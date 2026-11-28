@@ -72,6 +72,21 @@ enum Linia2Storage {
         Linia2LaunchLog.shared.measure("vault-bootstrap") { _ = L2Vault.bootstrap() }
         Linia2LaunchLog.shared.measure("vault-prewarm") { L2Vault.prewarm() }
         migrateIfNeeded()
+        dedupSubscriptionsIfNeeded()
+    }
+
+    /// LINIA2 (вылет 1013/1014: Topic.loadSubs на повторяющейся подписке): один раз за запуск, в фоне, через 8 с
+    /// после выхода на экран — удалить дубли подписок и создать уникальный индекс (topic_id, user_id).
+    private static var subsDedupScheduled = false
+    private static func dedupSubscriptionsIfNeeded() {
+        guard !subsDedupScheduled else { return }
+        subsDedupScheduled = true
+        migrationQueue.asyncAfter(deadline: .now() + 8) {
+            let t0 = Date()
+            let removed = BaseDb.sharedInstance.ensureUniqueSubscriptions()
+            Linia2LaunchLog.shared.step("subs-dedup", ["removed": removed, "dur": Int(Date().timeIntervalSince(t0) * 1000)])
+            if removed < 0 { DispatchQueue.main.async { subsDedupScheduled = false } }
+        }
     }
 
     /// LINIA2 (баг 1006 «висит на логотипе» при первом запуске после обновления): миграция — в фоне, не раньше

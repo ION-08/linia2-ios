@@ -452,6 +452,13 @@ extension BaseDb {
     }
 
     /// Сжать файл (после стирания/миграции): VACUUM переписывает базу без свободных страниц.
+    /// LINIA2 (вылет 1013/1014): чистка повторяющихся подписок и уникальный индекс (topic_id, user_id).
+    /// Один раз на базу (дальше — проверка наличия индекса). Только из фоновой очереди.
+    @discardableResult
+    public func ensureUniqueSubscriptions() -> Int {
+        return self.subscriberDb?.ensureUniqueSubscriptions() ?? -1
+    }
+
     public func vacuum() {
         // LINIA2: большая база — VACUUM не успевает за фоновое время (~30 с), iOS прерывает его с открытой
         // блокировкой файла (0xdead10cc / база занята после возврата). secure_delete уже затирает старые
